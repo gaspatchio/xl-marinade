@@ -1,0 +1,103 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environments
+.venv
+venv/
+ENV/
+env/
+.virtualenv
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.cursor/
+# But include cursor rules (project-specific agent definitions)
+!.cursor/rules/
+!.cursor/rules/*.mdc
+
+# OS Files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+tests/output/**/*.sqlite
+tests/output/**/*.db
+
+# Generated output artifacts
+output/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Orchestrator logs (tool-generated)
+.orchestrator/
+
+# Project specific
+*.xlsm~
+*.xlsx~
+~$*.xls*
+
+# IR / semantic DBs and their backups — tracked-via-LFS where committed; never
+# add new ones to git (use LFS migrate if a fixture genuinely belongs in repo).
+*.ir.db
+*.semantic.db
+*.ir.db.*
+*.semantic.db.*
+*.ir.ir.db.bak
+
+# Exclude large test spreadsheets (store externally)
+test_spreadsheets/
+tests/phase2_documentation_agent/fixtures/*.db
+
+# Agent PoC outputs (Sprint 9)
+docs/agent_reports/
+artifacts/
+.claude/worktrees/
+model_atlas.db
+workbook_storage/
+
+# P2-AQ-T4 human-review JSONL queue (telemetry; per-deployment).
+human_review_queue.jsonl

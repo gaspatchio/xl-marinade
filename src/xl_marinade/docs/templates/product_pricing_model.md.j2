@@ -1,0 +1,167 @@
+# Product Pricing Model Documentation: {{ metadata.model_name }}
+
+**Generated:** {{ generation_timestamp }}  
+**Workbook GUID:** {{ metadata.workbook_guid }}  
+**Overlay Version:** {{ metadata.overlay_version }}
+
+---
+
+## Executive Summary
+
+This document specifies the product pricing model contained in **{{ metadata.model_name }}**.
+
+**Model Statistics:**
+- Total Variables: {{ total_variables }}
+- Assumptions: {{ assumption_count }}
+- Inputs: {{ input_count }}
+- Calculations: {{ calculation_count }}
+- Results: {{ result_count }}
+
+---
+
+## Reconciliation Scope
+
+**Variables requiring reconciliation:** {{ spec.reconciliation_scope.variables_requiring_reconciliation|length }} of {{ spec.variables|length }}
+
+{% set recon_vars = spec.variables | selectattr('reconciliation_required', 'equalto', true) | list %}
+{% if recon_vars %}
+### Key Variables Requiring Reconciliation
+
+| Variable | Label | Role | Rationale |
+|----------|-------|------|-----------|
+{% for var in recon_vars[:10] %}
+| {{ loop.index }} | {{ var.label }} | {{ var.actuarial_class or 'N/A' }} | {{ var.reconciliation_rationale or 'N/A' }} |
+{% endfor %}
+{% if recon_vars|length > 10 %}
+*... and {{ recon_vars|length - 10 }} more variables requiring reconciliation*
+{% endif %}
+{% endif %}
+
+---
+
+## 1. Product Description & Objectives
+
+**Model Name:** {{ metadata.model_name }}  
+**Analysis Date:** {{ metadata.generated_at }}
+
+**Objective:**
+This model appears to be used for product pricing and profitability analysis. It calculates premiums, profit metrics, or product values based on the input assumptions and features.
+
+**Scope:**
+The model covers the calculation of {{ result_count }} key result metrics based on {{ assumption_count }} assumptions and {{ input_count }} inputs.
+
+---
+
+## 2. Inputs – Data & Assumptions
+
+This section documents the pricing assumptions and input data used in the model.
+
+### 2.1 Assumptions
+*Mortality, lapse rates, expense assumptions, interest rates, etc.*
+
+{% if variables_by_class.Assumption|length > 0 %}
+| Variable | Location | Value | Dependencies |
+|----------|----------|-------|--------------|
+{% for var in variables_by_class.Assumption %}
+| {{ var.label }} | {{ var.excel_location.sheet }}!{{ var.excel_location.address }} | {{ var.snapshot_value|format_table_value }} | {% if var.dependencies.children %}{{ var.dependencies.children|join(', ') }}{% else %}None{% endif %} |
+{% endfor %}
+{% else %}
+*No assumptions identified in this model.*
+{% endif %}
+
+### 2.2 Inputs & Product Features
+*Product design features, policy terms, and other static inputs.*
+
+{% if variables_by_class.Input|length > 0 %}
+| Variable | Location | Value | Dependencies |
+|----------|----------|-------|--------------|
+{% for var in variables_by_class.Input %}
+| {{ var.label }} | {{ var.excel_location.sheet }}!{{ var.excel_location.address }} | {{ var.snapshot_value|format_table_value }} | {% if var.dependencies.children %}{{ var.dependencies.children|join(', ') }}{% else %}None{% endif %} |
+{% endfor %}
+{% else %}
+*No inputs identified in this model.*
+{% endif %}
+
+---
+
+## 3. Methodology & Calculation Flow
+
+This section describes the pricing calculation steps, including premium determination and profit metric calculations.
+
+### 3.1 Key Calculations
+
+The model contains {{ calculation_count }} calculation variables transforming inputs into results.
+
+{% if variables_by_class.Calculation|length > 0 %}
+| Variable | Location | Formula | Description | Depends On |
+|----------|----------|---------|-------------|------------|
+{% for var in variables_by_class.Calculation %}
+| {{ var.label }} | {{ var.excel_location.sheet }}!{{ var.excel_location.address }} | `{{ var.semantic_formula or var.formula }}` | {% if var.explanation %}{{ var.explanation }}{% else %}-{% endif %} | {% if var.dependencies.children %}{{ var.dependencies.children|join(', ') }}{% else %}None{% endif %} |
+{% endfor %}
+{% else %}
+*No calculation variables identified in this model.*
+{% endif %}
+
+---
+
+## 4. Outputs & Reports
+
+The following metrics represent the final outputs of the pricing exercise (e.g., Premium Rates, Profitability Results).
+
+{% if variables_by_class.Result|length > 0 %}
+| Variable | Location | Value | Calculated From |
+|----------|----------|-------|-----------------|
+{% for var in variables_by_class.Result %}
+| {{ var.label }} | {{ var.excel_location.sheet }}!{{ var.excel_location.address }} | {{ var.snapshot_value|format_table_value }} | {% if var.dependencies.children %}{{ var.dependencies.children|join(', ') }}{% else %}None{% endif %} |
+{% endfor %}
+{% else %}
+*No result variables identified in this model.*
+{% endif %}
+
+---
+
+## 5. Dependency Analysis
+
+### 5.1 Result Tracing
+{% if variables_by_class.Result|length > 0 %}
+**Results** (model outputs):
+{% for var in variables_by_class.Result %}
+- **{{ var.label }}** depends on: {% if var.dependencies.children %}{{ var.dependencies.children|join(', ') }}{% else %}No dependencies{% endif %}
+{% endfor %}
+{% endif %}
+
+### 5.2 Assumption Usage
+{% if variables_by_class.Assumption|length > 0 %}
+**Assumptions** (foundational parameters):
+{% for var in variables_by_class.Assumption %}
+- **{{ var.label }}** is used by: {% if var.dependencies.parents %}{{ var.dependencies.parents|join(', ') }}{% else %}Not referenced{% endif %}
+
+{% endfor %}
+{% endif %}
+
+
+---
+
+## 6. Validation & Quality Notes
+
+### Variable Classification Stats
+| Classification | Count | Percentage |
+|---------------|-------|------------|
+| Assumptions | {{ assumption_count }} | {{ "%.1f"|format((assumption_count / total_variables * 100) if total_variables > 0 else 0) }}% |
+| Inputs | {{ input_count }} | {{ "%.1f"|format((input_count / total_variables * 100) if total_variables > 0 else 0) }}% |
+| Calculations | {{ calculation_count }} | {{ "%.1f"|format((calculation_count / total_variables * 100) if total_variables > 0 else 0) }}% |
+| Results | {{ result_count }} | {{ "%.1f"|format((result_count / total_variables * 100) if total_variables > 0 else 0) }}% |
+
+---
+
+## Appendix: Complete Variable Catalog
+
+| ID | Label | Class | Location | Value |
+|----|-------|-------|----------|-------|
+{% for var in variables %}
+| {{ loop.index }} | {{ var.label }} | {{ var.actuarial_class or 'Unclassified' }} | {{ var.excel_location.sheet }}!{{ var.excel_location.address }} | {{ var.snapshot_value|format_table_value }} |
+{% endfor %}
+
+---
+*Generated by XL Marinade*
+

@@ -1,0 +1,204 @@
+# Staged pyproject for the standalone `xl-marinade` OSS package.
+#
+# Kept under this name during the carve-out so the monorepo build (root
+# pyproject.toml) stays intact. Plan 3 (publish) renames this to pyproject.toml
+# once the private trees are excluded, and adds the LICENSE + README.
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "xl-marinade"
+version = "0.1.0.dev0"
+description = "Deterministic Excel formula-graph extraction to SQLite."
+requires-python = ">=3.11"
+license = "Apache-2.0"
+readme = "README.md"
+authors = [{ name = "Klaas Stijnen" }]
+keywords = ["excel", "xlsx", "formula", "graph", "extraction", "sqlite", "audit"]
+dependencies = [
+    "openpyxl>=3.1",
+    "typer>=0.12",
+    "psutil>=5.9",
+    "loguru>=0.7",
+    "rich>=13",
+    "jinja2>=3.0",      # deterministic markdown documentation (marinade document)
+    "jsonschema>=4.0",  # model_spec.json schema validation (marinade document)
+    # NOTE: networkx is deliberately kept OUT of the runtime dependencies. The
+    # labelling pipeline uses a guarded `import networkx` with a dict-graph
+    # fallback (HAS_NETWORKX); the dict fallback is the shipped default, so the
+    # base install stays lean. networkx is an optional accelerator for large
+    # models — both backends are covered by tests (see the dev group and
+    # tests/test_dependency_graph.py). Users who want it can `pip install networkx`.
+]
+
+[project.optional-dependencies]
+vba = ["oletools>=0.60"]      # VBA parsing (deterministic)
+llm = ["openai>=1.0"]         # Tier-1 BYOK add-on (Plan 2)
+
+[project.scripts]
+marinade = "xl_marinade.cli.main:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/xl_marinade"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# "src" -> the xl_marinade package; "." -> the repo-root test_workbook_generator
+# fixture package (test-only, not shipped in the wheel). Without this the suite
+# imports test_workbook_generator only when it happens to be installed in the
+# dev venv — a fresh CI `uv sync` venv doesn't have it, so a plain `pytest`
+# failed at collection. Setting pythonpath makes the suite import-clean anywhere.
+pythonpath = ["src", "."]
+
+[dependency-groups]
+dev = [
+    "pytest>=7.4",
+    "ruff==0.11.12",     # pinned for reproducible CI
+    "mypy>=1.5",
+    "pyright>=1.1.400",
+    "networkx>=3.0",     # optional graph backend — exercised by test_dependency_graph.py
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+# Enforced at launch (blocking in CI). The N (naming), C4 (comprehension style),
+# and SIM (refactor suggestions) families are deferred stylistic passes — a
+# tracked post-launch cleanup, not launch blockers.
+select = ["E", "F", "W", "I", "UP", "B", "A"]
+ignore = [
+    "E501",   # line-too-long: mostly long log strings/URLs; deferred cleanup
+    "E402",   # module-import-not-at-top: several intentional late/conditional imports
+    "UP038",  # isinstance(x, (A, B)): the tuple form is faster; rule is deprecated upstream
+    "B008",   # function-call-in-default-argument: the standard Typer Option/Argument pattern
+    "B007",   # unused-loop-variable: cosmetic; deferred
+    "B904",   # raise-without-from-inside-except: good practice; deferred cleanup
+    "B019",   # cached-instance-method: reviewed; caches are bounded
+    "A002",   # builtin-argument-shadowing: intentional domain arg names
+    "W291",   # trailing-whitespace: only hits are inside string literals; `ruff format` enforces code whitespace
+    "W293",   # blank-line-with-whitespace: same — string-interior only; format-check covers code
+]
+
+[tool.mypy]
+python_version = "3.11"
+# Third-party libs ship without type stubs (openpyxl, oletools, jsonschema, ...);
+# don't report their missing annotations.
+ignore_missing_imports = true
+# In-package test modules are not part of the typed public contract.
+exclude = ['(^|/)tests/']
+
+# --- Type-gate ratchet -------------------------------------------------------
+# Type-checking is CI-blocking on the public API + the already-clean modules.
+# The modules below carry pre-existing type debt (measured at adoption: 269 mypy
+# / 380 pyright findings, all internal — the public API was already clean) and are
+# excluded from the gate pending an incremental typing pass (tracked follow-up).
+# Delete an entry once its module type-checks clean; the gate then guards it.
+[[tool.mypy.overrides]]
+ignore_errors = true
+module = [
+    "xl_marinade.core.cells",
+    "xl_marinade.core.evidence",
+    "xl_marinade.core.formula_utils",
+    "xl_marinade.core.ir_diff.axis_detect",
+    "xl_marinade.core.ir_diff.binding_match",
+    "xl_marinade.core.ir_diff.canonicalize",
+    "xl_marinade.core.ir_diff.diff_emit",
+    "xl_marinade.core.ir_diff.json_rewrite",
+    "xl_marinade.core.ir_diff.loader",
+    "xl_marinade.core.ir_diff.vba_match",
+    "xl_marinade.core.labelling.header_context",
+    "xl_marinade.core.labelling.init_merger",
+    "xl_marinade.core.labelling.simple_labeller",
+    "xl_marinade.core.labelling.structural_mutations",
+    "xl_marinade.core.lazy_formulas",
+    "xl_marinade.core.lazy_values",
+    "xl_marinade.core.lazy_workbook",
+    "xl_marinade.core.names_tables",
+    "xl_marinade.core.new_arch.bulk_loader",
+    "xl_marinade.core.new_arch.fast_extraction_pipeline",
+    "xl_marinade.core.new_arch.fast_parser",
+    "xl_marinade.core.new_arch.formula_normalizer",
+    "xl_marinade.core.new_arch.grouping_native",
+    "xl_marinade.core.new_arch.memory_budget",
+    "xl_marinade.core.new_arch.offset_edges",
+    "xl_marinade.core.new_arch.reference_extractor",
+    "xl_marinade.core.new_arch.table_candidates",
+    "xl_marinade.core.new_arch.telemetry",
+    "xl_marinade.core.new_arch.variable_normalizer",
+    "xl_marinade.core.resolution_strategies",
+    "xl_marinade.core.resolution",
+    "xl_marinade.core.time_axis_inference",
+    "xl_marinade.core.time_dependence",
+    "xl_marinade.core.topology",
+    "xl_marinade.core.vba_parser",
+    "xl_marinade.core.vba.extractor",
+    "xl_marinade.core.vba.reference_extractor",
+    "xl_marinade.docs.apply_actuarial_classification",
+    "xl_marinade.docs.classifiers.actuarial",
+    "xl_marinade.docs.dependency_traversal",
+    "xl_marinade.docs.generators.markdown",
+    "xl_marinade.docs.json_spec_generator",
+    "xl_marinade.docs.ontology_loader",
+    "xl_marinade.docs.semantic_index.axis_extraction",
+    "xl_marinade.docs.two_pass_labeller",
+    "xl_marinade.llm.enrichment_service",
+    "xl_marinade.llm.sprint7_pipeline",
+]
+
+[tool.pyright]
+include = ["src/xl_marinade"]
+# Same ratchet as [tool.mypy]: gate the clean surface, defer the modules with
+# pre-existing type debt (+ in-package tests). Remove an entry as it is cleaned.
+exclude = [
+    "**/tests/**",
+    "src/xl_marinade/core/cells.py",
+    "src/xl_marinade/core/evidence.py",
+    "src/xl_marinade/core/formula_utils.py",
+    "src/xl_marinade/core/ir_diff/axis_detect.py",
+    "src/xl_marinade/core/ir_diff/binding_match.py",
+    "src/xl_marinade/core/ir_diff/canonicalize.py",
+    "src/xl_marinade/core/ir_diff/diff_emit.py",
+    "src/xl_marinade/core/ir_diff/json_rewrite.py",
+    "src/xl_marinade/core/ir_diff/loader.py",
+    "src/xl_marinade/core/ir_diff/vba_match.py",
+    "src/xl_marinade/core/labelling/header_context.py",
+    "src/xl_marinade/core/labelling/init_merger.py",
+    "src/xl_marinade/core/labelling/simple_labeller.py",
+    "src/xl_marinade/core/labelling/structural_mutations.py",
+    "src/xl_marinade/core/lazy_formulas.py",
+    "src/xl_marinade/core/lazy_values.py",
+    "src/xl_marinade/core/lazy_workbook.py",
+    "src/xl_marinade/core/names_tables.py",
+    "src/xl_marinade/core/new_arch/bulk_loader.py",
+    "src/xl_marinade/core/new_arch/fast_extraction_pipeline.py",
+    "src/xl_marinade/core/new_arch/fast_parser.py",
+    "src/xl_marinade/core/new_arch/formula_normalizer.py",
+    "src/xl_marinade/core/new_arch/grouping_native.py",
+    "src/xl_marinade/core/new_arch/memory_budget.py",
+    "src/xl_marinade/core/new_arch/offset_edges.py",
+    "src/xl_marinade/core/new_arch/reference_extractor.py",
+    "src/xl_marinade/core/new_arch/table_candidates.py",
+    "src/xl_marinade/core/new_arch/telemetry.py",
+    "src/xl_marinade/core/new_arch/variable_normalizer.py",
+    "src/xl_marinade/core/resolution_strategies.py",
+    "src/xl_marinade/core/resolution.py",
+    "src/xl_marinade/core/time_axis_inference.py",
+    "src/xl_marinade/core/time_dependence.py",
+    "src/xl_marinade/core/topology.py",
+    "src/xl_marinade/core/vba_parser.py",
+    "src/xl_marinade/core/vba/extractor.py",
+    "src/xl_marinade/core/vba/reference_extractor.py",
+    "src/xl_marinade/docs/apply_actuarial_classification.py",
+    "src/xl_marinade/docs/classifiers/actuarial.py",
+    "src/xl_marinade/docs/dependency_traversal.py",
+    "src/xl_marinade/docs/generators/markdown.py",
+    "src/xl_marinade/docs/json_spec_generator.py",
+    "src/xl_marinade/docs/ontology_loader.py",
+    "src/xl_marinade/docs/semantic_index/axis_extraction.py",
+    "src/xl_marinade/docs/two_pass_labeller.py",
+    "src/xl_marinade/llm/enrichment_service.py",
+    "src/xl_marinade/llm/sprint7_pipeline.py",
+]

@@ -1,0 +1,11 @@
+{
+  "ontology_version": "basic-1",
+  "concepts": [
+    {"id": "premium", "label": "Premium", "description": "Amount paid by the policyholder for cover.", "synonyms": ["premium income", "gross premium"]},
+    {"id": "claim", "label": "Claim", "description": "Benefit paid on a covered event.", "synonyms": ["benefit", "claim amount"]},
+    {"id": "reserve", "label": "Reserve", "description": "Provision held for future liabilities.", "synonyms": ["provision", "liability"]},
+    {"id": "discount_rate", "label": "Discount Rate", "description": "Rate used to present-value future cashflows.", "synonyms": ["interest rate", "valuation rate"]},
+    {"id": "mortality_rate", "label": "Mortality Rate", "description": "Probability of death in a period.", "synonyms": ["qx", "death rate"]},
+    {"id": "lapse_rate", "label": "Lapse Rate", "description": "Probability of policy discontinuance in a period.", "synonyms": ["withdrawal rate", "surrender rate"]}
+  ]
+}

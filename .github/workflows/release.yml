@@ -1,0 +1,62 @@
+name: Release
+
+# Staged under publish/workflows/ until make-public relocates this file to
+# .github/workflows/ in the public tree — it does not run on the private repo.
+
+on:
+  push:
+    tags: ["*"]
+
+permissions:
+  id-token: write   # PyPI Trusted Publishing (OIDC) + PEP 740 attestation signing
+  contents: write    # create/publish the GitHub Release
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4.4.0 — so syft can read pyproject at the tag
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e   # v6 — provides `uvx` for `twine check`
+
+      - name: Build sdist + universal wheel
+        run: uv build
+
+      - name: List distributions
+        run: ls -l dist
+
+      - name: Generate CycloneDX SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610   # v0
+        with:
+          path: .                       # captures pyproject and the wheel now in dist/
+          format: cyclonedx-json
+          output-file: sbom.cdx.json
+          upload-release-assets: false  # we attach it manually in the release step
+
+      - name: Check distribution metadata
+        run: uvx twine check --strict dist/*
+
+      - name: Publish to PyPI (Trusted Publishing)
+        if: github.repository == 'gaspatchio/xl-marinade'
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b   # v1.14.0
+        with:
+          packages-dir: dist
+          # OIDC Trusted Publishing — no token. PEP 740 attestations are generated automatically.
+      # The org enforces immutable releases: a published release's assets are
+      # locked at publish time, so they cannot be uploaded after the fact. Create
+      # the release as a DRAFT (mutable), attach the wheel + sdist, then publish —
+      # the assets lock in atomically. Creating a published release first and
+      # uploading afterwards 422s ("Cannot upload assets to an immutable release")
+      # and burns the tag.
+      - name: Create draft release with distributions + SBOM
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --repo "${{ github.repository }}" \
+            --draft --verify-tag --generate-notes \
+            dist/* sbom.cdx.json
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "${{ github.ref_name }}" --repo "${{ github.repository }}" --draft=false

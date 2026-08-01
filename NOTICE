@@ -1,0 +1,27 @@
+xl-marinade
+Copyright 2026 Opio Inc.
+
+This product is licensed under the Apache License, Version 2.0
+(the "License"); see the LICENSE file at the root of this repository
+for the full text.
+
+The deterministic Excel formula-graph extractor at the core of this
+product was originally authored by Klaas Stijnen; see the AUTHORS file.
+
+================================================================================
+Third-party notices
+================================================================================
+
+This product's source code in this repository is Apache-2.0 licensed and
+Copyright Opio Inc. (see REUSE.toml for the blanket assertion).
+
+This product depends at runtime on other open-source software. The base
+install's runtime dependencies (openpyxl — MIT; typer — MIT; rich — MIT;
+psutil — BSD-3-Clause) are under permissive MIT/BSD terms. The optional
+``xl-marinade[llm]`` extra adds ``openai`` (Apache-2.0), whose transitive
+closure includes ``certifi`` (Mozilla Public License 2.0):
+
+  certifi (https://github.com/certifi/python-certifi)
+    Mozilla Public License 2.0 — file-level copyleft. No certifi source is
+    vendored into xl-marinade; pip resolves it at install time into the
+    user's environment as a separate package.

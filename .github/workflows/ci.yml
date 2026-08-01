@@ -1,0 +1,82 @@
+name: CI
+
+# Staged under publish/workflows/ until make-public relocates this file to
+# .github/workflows/ in the public tree — it does not run on the private repo.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Cancel a superseded in-progress run on the same ref (e.g. rapid pushes to a
+# branch or PR).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6
+        with:
+          version: "latest"
+          cache-dependency-glob: |
+            uv.lock
+            pyproject.toml
+      - name: Install dependencies
+        # --all-extras installs the [llm] (openai) + [vba] (oletools) extras the
+        # suite exercises; the dev group brings networkx (DiGraph backend) + tools.
+        run: uv sync --frozen --group dev --all-extras
+      # The tier-boundary + import-cleanliness gates run inside this pytest
+      # invocation as ordinary tests (no separate job needed):
+      #   test_docs_no_llm, test_core_no_egress, test_import_cleanliness,
+      #   test_core_no_llm_dep, test_core_no_docagent
+      - name: Run tests
+        run: PYTHONPATH=src uv run pytest tests/ -q
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6
+        with:
+          version: "latest"
+          cache-dependency-glob: |
+            uv.lock
+            pyproject.toml
+      - name: Install dependencies
+        run: uv sync --frozen --group dev
+      - name: Run ruff check
+        run: uv run ruff check .
+      - name: Run ruff format check
+        run: uv run ruff format --check .
+
+  types:
+    name: Types
+    runs-on: ubuntu-latest
+    # Blocking on the typed surface: the public API + already-clean modules must
+    # stay mypy- and pyright-clean. Modules carrying pre-existing type debt are
+    # listed in [tool.mypy.overrides] / [tool.pyright].exclude in pyproject and
+    # deferred from the gate; an incremental typing pass removes them over time.
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6
+        with:
+          version: "latest"
+          cache-dependency-glob: |
+            uv.lock
+            pyproject.toml
+      - name: Install dependencies
+        run: uv sync --frozen --group dev --all-extras
+      - name: Run mypy
+        run: PYTHONPATH=src uv run mypy src/xl_marinade
+      - name: Run pyright
+        run: PYTHONPATH=src uv run pyright src/xl_marinade

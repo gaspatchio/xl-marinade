@@ -1,0 +1,284 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://xl-marinade.io/schemas/model_spec_v0.5.json",
+  "title": "Excel Model Documentation Specification",
+  "description": "JSON schema for actuarial Excel model documentation (v0.5 - replaces 'Input' with 'Policyholder Data')",
+  "version": "0.5.0",
+  "type": "object",
+  "required": ["metadata", "variables"],
+  "properties": {
+    "reconciliation_scope": {
+      "type": "object",
+      "description": "Summary of reconciliation requirements - Added in Sprint 3 Story 23",
+      "properties": {
+        "variables_requiring_reconciliation": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "List of variable_ids requiring reconciliation"
+        },
+        "variables_skipped": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "List of variable_ids skipped (helpers, constants)"
+        },
+        "rationale": {
+          "type": "string",
+          "description": "Overall rationale for reconciliation scope"
+        }
+      }
+    },
+    "orphans": {
+      "type": "object",
+      "description": "Summary of orphaned bindings (not reachable from any root) - Added in Sprint 4 Story 15",
+      "properties": {
+        "orphan_binding_ids": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "List of binding_ids that are orphaned (not reachable from roots)"
+        },
+        "orphan_count": {
+          "type": "integer",
+          "description": "Number of orphaned bindings"
+        },
+        "total_bindings": {
+          "type": "integer",
+          "description": "Total number of bindings in IR (orphans + documented)"
+        },
+        "rationale": {
+          "type": "string",
+          "description": "Explanation of orphan detection and significance"
+        }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "required": ["model_name", "generated_at", "workbook_guid", "overlay_version"],
+      "properties": {
+        "model_name": {
+          "type": "string",
+          "description": "Human-readable model name from IR or user input"
+        },
+        "schema_version": {
+          "type": "string",
+          "description": "JSON spec schema version (e.g., '0.5.0')"
+        },
+        "generated_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO8601 timestamp when spec was generated"
+        },
+        "workbook_guid": {
+          "type": "string",
+          "description": "Workbook GUID from Phase 1 IR"
+        },
+        "overlay_version": {
+          "type": "string",
+          "description": "Semantic overlay version (e.g., '0.2')"
+        }
+      }
+    },
+    "variables": {
+      "type": "array",
+      "description": "Array of labelled variables from semantic overlay",
+      "items": {
+        "type": "object",
+        "required": ["variable_id", "label", "excel_location", "formula", "snapshot_value", "label_confidence", "dependencies"],
+        "properties": {
+          "variable_id": {
+            "type": "string",
+            "description": "Unique variable identifier. May be an IR binding_id (64-char SHA-256 hash from Phase 1) or an overlay composite/time_series ID (e.g., 'composite_abc123' or 'time_series_xyz789')"
+          },
+          "label": {
+            "type": "string",
+            "description": "Actuarial label assigned by agent"
+          },
+          "actuarial_class": {
+            "type": ["string", "null"],
+            "enum": ["Assumption", "Policyholder Data", "Calculation", "Result", "Index Lookup", "Unclassified", null],
+            "description": "Actuarial classification (Assumption, Policyholder Data, Calculation, Result, Index Lookup) - 'Input' replaced with 'Policyholder Data' in v0.5 (Sprint 4 Story 13)"
+          },
+          "entity_type": {
+            "type": ["string", "null"],
+            "enum": ["table", "record_set", "vector", "scalar", "time_series", null],
+            "description": "Entity type classification for multi-dimensional variables - Added in Sprint 3 Story 33, time_series added in Story 31"
+          },
+          "axes": {
+            "type": ["array", "null"],
+            "description": "Axis metadata for multi-dimensional entities (time_series, tables) - Added in Sprint 3 Story 33, extended in Sprint 4 Story 21 to support time_series",
+            "items": {
+              "type": "object",
+              "required": ["name", "length"],
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "Axis name (e.g., 'Time', 'Policy', 'Age', 'Row', 'Column')"
+                },
+                "index_variable": {
+                  "type": ["string", "null"],
+                  "description": "Variable ID of the index variable, or null if not available"
+                },
+                "length": {
+                  "type": "integer",
+                  "description": "Number of elements along this axis"
+                },
+                "period_labels": {
+                  "type": ["array", "null"],
+                  "description": "For a time axis ('time'), the actual axis cell values used as per-t period labels (Phase B1). The real cells, never invented."
+                }
+              }
+            }
+          },
+          "indices": {
+            "type": ["array", "null"],
+            "description": "Index Lookup variables that define the dimensions of this variable (e.g., Age, Gender for a mortality table) - Added in Sprint 3 Story 24",
+            "items": {
+              "type": "object",
+              "required": ["id", "name", "axis"],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "Variable ID of the Index Lookup binding"
+                },
+                "name": {
+                  "type": "string",
+                  "description": "Label of the Index Lookup variable"
+                },
+                "axis": {
+                  "type": "string",
+                  "enum": ["left", "top"],
+                  "description": "Spatial axis (left = row index, top = column index)"
+                }
+              }
+            }
+          },
+          "reconciliation_required": {
+            "type": ["boolean", "null"],
+            "description": "Whether this variable requires reconciliation testing in re-implementation - Added in Sprint 3 Story 23"
+          },
+          "reconciliation_rationale": {
+            "type": ["string", "null"],
+            "description": "Explanation for reconciliation decision - Added in Sprint 3 Story 23"
+          },
+          "excel_location": {
+            "type": "object",
+            "required": ["sheet", "address"],
+            "properties": {
+              "sheet": {
+                "type": "string",
+                "description": "Sheet name"
+              },
+              "address": {
+                "type": "string",
+                "description": "A1 address or range (without sheet prefix)"
+              },
+              "workbook": {
+                "type": "string",
+                "description": "Workbook filename"
+              }
+            }
+          },
+          "formula": {
+            "type": "string",
+            "description": "Excel formula from binding (or first cell if range)"
+          },
+          "semantic_formula": {
+            "type": ["string", "null"],
+            "description": "Formula with cell references replaced by semantic labels - Added in Sprint 3 Story 19"
+          },
+          "explanation": {
+            "type": ["string", "null"],
+            "description": "Natural language description of formula for non-technical readers - Added in Sprint 3 Story 21"
+          },
+          "array_formula_metadata": {
+            "type": ["object", "null"],
+            "description": "For array formulas where first cell has a different formula than subsequent cells - Added in Sprint 3 Story 22",
+            "properties": {
+              "first_cell_formula": {
+                "type": "string",
+                "description": "Formula in first cell of array (often initialization)"
+              },
+              "propagation_formula": {
+                "type": "string",
+                "description": "Formula in subsequent cells (propagation pattern)"
+              },
+              "first_cell_semantic": {
+                "type": ["string", "null"],
+                "description": "Semantic version of first cell formula"
+              },
+              "propagation_semantic": {
+                "type": ["string", "null"],
+                "description": "Semantic version of propagation formula"
+              }
+            },
+            "required": ["first_cell_formula", "propagation_formula"]
+          },
+          "snapshot_value": {
+            "description": "Evaluated value at time of extraction (number, string, array for ranges, or null)",
+            "anyOf": [
+              {"type": "number"},
+              {"type": "string"},
+              {"type": "array", "items": {"anyOf": [{"type": "number"}, {"type": "string"}, {"type": "null"}]}},
+              {"type": "null"}
+            ]
+          },
+          "label_confidence": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "description": "Confidence score of the label"
+          },
+          "dependencies": {
+            "type": "object",
+            "required": ["parents", "children"],
+            "properties": {
+              "parents": {
+                "type": "array",
+                "description": "Variable IDs that depend on this variable (reference this in formulas). IDs may be IR binding_ids (64-char SHA-256 hashes) or overlay composite/time_series IDs.",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "children": {
+                "type": "array",
+                "description": "Variable IDs this variable depends on (referenced in this formula). IDs may be IR binding_ids (64-char SHA-256 hashes) or overlay composite/time_series IDs.",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Parent/child dependency relationships using variable_ids (not labels) - Added in Sprint 3 Story 04, fixed to use IDs in Sprint 4 Story 19"
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "axis_info": {
+      "type": "object",
+      "description": "Information about a table axis (row or column dimension)",
+      "properties": {
+        "label": {
+          "type": "string",
+          "description": "Semantic label for the axis (e.g., 'Age', 'Gender-Smoking')"
+        },
+        "binding_id": {
+          "type": ["string", "null"],
+          "description": "Binding ID of the index variable, if available"
+        },
+        "values_preview": {
+          "type": ["array", "null"],
+          "description": "Preview of axis values (first few entries)",
+          "items": {
+            "anyOf": [
+              {"type": "number"},
+              {"type": "string"},
+              {"type": "null"}
+            ]
+          }
+        }
+      },
+      "required": ["label"]
+    }
+  }
+}
+

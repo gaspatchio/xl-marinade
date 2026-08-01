@@ -1,0 +1,34 @@
+version = 1
+SPDX-PackageName = "xl-marinade"
+SPDX-PackageSupplier = "Opio Inc."
+SPDX-PackageDownloadLocation = "https://github.com/gaspatchio/xl-marinade"
+
+# Blanket assertion: everything REUSE doesn't otherwise see a per-file SPDX
+# header on is Apache-2.0, Copyright Opio Inc. Per-file headers take precedence.
+[[annotations]]
+path = [
+  "LICENSE",
+  "NOTICE",
+  "AUTHORS",
+  "**.py",
+  "**py.typed",
+  "**.python-version",
+  "**.md",
+  "**.toml",
+  "**.lock",
+  "**.yml",
+  "**.yaml",
+  "**.json",
+  "**.sql",
+  "**.j2",
+  "**.txt",
+  "**.cfg",
+  "**.ini",
+  "**.gitignore",
+  "**.gitattributes",
+  ".mailmap",
+  "**pyproject.toml",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Opio Inc."
+SPDX-License-Identifier = "Apache-2.0"

@@ -1,0 +1,357 @@
+# {{ metadata.model_name }} - Actuarial Model Documentation
+
+**Generated:** {{ generation_timestamp }}  
+**Workbook GUID:** {{ metadata.workbook_guid }}  
+**Overlay Version:** {{ metadata.overlay_version }}
+
+---
+
+## Executive Summary
+
+This document provides a comprehensive specification of the actuarial model contained in **{{ metadata.model_name }}**. The model has been analyzed and documented automatically using XL Marinade.
+
+**Model Statistics:**
+- Total Variables: {{ total_variables }}
+- Assumptions: {{ assumption_count }}
+- Policyholder Data: {{ policyholder_data_count }}
+- Calculations: {{ calculation_count }}
+- Results: {{ result_count }}
+{% if unclassified_count > 0 %}
+- Unclassified: {{ unclassified_count }}
+{% endif %}
+
+---
+
+## Reconciliation Scope
+
+**Variables requiring reconciliation:** {{ spec.reconciliation_scope.variables_requiring_reconciliation|length }} of {{ spec.variables|length }}
+
+{% set recon_vars = spec.variables | selectattr('reconciliation_required', 'equalto', true) | list %}
+{% if recon_vars %}
+### Variables Requiring Reconciliation
+
+| Variable | Label | Role | Rationale |
+|----------|-------|------|-----------|
+{% for var in recon_vars[:10] %}
+| {{ loop.index }} | {{ var.label }} | {{ var.actuarial_class or 'N/A' }} | {{ var.reconciliation_rationale or 'N/A' }} |
+{% endfor %}
+{% if recon_vars|length > 10 %}
+*... and {{ recon_vars|length - 10 }} more variables requiring reconciliation*
+{% endif %}
+{% endif %}
+
+{% set skipped_vars = spec.variables | selectattr('reconciliation_required', 'equalto', false) | list %}
+{% if skipped_vars and skipped_vars|length > 0 %}
+### Variables Skipped (No Reconciliation Needed)
+
+| Variable | Label | Rationale |
+|----------|-------|-----------|
+{% for var in skipped_vars[:5] %}
+| {{ loop.index }} | {{ var.label }} | {{ var.reconciliation_rationale or 'N/A' }} |
+{% endfor %}
+{% if skipped_vars|length > 5 %}
+*... and {{ skipped_vars|length - 5 }} more*
+{% endif %}
+{% endif %}
+
+---
+
+## 1. Model Purpose & Context
+
+This section describes the purpose and intended use of the actuarial model.
+
+**Model Name:** {{ metadata.model_name }}  
+**Analysis Date:** {{ metadata.generated_at }}
+
+The model contains {{ total_variables }} distinct variables organized into assumptions, inputs, intermediate calculations, and final results.
+
+---
+
+## 2. Key Outputs
+
+This section identifies the primary outputs of the model - the variables that represent final results intended for external reporting or decision-making.
+
+{% if variables_by_class.Result|length > 0 %}
+| Variable | Label | Location | Value | Reconciliation Required |
+|----------|-------|----------|-------|-------------------------|
+{% for var in variables_by_class.Result %}
+| {{ loop.index }} | {{ var.label }} | {{ var.excel_location.sheet }}!{{ var.excel_location.address }} | {{ var.snapshot_value|format_table_value }} | {% if var.reconciliation_required %}Yes{% else %}No{% endif %} |
+{% endfor %}
+
+**Key Output Details:**
+{% for var in variables_by_class.Result %}
+- **{{ var.label }}** ({{ var.excel_location.sheet }}!{{ var.excel_location.address }}): {% if var.explanation %}{{ var.explanation }}{% else %}Final model output{% endif %}
+{% endfor %}
+{% else %}
+*No result variables explicitly identified in this model. The model may produce outputs through intermediate calculations.*
+{% endif %}
+
+---
+
+## 2. Assumptions
+
+Actuarial assumptions represent judgmental views of future uncertain experience. These are the fundamental parameters that drive model calculations.
+
+{% if variables_by_class.Assumption|length > 0 %}
+| Variable | Type | Location | Dimensions | Value | Dependencies |
+|----------|------|----------|------------|-------|--------------|
+{% for var in variables_by_class.Assumption %}
+| {{ var.label }} | {% if var.entity_type %}{{ var.entity_type }}{% else %}-{% endif %} | {{ var.excel_location.sheet }}!{{ var.excel_location.address }} | {% if var.axes %}{{ var.axes | map(attribute='name') | join(' × ') }}{% elif var.indices %}{{ var.indices | map(attribute='name') | join(', ') }}{% else %}-{% endif %} | {{ var.snapshot_value|format_table_value }} | {% if var.dependencies.children %}{{ var.dependencies.children|join(', ') }}{% else %}None{% endif %} |
+{% endfor %}
+{% else %}
+*No assumptions identified in this model.*
+{% endif %}
+
+{% set table_assumptions = variables_by_class.Assumption | selectattr('entity_type', 'equalto', 'table') | list %}
+{% if table_assumptions %}
+
+### Table Details
+
+{% for var in table_assumptions %}
+**{{ var.label }}** ({{ var.excel_location.sheet }}!{{ var.excel_location.address }})
+{% if var.axes %}
+- **Axes:**
+{% for ax in var.axes %}  - {{ ax.name }} (length {{ ax.length }}){% if ax.name == 'time' and ax.index_variable %}, indexed by time axis{% endif %}
+{% endfor %}
+{% endif %}
+- **Value:** {{ var.snapshot_value|format_table_value }}
+
+{% endfor %}
+{% endif %}
+
+---
+
+## 3. Policyholder Data
+
+Policyholder data represents policy-level attributes that vary by insured life. These are typically provided from policy administration systems or data extracts.
+
+{% if variables_by_class['Policyholder Data']|length > 0 %}
+| Variable | Type | Location | Dimensions | Value | Dependencies |
+|----------|------|----------|------------|-------|--------------|
+{% for var in variables_by_class['Policyholder Data'] %}
+| {{ var.label }} | {% if var.entity_type %}{{ var.entity_type }}{% else %}-{% endif %} | {{ var.excel_location.sheet }}!{{ var.excel_location.address }} | {% if var.axes %}{{ var.axes | map(attribute='name') | join(' × ') }}{% elif var.indices %}{{ var.indices | map(attribute='name') | join(', ') }}{% else %}-{% endif %} | {{ var.snapshot_value|format_table_value }} | {% if var.dependencies.children %}{{ var.dependencies.children|join(', ') }}{% else %}None{% endif %} |
+{% endfor %}
+{% else %}
+*No policyholder data identified in this model.*
+{% endif %}
+
+{% set record_sets = variables_by_class['Policyholder Data'] | selectattr('entity_type', 'equalto', 'record_set') | list %}
+{% if record_sets %}
+
+### Record Set Details
+
+{% for var in record_sets %}
+**{{ var.label }}** ({{ var.excel_location.sheet }}!{{ var.excel_location.address }})
+- **Type:** Record Set (tabular data)
+- **Value:** {{ var.snapshot_value|format_table_value }}
+
+{% endfor %}
+{% endif %}
+
+---
+
+## 4. Calculation Flow
+
+This section documents the intermediate calculations that transform inputs and assumptions into final results.
+
+{% if variables_by_class.Calculation|length > 0 %}
+### Key Calculations
+
+The model contains {{ calculation_count }} calculation variables. Below are the key calculations with their dependencies:
+
+| Variable | Type | Location | Formula | Description | Depends On |
+|----------|------|----------|---------|-------------|------------|
+{% for var in variables_by_class.Calculation %}
+| {{ var.label }} | {% if var.entity_type %}{{ var.entity_type }}{% else %}-{% endif %} | {{ var.excel_location.sheet }}!{{ var.excel_location.address }} | `{{ var.semantic_formula or var.formula }}` | {% if var.explanation %}{{ var.explanation }}{% else %}-{% endif %} | {% if var.dependencies.children %}{{ var.dependencies.children|join(', ') }}{% else %}None{% endif %} |
+{% endfor %}
+
+{% else %}
+*No calculation variables identified in this model.*
+{% endif %}
+
+---
+
+## 5. Results & Outputs
+
+Final results represent values intended for external reporting or decision-making.
+
+{% if variables_by_class.Result|length > 0 %}
+| Variable | Location | Value | Calculated From |
+|----------|----------|-------|-----------------|
+{% for var in variables_by_class.Result %}
+| {{ var.label }} | {{ var.excel_location.sheet }}!{{ var.excel_location.address }} | {{ var.snapshot_value|format_table_value }} | {% if var.dependencies.children %}{{ var.dependencies.children|join(', ') }}{% else %}None{% endif %} |
+{% endfor %}
+{% else %}
+*No result variables identified in this model.*
+{% endif %}
+
+---
+
+## 6. Dependency Graph
+
+This section shows the relationships between variables, indicating which variables depend on others.
+
+### High-Level Dependencies
+
+The dependency analysis shows how variables flow through the model:
+
+{% if variables_by_class.Result|length > 0 %}
+**Results** (model outputs):
+{% for var in variables_by_class.Result %}
+- **{{ var.label }}** depends on: {% if var.dependencies.children %}{{ var.dependencies.children|join(', ') }}{% else %}No dependencies{% endif %}
+
+{% endfor %}
+{% endif %}
+
+{% if variables_by_class.Assumption|length > 0 %}
+**Assumptions** (foundational parameters):
+{% for var in variables_by_class.Assumption %}
+- **{{ var.label }}** is used by: {% if var.dependencies.parents %}{{ var.dependencies.parents|join(', ') }}{% else %}Not referenced{% endif %}
+
+{% endfor %}
+{% endif %}
+
+---
+
+## 7. Time Structure
+
+This section documents time dimensions identified in the model, such as policy months, calendar years, projection periods, or other temporal indices.
+
+{# Phase B1: select every variable carrying a real 'time' axis (1D time_series and
+   2D grids whose row/column dimension the IR proved is the time axis). A variable
+   only has this axis when the IR linked it AND it is spatially aligned to t, so
+   1x1 scalars that merely read the time index are excluded. #}
+{% set time_ns = namespace(vars=[]) %}
+{% for var in variables %}
+{% if var.axes %}
+{% for ax in var.axes %}
+{% if ax.name == 'time' and ax.index_variable %}{% set time_ns.vars = time_ns.vars + [var] %}{% endif %}
+{% endfor %}
+{% endif %}
+{% endfor %}
+{% if time_ns.vars|length > 0 %}
+**Time-indexed variables identified:** {{ time_ns.vars|length }}
+
+The model has a deterministic **time axis** (named `time`): a projection period
+that indexes the variables below. Each is rendered as a t-indexed sequence, where
+each value is paired with its real period label (the actual axis cell). A 1x1
+scalar that merely reads the time index is deliberately excluded — it is not a
+per-t series.
+
+| Variable | Location | Time axis | Series (t-indexed) |
+|----------|----------|-----------|--------------------|
+{% for var in time_ns.vars %}
+{% set ts = namespace(period_labels=none, axis_len=none) %}
+{% for ax in var.axes %}
+{% if ax.name == 'time' and ax.index_variable %}
+{% set ts.period_labels = ax.period_labels %}
+{% set ts.axis_len = ax.length %}
+{% endif %}
+{% endfor %}
+| {{ var.label }} | {{ var.excel_location.sheet }}!{{ var.excel_location.address }} | time (length {{ ts.axis_len }}) | {{ var.snapshot_value|format_time_series(ts.period_labels) }} |
+{% endfor %}
+
+**Temporal Structure Notes:**
+- The model contains {{ time_ns.vars|length }} variables indexed by the projection-period (time) axis
+- Each row above is a series the IR proved is spatially aligned to the time axis; a 2D grid shows its time-aligned dimension as the `time` axis
+- Review time indices to ensure consistency across calculations
+{% else %}
+*No explicit time-series structures identified in this model. The model may use implicit time dimensions or be a point-in-time calculation.*
+{% endif %}
+
+---
+
+## 8. Low-Confidence Areas
+
+This section flags variables where the automated labelling or classification has low confidence and may require expert actuarial review.
+
+{% set low_conf_threshold = 0.8 %}
+{% set low_conf_vars = variables | selectattr('label_confidence', 'defined') | selectattr('label_confidence', 'lt', low_conf_threshold) | list %}
+{% if low_conf_vars|length > 0 %}
+**Variables requiring expert review:** {{ low_conf_vars|length }} of {{ total_variables }}
+
+| Variable | Label | Confidence | Location | Issue |
+|----------|-------|------------|----------|-------|
+{% for var in low_conf_vars[:20] %}
+| {{ loop.index }} | {{ var.label }} | {{ "%.2f"|format(var.label_confidence) }} | {{ var.excel_location.sheet }}!{{ var.excel_location.address }} | {% if var.label_confidence < 0.3 %}Very low confidence - manual review required{% elif var.label_confidence < 0.6 %}Low confidence - verify label accuracy{% else %}Moderate confidence - confirm classification{% endif %} |
+{% endfor %}
+{% if low_conf_vars|length > 20 %}
+*... and {{ low_conf_vars|length - 20 }} more variables with confidence < {{ low_conf_threshold }}*
+{% endif %}
+
+**Confidence Score Interpretation:**
+- **0.0 - 0.3**: Very low confidence - likely requires relabelling
+- **0.3 - 0.6**: Low confidence - verify label matches actuarial intent
+- **0.6 - 0.8**: Moderate confidence - confirm classification is appropriate
+- **0.8 - 1.0**: High confidence - label well-supported by evidence
+
+**Recommended Actions:**
+1. Review low-confidence variables to ensure labels match actuarial intent
+2. Check if variables are correctly classified (Assumption vs Policyholder Data vs Calculation)
+3. Verify that dependencies and formulas are captured accurately
+4. Update reconciliation scope if critical variables have low confidence
+{% else %}
+*All variables have high confidence (≥ {{ low_conf_threshold }}). No areas flagged for expert review.*
+{% endif %}
+
+---
+
+## 9. Model Validation & Quality
+
+### Variable Classification
+
+Variables have been classified into actuarial types with confidence scores:
+
+| Classification | Count | Percentage |
+|---------------|-------|------------|
+| Assumptions | {{ assumption_count }} | {{ "%.1f"|format((assumption_count / total_variables * 100) if total_variables > 0 else 0) }}% |
+| Policyholder Data | {{ policyholder_data_count }} | {{ "%.1f"|format((policyholder_data_count / total_variables * 100) if total_variables > 0 else 0) }}% |
+| Calculations | {{ calculation_count }} | {{ "%.1f"|format((calculation_count / total_variables * 100) if total_variables > 0 else 0) }}% |
+| Results | {{ result_count }} | {{ "%.1f"|format((result_count / total_variables * 100) if total_variables > 0 else 0) }}% |
+{% if unclassified_count > 0 %}
+| Unclassified | {{ unclassified_count }} | {{ "%.1f"|format((unclassified_count / total_variables * 100) if total_variables > 0 else 0) }}% |
+{% endif %}
+
+### Labelling Quality
+
+Each variable has been assigned a semantic label based on evidence from the Excel workbook (named ranges, headers, adjacent text). The labelling confidence indicates the strength of the evidence supporting each label.
+
+---
+
+## 10. Methodology Notes
+
+### Documentation Generation
+
+This documentation was automatically generated using XL Marinade (Phase 2). The analysis process:
+
+1. **IR Extraction:** Extracted deterministic intermediate representation (IR) from Excel workbook
+2. **Semantic Labelling:** Assigned meaningful labels to variables using two-pass context-aware algorithm
+3. **Classification:** Classified variables into actuarial types (Assumption, Policyholder Data, Calculation, Result)
+4. **Dependency Analysis:** Analyzed formula dependencies to understand calculation flow
+5. **Documentation Generation:** Generated this structured documentation from JSON spec
+
+### Limitations
+
+- This documentation represents a snapshot of the model at extraction time
+- Variable classifications are based on heuristics and may require actuarial review
+- Complex array formulas may be simplified in formula display
+- User-defined functions (VBA UDFs) are not analyzed
+
+---
+
+## Appendix A: Variable Catalog
+
+Complete list of all variables in the model:
+
+| ID | Label | Class | Location | Value |
+|----|-------|-------|----------|-------|
+{% for var in variables %}
+| {{ loop.index }} | {{ var.label }} | {{ var.actuarial_class or 'Unclassified' }} | {{ var.excel_location.sheet }}!{{ var.excel_location.address }} | {{ var.snapshot_value|format_value(max_items=3) }} |
+{% endfor %}
+
+---
+
+**End of Documentation**
+
+*This document was automatically generated by XL Marinade.*  
+*For questions or corrections, please review the source workbook and JSON specification.*

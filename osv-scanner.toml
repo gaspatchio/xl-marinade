@@ -1,0 +1,3 @@
+# osv-scanner ignore list for transitive advisories with no available fix.
+# Each entry must be a deliberate, reviewed exception with a linked advisory and
+# a remediation note. Empty today: remediate via a lockfile bump, not an ignore.
