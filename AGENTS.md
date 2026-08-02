@@ -37,21 +37,21 @@ These invariants are enforced by tests (`tests/test_docs_no_llm.py`, `tests/test
 
 ```bash
 uv sync                                        # install (add [llm] for the BYOK extra)
-PYTHONPATH=src uv run pytest tests/ -q          # the test suite is the gate
-PYTHONPATH=src uv run pytest tests/ -v          # verbose
-uv run ruff format . && uv run ruff check .     # format + lint (ruff select = ALL)
+uv run pytest -q                               # the test suite is the gate
+uv run pytest -v                               # verbose
+uv run ruff format . && uv run ruff check .     # format + lint (curated select; see pyproject)
 uv run mypy src/xl_marinade && uv run pyright src/xl_marinade   # both type checkers must pass
 marinade extract book.xlsx -o ir.db             # CLI: deterministic extraction
 marinade document ir.db -o out/                 # CLI: deterministic docs (add [llm] to enrich)
 ```
 
-The system Python has no dependencies — always `uv run`. Tests import from `src/` via `PYTHONPATH=src`.
+The system Python has no dependencies — always `uv run`. The package is imported from `src/` via `pyproject.toml`'s `pythonpath`, so a plain `uv run pytest` works from a clean checkout.
 
 ## Python standards
 
-Mirror the sibling **gaspatchio** Python rules (they apply verbatim):
+Mirror the sibling **gaspatchio** Python rules:
 
-- **Ruff `select = ["ALL"]`**; code must lint clean except the ignores in `pyproject.toml`, and must already be `ruff format`-clean.
+- **Ruff**: a curated lint set (`select = ["E","F","W","I","UP","B","A"]` — see `pyproject.toml`); code must lint clean except the listed ignores, and must already be `ruff format`-clean.
 - **Every function, method, and class has explicit type hints** — no implicit `Any`, a non-`Any` return type, and `| None` over `Optional[T]`. (This is a hard rule: an untyped public parameter is a review defect.)
 - **Never `print()` in production code** — use the `loguru` logger. (The only `print` allowed is inside a CLI `__main__`/Typer command that is the user-facing output.)
 - **f-strings** for interpolation; **`pathlib.Path`** over `os.path`; **`with`** context managers for resources.

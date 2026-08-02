@@ -8,6 +8,7 @@ Consumes fast schema tables (cells/formulas/edges) to build bindings and binding
 edges without the legacy adapter layer.
 """
 
+import builtins
 import json
 import re
 import sqlite3
@@ -41,6 +42,15 @@ from xl_marinade.core.ref_extractor import (
     is_defined_name,
 )
 from xl_marinade.core.reverse_index import ReverseIndex
+
+
+def print(*args, **kwargs):  # noqa: A001 - keep `marinade extract` stdout clean
+    """Route this module's diagnostic output to stderr so stdout stays clean for
+    piping. Call sites that pass an explicit ``file=`` still win (e.g. the phase
+    timers that already target stderr)."""
+    kwargs.setdefault("file", sys.stderr)
+    builtins.print(*args, **kwargs)
+
 
 _PLACEHOLDER_TOKENS: set[str] = {
     "-",
