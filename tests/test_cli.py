@@ -146,3 +146,26 @@ def test_cli_diff_bad_db_exits_cleanly(tmp_path):
     assert result.exception is None or isinstance(result.exception, SystemExit), (
         f"unhandled {type(result.exception).__name__}: {result.exception}"
     )
+
+
+def test_cli_extract_max_memory_flag_plumbed(tmp_path, monkeypatch):
+    """--max-memory-mb reaches the library; without it a user who hits the
+    1800 MB default budget on a large workbook has no CLI remedy at all
+    (found on a real 40 MB / 2.3M-cell model that peaks at ~3.4 GB)."""
+    import xl_marinade
+
+    captured = {}
+
+    def fake_extract(workbook, out, enrich=False, max_memory_mb=1800):
+        captured["max_memory_mb"] = max_memory_mb
+        return out
+
+    monkeypatch.setattr(xl_marinade, "extract", fake_extract)
+    wb = tmp_path / "s.xlsx"
+    wb.write_bytes(b"")
+
+    assert runner.invoke(app, ["extract", str(wb), "--max-memory-mb", "6000"]).exit_code == 0
+    assert captured["max_memory_mb"] == 6000
+
+    assert runner.invoke(app, ["extract", str(wb)]).exit_code == 0
+    assert captured["max_memory_mb"] == 1800

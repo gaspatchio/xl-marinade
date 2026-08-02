@@ -40,12 +40,18 @@ def extract(
         "--enrich",
         help="Opt-in LLM VBA enrichment (makes network calls; requires xl-marinade\\[llm]).",
     ),
+    max_memory_mb: int = typer.Option(
+        1800,
+        "--max-memory-mb",
+        help="Extraction memory budget in MB; extraction aborts above this to prevent OOM.",
+    ),
 ) -> None:
     """Extract a workbook's formula graph to a SQLite database."""
     try:
-        result = xl_marinade.extract(workbook, out, enrich=enrich)
+        result = xl_marinade.extract(workbook, out, enrich=enrich, max_memory_mb=max_memory_mb)
     except MemoryBudgetExceeded as exc:
         _err.print(f"[red]error:[/] {escape(str(exc))}")
+        _err.print("[yellow]hint:[/] re-run with a higher --max-memory-mb")
         raise typer.Exit(code=3)
     except MarinadeError as exc:
         _err.print(f"[red]error:[/] {escape(str(exc))}")

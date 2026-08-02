@@ -77,3 +77,49 @@ def test_document_non_ir_db_raises_marinade_error(tmp_path):
 
     with pytest.raises(MarinadeError):
         document(other, tmp_path / "out")
+
+
+def test_document_partial_db_raises_marinade_error(tmp_path):
+    """docs.document rejects a partially-written IR database with a typed error.
+
+    Regression: an extraction interrupted mid-write (Ctrl-C, kill) can leave a
+    database where the agent_bindings VIEW exists but its backing tables do
+    not. Existence-checking the view passed validation and the labeller then
+    surfaced a raw RuntimeError traceback; validation must probe the view with
+    a real query.
+    """
+    import sqlite3
+
+    from xl_marinade.docs import document
+    from xl_marinade.errors import MarinadeError
+
+    partial = tmp_path / "partial.db"
+    conn = sqlite3.connect(partial)
+    conn.execute("CREATE VIEW agent_bindings AS SELECT * FROM bindings")
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(MarinadeError):
+        document(partial, tmp_path / "out")
+
+
+def test_document_zero_binding_extraction_raises_marinade_error(tmp_path):
+    """docs.document gives a typed error for an extraction with no bindings.
+
+    Regression: documenting a values-only or macro-only workbook (extracts
+    fine, zero bindings — e.g. randwalk2.xlsm from corpus testing) crashed
+    with a raw ValueError traceback from the labeller.
+    """
+    import openpyxl
+
+    from xl_marinade.core.api import extract
+    from xl_marinade.docs import document
+    from xl_marinade.errors import MarinadeError
+
+    wb = openpyxl.Workbook()
+    xlsx = tmp_path / "empty.xlsx"
+    wb.save(xlsx)
+    ir_db = extract(xlsx, tmp_path / "ir.db")
+
+    with pytest.raises(MarinadeError):
+        document(ir_db, tmp_path / "out")

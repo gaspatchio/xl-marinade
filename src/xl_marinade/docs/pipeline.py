@@ -19,26 +19,30 @@ from xl_marinade.errors import UnsupportedInput
 
 
 def _validate_ir_db(ir_db: Path) -> None:
-    """Fail fast with a typed error when the input is not an IR database.
+    """Fail fast with a typed error when the input is not a usable IR database.
 
     Without this, a wrong path surfaces as a raw sqlite3.DatabaseError (garbage
     file) or RuntimeError (SQLite file without the IR schema) from deep inside
     the labeller, while `diff` on the same input raises a typed MarinadeError.
+    The probe queries agent_bindings rather than checking its existence: an
+    extraction interrupted mid-write can leave the view without its backing
+    tables, and a values-only workbook extracts to zero bindings — both must
+    fail here with a clean message, not deep in the labeller.
     """
     try:
         conn = sqlite3.connect(f"file:{ir_db}?mode=ro", uri=True)
         try:
-            found = conn.execute(
-                "SELECT name FROM sqlite_master WHERE name = 'agent_bindings'"
-            ).fetchone()
+            row = conn.execute("SELECT 1 FROM agent_bindings LIMIT 1").fetchone()
         finally:
             conn.close()
     except sqlite3.DatabaseError as exc:
-        raise UnsupportedInput(f"{ir_db} is not a SQLite database: {exc}") from exc
-    if found is None:
         raise UnsupportedInput(
-            f"{ir_db} is not an IR database (no agent_bindings view); "
-            "produce one with `marinade extract`"
+            f"{ir_db} is not a usable IR database ({exc}); produce one with `marinade extract`"
+        ) from exc
+    if row is None:
+        raise UnsupportedInput(
+            f"{ir_db} contains no bindings to document — the workbook extracted "
+            "with no formula or table structure (values-only or macro-only workbook)"
         )
 
 
