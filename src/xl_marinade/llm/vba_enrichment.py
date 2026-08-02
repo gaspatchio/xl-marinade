@@ -22,6 +22,9 @@ import sqlite3
 import time
 from dataclasses import dataclass
 
+from xl_marinade.errors import LLMUnavailable
+from xl_marinade.llm.factory import make_llm_client
+
 logger = logging.getLogger(__name__)
 
 # Dynamic patterns that indicate unresolved references needing LLM
@@ -144,24 +147,29 @@ def enrich_procedure(
     workbook_context: str,
     static_context: str,
     api_key: str | None = None,
-    model: str = "gpt-4.1-nano",
+    model: str | None = None,
 ) -> LLMEnrichmentResult | None:
     """Submit a single VBA procedure to the LLM for reference enrichment.
 
-    Returns inferred references and a description, or None on failure.
+    Uses the shared BYOK client seam (``factory.make_llm_client``), so it honours
+    ``LLM_API_KEY``/``OPENAI_API_KEY`` and the ``LLM_BASE_URL`` endpoint override
+    exactly like ``document --enrich`` — pointing ``LLM_BASE_URL`` at a local or
+    Azure endpoint keeps VBA enrichment on that endpoint too, rather than silently
+    calling OpenAI. ``model`` defaults to the configured ``OPENAI_MODEL``, falling
+    back to a cheap model suited to the per-procedure call volume. Returns inferred
+    references and a description, or ``None`` on failure — enrichment is advisory
+    and never raises.
     """
     try:
-        from openai import OpenAI
-    except ImportError:
+        client = make_llm_client(api_key)
+    except LLMUnavailable:
         logger.warning("openai package not installed — skipping LLM enrichment")
         return None
-
-    key = api_key or os.getenv("OPENAI_API_KEY")
-    if not key:
-        logger.warning("No OPENAI_API_KEY — skipping LLM enrichment")
+    if client is None:
+        logger.warning("No LLM API key configured — skipping LLM enrichment")
         return None
 
-    client = OpenAI(api_key=key)
+    resolved_model = model or os.getenv("OPENAI_MODEL") or "gpt-4.1-nano"
 
     user_content = f"""Procedure: {procedure_name}
 
@@ -180,7 +188,7 @@ ranges, string-built addresses, and loop-based cell access patterns."""
     start = time.monotonic()
     try:
         response = client.chat.completions.create(
-            model=model,
+            model=resolved_model,
             temperature=0.0,
             response_format={"type": "json_object"},
             messages=[
@@ -250,7 +258,7 @@ ranges, string-built addresses, and loop-based cell access patterns."""
         procedure_name=procedure_name,
         refs=refs,
         description=description,
-        model_used=model,
+        model_used=resolved_model,
         latency_s=latency,
     )
 

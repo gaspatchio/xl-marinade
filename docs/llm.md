@@ -43,9 +43,10 @@ configure.
 
 ## Configuration
 
-All configuration for **`document --enrich`** (the LLM narrative-documentation
-pass) is via environment variables — the key is read at call time and never
-stored:
+All configuration is via environment variables — the key is read at call time
+and never stored. Both enrichment paths (`document --enrich` and the opt-in
+`extract --enrich` VBA pass) go through the same client seam, so they honour the
+same variables:
 
 | Variable | Purpose | Default |
 |---|---|---|
@@ -54,19 +55,18 @@ stored:
 | `LLM_BASE_URL` | OpenAI-compatible endpoint override | OpenAI's API |
 | `LLM_PROVIDER` | Provider id, recorded in the audit log (`openai`, `azure`, `openai_compatible`) | `openai` |
 
-!!! warning "VBA enrichment (`extract --enrich`) has a narrower configuration"
-    The opt-in VBA enrichment triggered by `marinade extract --enrich` currently
-    reads **only `OPENAI_API_KEY`** and uses a **fixed model** — it does **not**
-    honor `LLM_API_KEY`, `LLM_BASE_URL`, `OPENAI_MODEL`, or `LLM_PROVIDER`. If you
-    rely on `LLM_BASE_URL` to keep workbook data on a local, Azure, or proxied
-    endpoint, that override applies to `document --enrich` only; do **not** assume
-    `extract --enrich` respects it. This is a current limitation of the VBA
-    enrichment path.
+!!! note "VBA enrichment uses a cheaper default model"
+    `marinade extract --enrich` honours the same variables above — including
+    `LLM_BASE_URL`, so it stays on your configured endpoint. The one difference:
+    when `OPENAI_MODEL` is unset it defaults to a cheaper model than
+    `document --enrich`, because it makes one call per VBA procedure. Set
+    `OPENAI_MODEL` to pin a specific model for both.
 
 ## Azure, local, or proxied models
 
-`document --enrich` speaks to any **OpenAI-compatible** endpoint via `LLM_BASE_URL`
-— Azure OpenAI, a local vLLM/Ollama server, or a LiteLLM proxy:
+The add-on speaks to any **OpenAI-compatible** endpoint via `LLM_BASE_URL` — Azure
+OpenAI, a local vLLM/Ollama server, or a LiteLLM proxy — for both `document --enrich`
+and `extract --enrich`:
 
 ```bash
 export LLM_API_KEY="..."
