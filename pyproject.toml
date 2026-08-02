@@ -1,15 +1,12 @@
-# Staged pyproject for the standalone `xl-marinade` OSS package.
-#
-# Kept under this name during the carve-out so the monorepo build (root
-# pyproject.toml) stays intact. Plan 3 (publish) renames this to pyproject.toml
-# once the private trees are excluded, and adds the LICENSE + README.
+# Packaging metadata for xl-marinade — deterministic Excel formula-graph
+# extraction to SQLite, with an optional bring-your-own-key LLM add-on.
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
 name = "xl-marinade"
-version = "0.1.0.dev0"
+version = "0.1.0"
 description = "Deterministic Excel formula-graph extraction to SQLite."
 requires-python = ">=3.11"
 license = "Apache-2.0"

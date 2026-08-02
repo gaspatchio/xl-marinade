@@ -7,7 +7,7 @@ schema is a versioned public contract.
 
 ## [Unreleased]
 
-## [0.1.0] - 2026-XX-XX
+## [0.1.0] - 2026-08-02
 
 ### Added
 - Deterministic Excel formula-graph extraction to SQLite (`marinade extract`).

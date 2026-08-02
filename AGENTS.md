@@ -69,4 +69,4 @@ Specs and implementation plans live in `ref/<topic>/` (specs under `specs/`, pla
 - **Sign your commits** (SSH or GPG; `git config commit.gpgsign true`).
 - **Conventional commits** (`feat:`, `fix:`, `docs:`, `chore:`, `refactor:`, `test:`, `build:`); explain the *why*. Keep commits focused and atomic. Reference issue numbers where applicable.
 - **Never** add an AI-assistant signature or `Co-Authored-By: <assistant>` trailer.
-- Authorship is canonicalized via `.mailmap` (Klaas Stijnen as the extractor's original author); the carve-out refactor commits authored as Matt Wright stay as-is.
+- Authorship is canonicalized via `.mailmap` (Klaas Stijnen as the extractor's original author); the packaging/refactor commits authored as Matt Wright stay as-is.

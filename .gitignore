@@ -90,16 +90,12 @@ dmypy.json
 
 # Exclude large test spreadsheets (store externally)
 test_spreadsheets/
-tests/phase2_documentation_agent/fixtures/*.db
-
-# Agent PoC outputs (Sprint 9)
-docs/agent_reports/
+# Local scratch / generated artifacts
 artifacts/
 .claude/worktrees/
-model_atlas.db
 workbook_storage/
 
-# P2-AQ-T4 human-review JSONL queue (telemetry; per-deployment).
+# LLM human-review queue (telemetry; per-deployment)
 human_review_queue.jsonl
 
 # MkDocs build output (generated, never committed)
