@@ -29,6 +29,27 @@ def test_cli_bad_input_nonzero_exit(tmp_path):
     assert result.exit_code != 0
 
 
+def test_cli_error_output_preserves_bracketed_text(tmp_path, monkeypatch):
+    """Error messages must reach the user verbatim — rich markup swallowed
+    bracketed text like the ``xl-marinade[llm]`` extras name, rendering
+    install hints as just ``xl-marinade``."""
+    from xl_marinade.errors import MarinadeError
+
+    def boom(*args, **kwargs):
+        raise MarinadeError("requires the optional add-on: pip install xl-marinade[llm]")
+
+    import xl_marinade
+
+    monkeypatch.setattr(xl_marinade, "extract", boom)
+    wb = tmp_path / "s.xlsx"
+    wb.write_bytes(b"")
+
+    result = runner.invoke(app, ["extract", str(wb)])
+
+    assert result.exit_code == 1
+    assert "xl-marinade[llm]" in result.output
+
+
 def test_cli_document_deterministic(tmp_path):
     xlsx = tmp_path / "s.xlsx"
     create_comprehensive_test_workbook(xlsx)

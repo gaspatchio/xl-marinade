@@ -15,6 +15,7 @@ from pathlib import Path
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 
 import xl_marinade
 from xl_marinade.errors import LLMUnavailable, MarinadeError, MemoryBudgetExceeded
@@ -37,17 +38,17 @@ def extract(
     enrich: bool = typer.Option(
         False,
         "--enrich",
-        help="Opt-in LLM VBA enrichment (makes network calls; requires xl-marinade[llm]).",
+        help="Opt-in LLM VBA enrichment (makes network calls; requires xl-marinade\\[llm]).",
     ),
 ) -> None:
     """Extract a workbook's formula graph to a SQLite database."""
     try:
         result = xl_marinade.extract(workbook, out, enrich=enrich)
     except MemoryBudgetExceeded as exc:
-        _err.print(f"[red]error:[/] {exc}")
+        _err.print(f"[red]error:[/] {escape(str(exc))}")
         raise typer.Exit(code=3)
     except MarinadeError as exc:
-        _err.print(f"[red]error:[/] {exc}")
+        _err.print(f"[red]error:[/] {escape(str(exc))}")
         raise typer.Exit(code=1)
     _err.print(f"[green]wrote[/] {result}")
 
@@ -66,7 +67,7 @@ def document(
     enrich: bool = typer.Option(
         False,
         "--enrich",
-        help="Opt-in LLM enrichment (requires xl-marinade[llm] + a key; degrades to deterministic otherwise).",
+        help="Opt-in LLM enrichment (requires xl-marinade\\[llm] + a key; degrades to deterministic otherwise).",
     ),
 ) -> None:
     """Generate documentation for an extracted IR database."""
@@ -77,7 +78,7 @@ def document(
         use_llm = enrich and importlib.util.find_spec("openai") is not None
         if enrich and not use_llm:
             _err.print(
-                "[yellow]note:[/] xl-marinade[llm] not installed — deterministic documentation only"
+                "[yellow]note:[/] xl-marinade\\[llm] not installed — deterministic documentation only"
             )
         if use_llm:
             from xl_marinade.llm import document as _document
@@ -85,13 +86,13 @@ def document(
             from xl_marinade.docs import document as _document
         md = _document(ir_db, out)
     except MemoryBudgetExceeded as exc:
-        _err.print(f"[red]error:[/] {exc}")
+        _err.print(f"[red]error:[/] {escape(str(exc))}")
         raise typer.Exit(code=3)
     except LLMUnavailable as exc:
-        _err.print(f"[red]error:[/] {exc}")
+        _err.print(f"[red]error:[/] {escape(str(exc))}")
         raise typer.Exit(code=4)
     except MarinadeError as exc:
-        _err.print(f"[red]error:[/] {exc}")
+        _err.print(f"[red]error:[/] {escape(str(exc))}")
         raise typer.Exit(code=1)
     _err.print(f"[green]wrote[/] {md}")
 
@@ -114,7 +115,7 @@ def diff(
     try:
         result = _diff(str(db_a), str(db_b))
     except MarinadeError as exc:
-        _err.print(f"[red]error:[/] {exc}")
+        _err.print(f"[red]error:[/] {escape(str(exc))}")
         raise typer.Exit(code=1)
 
     payload = json.dumps(result, indent=2, default=str)

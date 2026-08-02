@@ -348,11 +348,64 @@ def build_dependency_graph(ir_db_path: str) -> "nx.DiGraph | dict[str, set[str]]
         return graph
 
 
+def _kahn_order(graph: dict[str, set[str]]) -> list[str]:
+    """Kahn's algorithm over the dict graph shape, cycle-tolerant.
+
+    Nodes on (or downstream of) a cycle never reach in-degree 0; they are
+    appended at the end in sorted order so every node appears exactly once.
+    """
+    # Build in-degree map
+    reverse_graph: dict[str, set[str]] = graph.get("__reverse__", {})
+    all_nodes = set(graph.keys()) - {"__reverse__"}
+    all_nodes.update(reverse_graph.keys())
+
+    in_degree = dict.fromkeys(all_nodes, 0)
+
+    # Count in-degrees
+    for node in all_nodes:
+        if node in graph and node != "__reverse__":
+            for child in graph[node]:
+                if child in in_degree:
+                    in_degree[child] += 1
+
+    # Start with nodes that have no dependencies (in_degree = 0)
+    queue = [node for node, degree in in_degree.items() if degree == 0]
+    heapq.heapify(queue)
+    result = []
+
+    while queue:
+        # Pop from min-heap for determinism
+        node = heapq.heappop(queue)
+        result.append(node)
+
+        # Reduce in-degree of children
+        if node in graph and node != "__reverse__":
+            children = sorted(graph[node])  # Sort for determinism
+            for child in children:
+                if child in in_degree:
+                    in_degree[child] -= 1
+                    if in_degree[child] == 0:
+                        heapq.heappush(queue, child)
+
+    # If result is shorter than all_nodes, there are cycles
+    if len(result) < len(all_nodes):
+        # Add remaining nodes in sorted order
+        remaining = sorted(set(all_nodes) - set(result))
+        logger.warning(f"Graph contains cycles, {len(remaining)} nodes have circular dependencies")
+        result.extend(remaining)
+
+    return result
+
+
 def get_topological_order(graph: "nx.DiGraph | dict[str, set[str]]") -> list[str]:
     """
     Get topological ordering of bindings (roots to leaves).
 
-    For cyclic graphs, returns partial ordering with cycles broken arbitrarily.
+    Binding-level graphs are legitimately cyclic for recursive models: a
+    time-lagged projection column is a DAG cell-by-cell but a cycle once
+    collapsed to column bindings. For cyclic graphs both backends return the
+    same ordering: the acyclic portion in dependency order, then the nodes
+    stuck on (or downstream of) cycles appended in sorted order.
 
     Args:
         graph: Dependency graph from build_dependency_graph
@@ -361,61 +414,21 @@ def get_topological_order(graph: "nx.DiGraph | dict[str, set[str]]") -> list[str
         List of binding IDs in topological order (roots first, leaves last)
     """
     if HAS_NETWORKX and isinstance(graph, nx.DiGraph):
-        # NetworkX has built-in topological sort with cycle handling
         try:
-            # Try standard topological sort
-            order = list(nx.topological_sort(graph))
-        except nx.NetworkXError:
-            # Graph has cycles - use lexicographic topological sort which breaks ties
-            logger.warning("Graph contains cycles, using lexicographic topological sort")
-            order = list(nx.lexicographical_topological_sort(graph))
-
-        return order
+            return list(nx.topological_sort(graph))
+        except nx.NetworkXUnfeasible:
+            # Cyclic — fall back to the dict backend's cycle-tolerant Kahn's
+            # ordering so both backends stay identical on the same graph.
+            logger.warning("Graph contains cycles, using Kahn's ordering with cyclic remainder")
+            dict_graph: dict[str, set[str]] = {
+                node: set(graph.successors(node)) for node in graph.nodes()
+            }
+            dict_graph["__reverse__"] = {
+                node: set(graph.predecessors(node)) for node in graph.nodes()
+            }
+            return _kahn_order(dict_graph)
     else:
-        # Manual topological sort using Kahn's algorithm
-        # Build in-degree map
-        reverse_graph: dict[str, set[str]] = graph.get("__reverse__", {})
-        all_nodes = set(graph.keys()) - {"__reverse__"}
-        all_nodes.update(reverse_graph.keys())
-
-        in_degree = dict.fromkeys(all_nodes, 0)
-
-        # Count in-degrees
-        for node in all_nodes:
-            if node in graph and node != "__reverse__":
-                for child in graph[node]:
-                    if child in in_degree:
-                        in_degree[child] += 1
-
-        # Start with nodes that have no dependencies (in_degree = 0)
-        queue = [node for node, degree in in_degree.items() if degree == 0]
-        heapq.heapify(queue)
-        result = []
-
-        while queue:
-            # Pop from min-heap for determinism
-            node = heapq.heappop(queue)
-            result.append(node)
-
-            # Reduce in-degree of children
-            if node in graph and node != "__reverse__":
-                children = sorted(graph[node])  # Sort for determinism
-                for child in children:
-                    if child in in_degree:
-                        in_degree[child] -= 1
-                        if in_degree[child] == 0:
-                            heapq.heappush(queue, child)
-
-        # If result is shorter than all_nodes, there are cycles
-        if len(result) < len(all_nodes):
-            # Add remaining nodes in sorted order
-            remaining = sorted(set(all_nodes) - set(result))
-            logger.warning(
-                f"Graph contains cycles, {len(remaining)} nodes have circular dependencies"
-            )
-            result.extend(remaining)
-
-        return result
+        return _kahn_order(graph)
 
 
 def get_parents(graph: "nx.DiGraph | dict[str, set[str]]", binding_id: str) -> list[str]:

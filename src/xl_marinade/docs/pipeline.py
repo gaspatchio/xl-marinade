@@ -6,6 +6,7 @@ tier composes _build_overlay/_render around sprint7).
 
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 from loguru import logger
@@ -14,6 +15,31 @@ from xl_marinade.docs.apply_actuarial_classification import apply_actuarial_clas
 from xl_marinade.docs.generators.markdown import MarkdownGenerator
 from xl_marinade.docs.json_spec_generator import generate_json_spec
 from xl_marinade.docs.two_pass_labeller import TwoPassLabellingEngine
+from xl_marinade.errors import UnsupportedInput
+
+
+def _validate_ir_db(ir_db: Path) -> None:
+    """Fail fast with a typed error when the input is not an IR database.
+
+    Without this, a wrong path surfaces as a raw sqlite3.DatabaseError (garbage
+    file) or RuntimeError (SQLite file without the IR schema) from deep inside
+    the labeller, while `diff` on the same input raises a typed MarinadeError.
+    """
+    try:
+        conn = sqlite3.connect(f"file:{ir_db}?mode=ro", uri=True)
+        try:
+            found = conn.execute(
+                "SELECT name FROM sqlite_master WHERE name = 'agent_bindings'"
+            ).fetchone()
+        finally:
+            conn.close()
+    except sqlite3.DatabaseError as exc:
+        raise UnsupportedInput(f"{ir_db} is not a SQLite database: {exc}") from exc
+    if found is None:
+        raise UnsupportedInput(
+            f"{ir_db} is not an IR database (no agent_bindings view); "
+            "produce one with `marinade extract`"
+        )
 
 
 def _build_overlay(ir_db: Path, out_dir: Path) -> tuple[TwoPassLabellingEngine, Path, Path]:
@@ -21,6 +47,7 @@ def _build_overlay(ir_db: Path, out_dir: Path) -> tuple[TwoPassLabellingEngine, 
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     ir_db = Path(ir_db)
+    _validate_ir_db(ir_db)
     mutations_json = out_dir / "mutations.json"
     overlay_db = out_dir / "semantic_overlay.db"
 

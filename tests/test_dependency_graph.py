@@ -129,3 +129,78 @@ def test_digraph_and_dict_traversal_agree(monkeypatch):
     assert get_parents(dict_graph, "c") == ["a", "b"]
     assert get_parents(dict_graph, "b") == ["a"]
     assert get_parents(dict_graph, "a") == []
+
+
+def test_cyclic_graph_orders_all_nodes_identically_on_both_backends(monkeypatch):
+    """A cyclic binding graph must order every node, identically on both backends.
+
+    Binding-level graphs are legitimately cyclic for recursive models: a
+    time-lagged projection column (``pols_if[t] = pols_if[t-1] - pols_death[t-1]``,
+    ``pols_death[t] = pols_if[t] * q``) is a DAG cell-by-cell but a cycle once
+    collapsed to column bindings.
+
+    Regression: ``nx.topological_sort`` raises ``NetworkXUnfeasible`` on cycles,
+    which the ``except nx.NetworkXError`` guard did not catch
+    (``NetworkXUnfeasible`` subclasses ``NetworkXAlgorithmError``, not
+    ``NetworkXError``) — so ``document()`` crashed on every recursive model when
+    networkx was installed, while the dict backend handled the same graph fine.
+    """
+    nx = pytest.importorskip("networkx")
+    edges = [
+        ("premiums", "pols_if"),
+        ("pols_if", "pols_death"),
+        ("pols_if", "pols_lapse"),
+        ("pols_death", "pols_if"),
+        ("pols_lapse", "pols_if"),
+        ("pols_death", "mortality_rate"),
+    ]
+    digraph = nx.DiGraph()
+    digraph.add_edges_from(edges)
+    dict_graph = _dict_graph(edges)
+
+    monkeypatch.setattr(dt, "HAS_NETWORKX", True)
+    di_order = get_topological_order(digraph)
+    monkeypatch.setattr(dt, "HAS_NETWORKX", False)
+    dict_order = get_topological_order(dict_graph)
+
+    all_nodes = {node for edge in edges for node in edge}
+    assert sorted(di_order) == sorted(all_nodes)
+    assert di_order == dict_order
+
+
+def test_document_succeeds_on_recursive_projection_workbook(tmp_path, monkeypatch):
+    """``document()`` must succeed on a workbook with a recursive projection.
+
+    The workbook below is the minimal recursive-projection shape: an in-force
+    column seeded from a constant and decremented by last period's deaths, and
+    a deaths column computed from the current in-force — mutually dependent
+    column bindings, i.e. a cycle in the binding graph. Opts into the DiGraph
+    backend, where the cycle crashed ``document()``.
+    """
+    pytest.importorskip("networkx")
+    monkeypatch.setattr(dt, "HAS_NETWORKX", True)
+
+    import openpyxl
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Projection"
+    ws["A1"], ws["B1"], ws["C1"] = "t", "pols_if", "pols_death"
+    ws["A2"], ws["B2"] = 0, 100.0
+    ws["C2"] = "=B2*0.01"
+    for row in range(3, 31):
+        ws[f"A{row}"] = row - 2
+        ws[f"B{row}"] = f"=B{row - 1}-C{row - 1}"
+        ws[f"C{row}"] = f"=B{row}*0.01"
+    xlsx = tmp_path / "recursive.xlsx"
+    wb.save(xlsx)
+
+    from xl_marinade.core.api import extract
+    from xl_marinade.docs import document
+
+    ir_db = extract(xlsx, tmp_path / "ir.db")
+    out = tmp_path / "out"
+    md = document(ir_db, out)
+
+    assert md.exists() and md.stat().st_size > 0
+    assert (out / "model_spec.json").exists()

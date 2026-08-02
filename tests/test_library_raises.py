@@ -38,3 +38,42 @@ def test_diff_verification_error_is_marinade_error():
     from xl_marinade.errors import MarinadeError
 
     assert issubclass(DiffVerificationError, MarinadeError)
+
+
+def test_document_bad_db_raises_marinade_error(tmp_path):
+    """docs.document rejects a non-SQLite input with a typed MarinadeError.
+
+    Regression: a garbage file surfaced as a raw sqlite3.DatabaseError
+    traceback from deep inside the labeller, while `diff` on the same input
+    produced a clean typed error.
+    """
+    from xl_marinade.docs import document
+    from xl_marinade.errors import MarinadeError
+
+    garbage = tmp_path / "not_a.db"
+    garbage.write_text("this is not a sqlite database")
+
+    with pytest.raises(MarinadeError):
+        document(garbage, tmp_path / "out")
+
+
+def test_document_non_ir_db_raises_marinade_error(tmp_path):
+    """docs.document rejects a SQLite file that is not an IR database.
+
+    Regression: pointing document at an arbitrary SQLite file surfaced as a
+    raw RuntimeError traceback ("agent_bindings view not found") instead of a
+    typed error.
+    """
+    import sqlite3
+
+    from xl_marinade.docs import document
+    from xl_marinade.errors import MarinadeError
+
+    other = tmp_path / "other.db"
+    conn = sqlite3.connect(other)
+    conn.execute("CREATE TABLE t (x)")
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(MarinadeError):
+        document(other, tmp_path / "out")

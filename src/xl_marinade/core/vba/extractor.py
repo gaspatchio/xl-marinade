@@ -600,7 +600,10 @@ def extract_vba(xlsm_path: Path | str) -> VBAExtraction:
     try:
         from oletools.olevba import VBA_Parser  # noqa: F401
     except ImportError:
-        logger.warning("oletools not installed — VBA extraction unavailable")
+        logger.warning(
+            "oletools not installed — VBA extraction skipped "
+            "(pip install xl-marinade[vba] to enable)"
+        )
         return VBAExtraction()
 
     path = Path(xlsm_path)

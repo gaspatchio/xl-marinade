@@ -524,9 +524,13 @@ class LazyWorkbook:
 
     @property
     def worksheets(self) -> Iterator[LazyWorksheet]:
-        """Return iterator of worksheets (for NameTableMap iteration)."""
-        for name in self.sheetnames:
-            yield self[name]
+        """Return iterator of worksheets (for NameTableMap iteration).
+
+        Mirrors openpyxl's ``Workbook.worksheets``, which excludes chartsheets —
+        they have no cell grid, and ``LazyWorksheet`` requires one (``max_row``).
+        """
+        for ws in self._wb.worksheets:
+            yield self[ws.title]
 
     @property
     def active(self) -> LazyWorksheet:
