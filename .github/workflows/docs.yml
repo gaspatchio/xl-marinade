@@ -1,0 +1,35 @@
+name: Docs
+
+# Deploys the MkDocs site to gh-pages. Gated to the canonical public repo, so
+# it stays inert until the repo is transferred to the gaspatchio org at go-live.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write   # push the gh-pages branch
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Build & deploy docs
+    runs-on: ubuntu-latest
+    # Only the canonical public repo deploys (forks/private never publish).
+    if: github.repository == 'gaspatchio/xl-marinade'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6
+        with:
+          version: "latest"
+          cache-dependency-glob: |
+            uv.lock
+            pyproject.toml
+      - name: Install docs deps (+ the package for mkdocstrings)
+        run: uv sync --frozen --group docs
+      - name: Build & deploy to gh-pages
+        run: uv run mkdocs gh-deploy --force

@@ -59,6 +59,12 @@ dev = [
     "pyright>=1.1.400",
     "networkx>=3.0",     # optional graph backend — exercised by test_dependency_graph.py
 ]
+docs = [
+    "mkdocs-material>=9.5",
+    "mkdocstrings[python]>=0.25",
+    "mkdocstrings-python<2",
+    "mkdocs-llmstxt>=0.1",
+]
 
 [tool.ruff]
 line-length = 100

@@ -101,3 +101,9 @@ workbook_storage/
 
 # P2-AQ-T4 human-review JSONL queue (telemetry; per-deployment).
 human_review_queue.jsonl
+
+# MkDocs build output (generated, never committed)
+site/
+
+# SDD scratch (spec/plan working files; not part of the public repo)
+.superpowers/

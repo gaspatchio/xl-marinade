@@ -1,0 +1,90 @@
+site_name: XL Marinade
+site_url: https://marinade.gaspatchio.dev/
+site_description: Deterministic Excel formula-graph extraction to SQLite.
+repo_name: gaspatchio/xl-marinade
+repo_url: https://github.com/gaspatchio/xl-marinade
+strict: true
+dev_addr: 127.0.0.1:8011
+
+theme:
+  name: material
+  favicon: images/favicon.svg
+  logo: images/logo.svg
+  palette:
+    primary: custom
+  features:
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.tracking
+    - search.suggest
+    - toc.follow
+
+extra_css:
+  - stylesheets/extra.css
+
+extra:
+  generator: false
+
+markdown_extensions:
+  - tables
+  - admonition
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.extra
+  - pymdownx.emoji
+  - pymdownx.tabbed:
+      alternate_style: true
+
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]
+          options:
+            docstring_style: google
+            show_root_heading: true
+            show_source: false
+            filters: ["!^_"]
+  - llmstxt:
+      markdown_description: >-
+        XL Marinade is a deterministic Excel formula-graph extractor that turns
+        .xlsx/.xlsm workbooks into a queryable SQLite database, with an optional
+        bring-your-own-key LLM documentation tier.
+      sections:
+        Guide:
+          - guide/*.md
+        Reference:
+          - reference/*.md
+
+nav:
+  - Get started:
+      - Overview: index.md
+      - Install: install.md
+      - Quickstart: quickstart.md
+  - Guide:
+      - How extraction works: guide/how-extraction-works.md
+      - Bindings & the graph: guide/bindings.md
+      - Diffing workbooks: guide/diffing.md
+      - VBA extraction: guide/vba.md
+  - Reference:
+      - CLI: reference/cli.md
+      - SQLite schema: reference/schema.md
+      - API: reference/api.md
+  - LLM add-on: llm.md
+  - Examples: examples/index.md
