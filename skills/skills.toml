@@ -1,0 +1,30 @@
+# Canonical, ordered registry of XL Marinade agent skills.
+#
+# THIS IS THE SINGLE SOURCE OF TRUTH for the skill set and its routing order.
+# The Cursor/Copilot plugin manifests, the AGENTS.md install count+list, and
+# the structural-test EXPECTED_SKILLS are all generated from or checked against
+# this list.
+#
+# To add a skill:
+#   1. create skills/<dir>/SKILL.md
+#   2. add "<dir>" to `order` below, in its routing position
+#   3. run: uv run python scripts/gen_skill_manifests.py
+#   4. commit the regenerated manifests
+#
+# The Claude Code manifest (.claude-plugin/plugin.json) globs ./skills/ and is
+# intentionally not listed here.
+order = [
+    "using-xl-marinade",
+]
+
+[plugin]
+name         = "xl-marinade"
+display_name = "XL Marinade"
+description  = "Deterministic Excel formula-graph extraction skills for XL Marinade (SQLite IR, binding-level dependency queries, structural diff)."
+version      = "1.0.0"
+author_name  = "Opio Inc."
+author_url   = "https://github.com/gaspatchio"
+homepage     = "https://github.com/gaspatchio/xl-marinade"
+repository   = "https://github.com/gaspatchio/xl-marinade"
+license      = "Apache-2.0"
+keywords     = ["excel", "spreadsheet", "formula-graph", "actuarial", "sqlite", "audit", "vba"]

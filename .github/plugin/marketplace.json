@@ -1,0 +1,15 @@
+{
+  "name": "xl-marinade",
+  "owner": {
+    "name": "Opio Inc."
+  },
+  "description": "Deterministic Excel formula-graph extraction skills for XL Marinade (SQLite IR, binding-level dependency queries, structural diff).",
+  "plugins": [
+    {
+      "name": "xl-marinade",
+      "source": "./",
+      "description": "Deterministic Excel formula-graph extraction skills for XL Marinade (SQLite IR, binding-level dependency queries, structural diff).",
+      "version": "1.0.0"
+    }
+  ]
+}
