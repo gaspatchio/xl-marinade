@@ -67,6 +67,8 @@ plugins:
         .xlsx/.xlsm workbooks into a queryable SQLite database, with an optional
         bring-your-own-key LLM documentation tier.
       sections:
+        AI agents:
+          - ai/*.md
         Guide:
           - guide/*.md
         Reference:
@@ -77,6 +79,9 @@ nav:
       - Overview: index.md
       - Install: install.md
       - Quickstart: quickstart.md
+  - AI agents:
+      - Plugins: ai/setup.md
+      - Skills: ai/skills.md
   - Guide:
       - How extraction works: guide/how-extraction-works.md
       - Bindings & the graph: guide/bindings.md

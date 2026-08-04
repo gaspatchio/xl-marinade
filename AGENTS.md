@@ -11,6 +11,39 @@ VBA edges. It is **two-tier**:
 
 The deterministic SQLite output is the product's stable, SemVer'd public contract.
 
+## AI Plugin Installation
+
+XL Marinade ships as a plugin for AI coding agents — install once to get the
+`using-xl-marinade` skill (how to drive `marinade extract` / `diff` / `document`
+and query the SQLite IR) plus always-loaded usage instructions. Every editor
+manifest is generated from one `skills/` tree by
+`scripts/gen_skill_manifests.py` (SSOT: `skills/skills.toml`).
+
+### Claude Code
+```
+/plugin marketplace add gaspatchio/xl-marinade
+/plugin install xl-marinade@xl-marinade
+```
+
+### VS Code / GitHub Copilot
+Add to user settings:
+```json
+{ "chat.plugins.marketplaces": ["gaspatchio/xl-marinade"] }
+```
+Requires `"chat.plugins.enabled": true` (Agent Plugins is in preview).
+
+### Cursor
+Open the project — the `.cursor-plugin/` directory is auto-detected.
+
+### Any Agent (universal)
+```bash
+npx skills add gaspatchio/xl-marinade
+```
+
+### What You Get
+- **1 skill**: using-xl-marinade
+- **Always-loaded usage instructions** (Copilot) generated from the skill set
+
 ## Architecture — packages and the tier boundary
 
 | Package | Role | Ships in | Network |

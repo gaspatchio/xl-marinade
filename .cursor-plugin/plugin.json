@@ -1,0 +1,11 @@
+{
+  "name": "xl-marinade",
+  "version": "1.0.0",
+  "description": "Deterministic Excel formula-graph extraction skills for XL Marinade (SQLite IR, binding-level dependency queries, structural diff).",
+  "author": {
+    "name": "Opio Inc.",
+    "url": "https://github.com/gaspatchio"
+  },
+  "license": "Apache-2.0",
+  "skills": "./skills/"
+}

@@ -30,6 +30,25 @@ pip install 'xl-marinade[llm,vba]'
 Neither extra changes the deterministic behavior of `extract`, `diff`, or plain
 `document` — they only add capability on top.
 
+## Set up the plugin (recommended)
+
+!!! tip "For best results, drive XL Marinade with an AI coding tool"
+    XL Marinade is built to be operated by an AI agent: extract a workbook, query
+    the `agent_*` SQLite views, diff two versions, and generate documentation. The
+    plugin equips your editor with the exact CLI commands, the SQLite query contract,
+    and the Excel gotchas — so an agent drives the tool correctly instead of guessing
+    at the schema.
+
+In Claude Code, register the marketplace and install the plugin and its skill:
+
+```
+/plugin marketplace add gaspatchio/xl-marinade
+/plugin install xl-marinade@xl-marinade
+```
+
+Using VS Code, Cursor, or another agent? The two-minute setup for each is on the
+[Plugins](ai/setup.md) page.
+
 ## From source with uv
 
 ```bash
