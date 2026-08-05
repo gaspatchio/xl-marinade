@@ -1,0 +1,29 @@
+name: Feature request
+description: Something xl-marinade should do that it doesn't today
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: >-
+        The audit or modelling task you're stuck on — the question you're trying
+        to answer about a workbook, not the API you imagine answering it.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like xl-marinade to do?
+      description: >-
+        If it affects the SQLite output, say which views or columns you'd expect
+        to change — the output schema is a versioned public contract.
+    validations:
+      required: false
+  - type: textarea
+    id: workaround
+    attributes:
+      label: Current workaround
+      description: How you handle this today, if at all. A hand-written SQL query counts.
+    validations:
+      required: false

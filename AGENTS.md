@@ -103,3 +103,14 @@ Specs and implementation plans live in `ref/<topic>/` (specs under `specs/`, pla
 - **Conventional commits** (`feat:`, `fix:`, `docs:`, `chore:`, `refactor:`, `test:`, `build:`); explain the *why*. Keep commits focused and atomic. Reference issue numbers where applicable.
 - **Never** add an AI-assistant signature or `Co-Authored-By: <assistant>` trailer.
 - Authorship is canonicalized via `.mailmap` (Klaas Stijnen as the extractor's original author); the packaging/refactor commits authored as Matt Wright stay as-is.
+
+## GitHub workflow
+
+**[`CONTRIBUTING.md`](CONTRIBUTING.md) is canonical** — branches vs forks, signing setup, commit format, issue-title conventions, PR scope, and the merge policy all live there and apply to you exactly as they apply to a human. Read it before opening an issue or a PR. What follows is only what differs when there is no human in the loop.
+
+- **`main` is protected by ruleset** (signed commits, no force-push, no deletion, no bypass actors). These are server-side rules — a push that violates one is refused, not warned about. Never commit to `main`; branch, then open a PR.
+- **Verify claims; do not relay them.** "Byte-identical output" and "all tests pass" are hypotheses until you have run them yourself. State what you ran, and on which SHA. Reporting a PR author's claim as though you had checked it is the failure mode that matters here.
+- **Bind every test claim to a SHA.** Re-check `headRefOid` before asserting results — a branch can move between your fetch and your review, and a stale "all green" misleads the author more than saying nothing would.
+- **Anchor findings to lines** via a formal review with inline comments, not a wall of prose. Separate blockers from risks from nits and say which is which; reserve `--request-changes` for genuine ship-blockers.
+- **Never self-apply `confirmed` or `pending-release`** — those record a maintainer's judgement, not yours.
+- **Check the bundled skill and docs against schema changes.** `skills/using-xl-marinade/` ships queries against named views; a rename that misses them breaks every agent consuming the tool — including you.
