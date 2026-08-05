@@ -330,7 +330,7 @@ LEFT JOIN json_blobs jev ON b.evidence_blob_id = jev.blob_id;
 
 -- Phase 5: Unified node view — cell bindings + VBA procedures in one queryable surface.
 -- Consumers needing cell-specific fields (shape, address) keep reading agent_bindings directly.
--- Consumers needing only node identity (node_id, label, kind) read atlas_nodes.
+-- Consumers needing only node identity (node_id, label, kind) read marinade_nodes.
 --
 -- VBA node_id format: 'vba::<module>::<name>::<kind>' for unconditional
 -- procedures, with '::<compile_branch>' appended when the procedure sits
@@ -338,7 +338,7 @@ LEFT JOIN json_blobs jev ON b.evidence_blob_id = jev.blob_id;
 -- accessors with the same name from collapsing onto a single row, and the
 -- optional compile_branch suffix preserves both halves of #If Win64/#Else
 -- twin pairs. Consumers should split on '::' and not assume a fixed length.
-CREATE VIEW atlas_nodes AS
+CREATE VIEW marinade_nodes AS
 SELECT
     b.binding_id AS node_id,
     'cell' AS node_kind,

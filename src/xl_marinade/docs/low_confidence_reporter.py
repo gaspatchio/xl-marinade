@@ -1,4 +1,4 @@
-# ABOUTME: Generate review reports for Cursor agent to evaluate low-confidence labeling/classification decisions
+# ABOUTME: Generate review reports for evaluating low-confidence labeling/classification decisions
 # ABOUTME: Creates human-readable Markdown reports with RAG context and confidence score breakdowns
 
 import logging
@@ -49,7 +49,7 @@ def generate_review_report(
     cases: list[LowConfidenceCase], output_path: str, threshold: float = 0.7
 ) -> None:
     """
-    Generate Markdown review report for Cursor agent.
+    Generate Markdown review report for a reviewer.
 
     Args:
         cases: List of low-confidence cases to review

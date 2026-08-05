@@ -7,6 +7,12 @@ schema is a versioned public contract.
 
 ## [Unreleased]
 
+### Changed
+- **Breaking (output schema 2.0 → 3.0):** the unified node view `atlas_nodes`
+  is renamed to `marinade_nodes`. Same columns and semantics; only the view
+  name changes. Databases stamped `schema_version` 3.0 no longer contain an
+  `atlas_nodes` view.
+
 ## [0.1.0] - 2026-08-02
 
 ### Added

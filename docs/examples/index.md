@@ -215,5 +215,5 @@ worse or block the run.
 - [Quickstart](../quickstart.md) — the same extract → document → diff workflow,
   narrated end to end.
 - [CLI reference](../reference/cli.md) — every flag used above.
-- [SQLite schema](../reference/schema.md) — the full set of `agent_*`/`atlas_*`
+- [SQLite schema](../reference/schema.md) — the full set of `agent_*`/`marinade_*`
   views to query.
