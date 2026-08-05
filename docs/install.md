@@ -95,7 +95,7 @@ Using VS Code, Cursor, or another agent? The two-minute setup for each is on the
 ## From source with uv
 
 ```bash
-git clone https://github.com/opioinc/xl-marinade
+git clone https://github.com/gaspatchio/xl-marinade
 cd xl-marinade
 uv sync
 uv run marinade --help
