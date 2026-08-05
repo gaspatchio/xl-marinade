@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report privately by email
+    url: https://github.com/gaspatchio/xl-marinade/blob/main/SECURITY.md
+    about: >-
+      Can't share the workbook that reproduces it? Email any bug to
+      security@opioinc.com — we open an anonymised public issue with a
+      synthetic reproduction and keep your model out of it.
