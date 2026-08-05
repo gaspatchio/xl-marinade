@@ -1,0 +1,10 @@
+{
+ "workbook": "workbooks/SmithWilson/SmithWilson.xlsm",
+ "ir_db": "marinade/SmithWilson.ir.db",
+ "date": "2026-08-05",
+ "expected_edges": 20,
+ "edges_found": 20,
+ "edges_missing_known_extractor_gaps": [],
+ "edges_missing": [],
+ "verdict": "PASS"
+}

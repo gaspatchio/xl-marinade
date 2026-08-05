@@ -1,0 +1,43 @@
+{
+ "workbook": "workbooks/Solvency2/Solvency2.xlsm",
+ "reference": "verification/reference/solvency2.json",
+ "date": "2026-08-05",
+ "profiles": {
+  "1|1|0": {
+   "comparisons": 3821,
+   "failures": 0
+  },
+  "2|1|0": {
+   "comparisons": 3821,
+   "failures": 0
+  },
+  "101|1|0": {
+   "comparisons": 18595,
+   "failures": 0
+  },
+  "102|1|0": {
+   "comparisons": 19307,
+   "failures": 0
+  },
+  "201|1|0": {
+   "comparisons": 2931,
+   "failures": 0
+  },
+  "1|1|5": {
+   "comparisons": 3821,
+   "failures": 0
+  },
+  "201|3|0": {
+   "comparisons": 2931,
+   "failures": 0
+  }
+ },
+ "total_comparisons": 55227,
+ "total_failures": 0,
+ "tolerance": {
+  "rtol": 1e-09,
+  "atol": 1e-09
+ },
+ "failures": [],
+ "verdict": "PASS"
+}

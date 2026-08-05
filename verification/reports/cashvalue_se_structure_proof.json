@@ -1,0 +1,10 @@
+{
+ "workbook": "workbooks/CashValue_SE/CashValue_SE.xlsm",
+ "ir_db": "marinade/CashValue_SE.ir.db",
+ "date": "2026-08-05",
+ "expected_edges": 190,
+ "edges_found": 190,
+ "edges_missing_known_extractor_gaps": [],
+ "edges_missing": [],
+ "verdict": "PASS"
+}

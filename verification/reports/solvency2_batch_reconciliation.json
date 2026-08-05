@@ -1,0 +1,16 @@
+{
+ "workbook": "workbooks/Solvency2/Solvency2.xlsm",
+ "method": "in-workbook VBA macro RunAllPolicies (BatchRunner.bas), full run saved on Batch_Results sheet",
+ "reference": "verification/reference/solvency2_all_policies.csv (lifelib solvency2, every policy, t0=0, scen 1)",
+ "quantities_reconciled": "SCR, Life(mort/longev/lapse/exps), the three lapse sub-shock charges and base NAV (9 per policy)",
+ "date": "2026-08-05",
+ "tolerance_relative": 1e-06,
+ "policies_run": 300,
+ "reconciled": 300,
+ "mismatches": 0,
+ "max_rel_diff_scr": 1.6985447639328864e-14,
+ "max_rel_diff_life_charges": 4.747092224170937e-13,
+ "max_rel_diff_nav": 1.9078701267240604e-14,
+ "runtime_seconds": 5.9,
+ "verdict": "PASS"
+}

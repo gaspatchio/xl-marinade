@@ -1,0 +1,10 @@
+{
+ "workbook": "workbooks/Solvency2/Solvency2.xlsm",
+ "ir_db": "marinade/Solvency2.ir.db",
+ "date": "2026-08-05",
+ "expected_edges": 328,
+ "edges_found": 328,
+ "edges_missing_known_extractor_gaps": [],
+ "edges_missing": [],
+ "verdict": "PASS"
+}

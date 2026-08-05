@@ -1,0 +1,39 @@
+Sample structural diff: BasicTerm_S vs BasicTerm_SE (binding granularity)
+Generated with: marinade diff marinade/BasicTerm_S.ir.db marinade/BasicTerm_SE.ir.db
+(xl-marinade 0.1.0 — summary and binding-map sections of the JSON changelist)
+
+=== BINDING MAP ===
+  unchanged                                  106
+  modified                                    59
+  added                                       21
+  removed                                      2
+  moved                                        1
+
+=== SUMMARY ===
+  total_changes                           169192
+  cells_value_changed                     135449
+  edges_changed                            28222
+  cells_formula_changed                     4349
+  cells_format_changed                       482
+  cells_dtype_changed                        243
+  ir_inference_changes                       165
+  bindings_metadata_changed                  103
+  label_evidence_changed                      94
+  time_annotations_changed                    50
+  bindings_label_changed                      45
+  bindings_formula_changed                    29
+  bindings_resized                            28
+  names_changed                               23
+  bindings_added                              21
+  tables_changed                              21
+  rows_inserted                                9
+  names_added                                  8
+  rows_deleted                                 6
+  cols_inserted                                2
+  bindings_removed                             2
+  sheets_added                                 1
+  bindings_moved                               1
+  bindings_type_changed                        1
+  names_removed                                1
+  resolution_metrics_changed                   1
+  metadata_changed                             1

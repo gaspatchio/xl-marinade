@@ -1,0 +1,13 @@
+{
+ "workbook": "workbooks/SmithWilson/SmithWilson.xlsm",
+ "reference": "verification/reference/smithwilson.json",
+ "date": "2026-08-05",
+ "total_comparisons": 1986,
+ "total_failures": 0,
+ "tolerance": {
+  "rtol": 1e-09,
+  "atol": 1e-09
+ },
+ "failures": [],
+ "verdict": "PASS"
+}

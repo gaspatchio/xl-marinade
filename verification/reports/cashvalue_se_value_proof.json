@@ -1,0 +1,39 @@
+{
+ "workbook": "workbooks/CashValue_SE/CashValue_SE.xlsm",
+ "reference": "verification/reference/cashvalue_se.json",
+ "date": "2026-08-05",
+ "profiles": {
+  "1|1": {
+   "comparisons": 5827,
+   "failures": 0
+  },
+  "2|1": {
+   "comparisons": 11587,
+   "failures": 0
+  },
+  "3|1": {
+   "comparisons": 54787,
+   "failures": 0
+  },
+  "4|1": {
+   "comparisons": 37507,
+   "failures": 0
+  },
+  "1|5": {
+   "comparisons": 5827,
+   "failures": 0
+  },
+  "4|10": {
+   "comparisons": 37507,
+   "failures": 0
+  }
+ },
+ "total_comparisons": 153042,
+ "total_failures": 0,
+ "tolerance": {
+  "rtol": 1e-09,
+  "atol": 1e-09
+ },
+ "failures": [],
+ "verdict": "PASS"
+}

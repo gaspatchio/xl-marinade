@@ -1,0 +1,15 @@
+{
+ "workbook": "workbooks/BasicTerm_SE/BasicTerm_SE.xlsm",
+ "method": "in-workbook VBA macro RunAllModelPoints (BatchRunner.bas), full run saved on Batch_Results sheet",
+ "reference": "verification/reference/basicterm_se_all_points.csv (lifelib basiclife.BasicTerm_ME, all 10,000 points)",
+ "quantities_reconciled": "office premium and PVs of premiums, claims, expenses, commissions and net cash flow (6 per point)",
+ "date": "2026-08-05",
+ "tolerance_relative": 1e-06,
+ "points_run": 10000,
+ "reconciled": 10000,
+ "mismatches": 0,
+ "max_abs_diff_premium": 0.0,
+ "max_rel_diff_pv_components": 6.40972830368014e-11,
+ "runtime_seconds": 160.3,
+ "verdict": "PASS"
+}

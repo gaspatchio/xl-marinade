@@ -1,0 +1,13 @@
+{
+ "workbook": "workbooks/BasicTerm_S/BasicTerm_S.xlsm",
+ "date": "2026-07-14",
+ "points_run": 300,
+ "reconciled": 300,
+ "mismatches": 0,
+ "max_abs_diff_premium": 0.0,
+ "max_rel_diff_pv_net_cf": 3.393024606896147e-11,
+ "tolerance_relative": 1e-06,
+ "runtime_seconds": 43.6,
+ "failures": [],
+ "verdict": "PASS"
+}

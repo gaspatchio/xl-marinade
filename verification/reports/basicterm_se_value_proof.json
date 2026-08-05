@@ -1,0 +1,55 @@
+{
+ "workbook": "workbooks/BasicTerm_SE/BasicTerm_SE.xlsm",
+ "reference": "verification/reference/basicterm_se.json",
+ "date": "2026-08-05",
+ "model_points": {
+  "1": {
+   "comparisons": 2656,
+   "failures": 0
+  },
+  "2": {
+   "comparisons": 698,
+   "failures": 0
+  },
+  "8": {
+   "comparisons": 2238,
+   "failures": 0
+  },
+  "11": {
+   "comparisons": 2718,
+   "failures": 0
+  },
+  "12": {
+   "comparisons": 1930,
+   "failures": 0
+  },
+  "50": {
+   "comparisons": 82,
+   "failures": 0
+  },
+  "65": {
+   "comparisons": 5318,
+   "failures": 0
+  },
+  "200": {
+   "comparisons": 3293,
+   "failures": 0
+  },
+  "404": {
+   "comparisons": 2436,
+   "failures": 0
+  },
+  "502": {
+   "comparisons": 3398,
+   "failures": 0
+  }
+ },
+ "total_comparisons": 24767,
+ "total_failures": 0,
+ "tolerance": {
+  "rtol": 1e-09,
+  "atol": 1e-09
+ },
+ "failures": [],
+ "verdict": "PASS"
+}

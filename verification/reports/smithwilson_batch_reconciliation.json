@@ -1,0 +1,16 @@
+{
+ "workbook": "workbooks/SmithWilson/SmithWilson.xlsm",
+ "method": "in-workbook VBA macro RunCurveReconciliation (BatchRunner.bas), full run saved on Batch_Results sheet",
+ "reference": "verification/reference/smithwilson.json (lifelib smithwilson: zeta vector, P and R curves)",
+ "quantities_reconciled": "zeta (25), P (65) and R (65) - 155 values",
+ "date": "2026-08-05",
+ "tolerance_relative": 1e-06,
+ "values_compared": 155,
+ "reconciled": 155,
+ "mismatches": 0,
+ "max_abs_diff_zeta": 1.6611085840168016e-09,
+ "max_diff_P_over_max1": 1.8278711877428577e-12,
+ "max_diff_R_over_max1": 5.828670879282072e-13,
+ "runtime_seconds": 0.0,
+ "verdict": "PASS"
+}

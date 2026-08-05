@@ -1,0 +1,10 @@
+{
+ "workbook": "workbooks/BasicTerm_SE/BasicTerm_SE.xlsm",
+ "ir_db": "marinade/BasicTerm_SE.ir.db",
+ "date": "2026-08-05",
+ "expected_edges": 88,
+ "edges_found": 88,
+ "edges_missing_known_extractor_gaps": [],
+ "edges_missing": [],
+ "verdict": "PASS"
+}
