@@ -1,8 +1,8 @@
 site_name: XL Marinade
 site_url: https://marinade.gaspatchio.dev/
 site_description: Deterministic Excel formula-graph extraction to SQLite.
-repo_name: gaspatchio/xl-marinade
-repo_url: https://github.com/gaspatchio/xl-marinade
+repo_name: opioinc/xl-marinade
+repo_url: https://github.com/opioinc/xl-marinade
 strict: true
 dev_addr: 127.0.0.1:8011
 

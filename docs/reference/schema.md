@@ -12,7 +12,7 @@ The schema ships two layers:
 - **`agent_*` / `marinade_*` views** — the stable, documented query interface.
 - **Raw/base tables** — the normalized storage layer underneath. Internal.
 
-The schema itself states the contract ([`schema.sql`](https://github.com/gaspatchio/xl-marinade/blob/main/src/xl_marinade/core/new_arch/schema.sql)):
+The schema itself states the contract ([`schema.sql`](https://github.com/opioinc/xl-marinade/blob/main/src/xl_marinade/core/new_arch/schema.sql)):
 
 > These views provide a stable query interface for the documentation agent,
 > abstracting the normalized storage schema. Agents MUST access data via views,
