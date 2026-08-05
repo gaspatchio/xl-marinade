@@ -1,26 +1,69 @@
 # Install
 
-```bash
-pip install xl-marinade
-```
+=== "uv"
 
-Requires **Python 3.11+**.
+    ```bash
+    uv tool install xl-marinade
+    ```
+
+    !!! note "New to uv?"
+        [uv](https://docs.astral.sh/uv/) is a fast Python package and project
+        manager. Install it once and the command above will work:
+
+        ```bash
+        # macOS / Linux
+        curl -LsSf https://astral.sh/uv/install.sh | sh
+        ```
+
+        ```powershell
+        # Windows (PowerShell)
+        powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+        ```
+
+        Prefer a Python you already have? `pipx install uv` (or `pip install uv`)
+        works too. Full options are in the
+        [uv installation guide](https://docs.astral.sh/uv/getting-started/installation/).
+
+=== "pip"
+
+    ```bash
+    pip install xl-marinade
+    ```
+
+Requires **Python 3.11+**. `uv tool install` puts the `marinade` CLI on your
+PATH — run `marinade --help` from anywhere. To use XL Marinade as a library in
+your own project instead, `uv add xl-marinade` and run it with `uv run marinade`.
 
 ## Optional extras
 
 XL Marinade's core (`extract`, `diff`, deterministic `document`) has no optional
 dependencies. Two add-ons are opt-in:
 
-```bash
-# Optional LLM-enriched documentation (bring your own API key)
-pip install 'xl-marinade[llm]'
+=== "uv"
 
-# Optional deterministic VBA macro parsing
-pip install 'xl-marinade[vba]'
+    ```bash
+    # Optional LLM-enriched documentation (bring your own API key)
+    uv tool install 'xl-marinade[llm]'
 
-# Both
-pip install 'xl-marinade[llm,vba]'
-```
+    # Optional deterministic VBA macro parsing
+    uv tool install 'xl-marinade[vba]'
+
+    # Both
+    uv tool install 'xl-marinade[llm,vba]'
+    ```
+
+=== "pip"
+
+    ```bash
+    # Optional LLM-enriched documentation (bring your own API key)
+    pip install 'xl-marinade[llm]'
+
+    # Optional deterministic VBA macro parsing
+    pip install 'xl-marinade[vba]'
+
+    # Both
+    pip install 'xl-marinade[llm,vba]'
+    ```
 
 - **`[llm]`** — adds the bring-your-own-key LLM documentation tier (`--enrich`,
   `xl_marinade.llm`). See [LLM add-on](llm.md) for setup and configuration.
