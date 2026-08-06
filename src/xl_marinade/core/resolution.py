@@ -142,6 +142,11 @@ class ResolutionEngine:
     - Uses only value_snapshot and pure semantics
     - No recalculation
     - Deterministic across runs
+
+    The value source is treated as an immutable snapshot for the engine's
+    lifetime: both _value_index_cache and _match_scan_cache key on it and are
+    never invalidated. Mutating a live Workbook between resolutions has never
+    been part of the contract — construct a fresh engine for a fresh snapshot.
     """
 
     def __init__(
