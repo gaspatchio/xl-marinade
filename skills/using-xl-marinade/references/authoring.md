@@ -29,7 +29,7 @@ here they name a **pattern to transcribe**, not files to expect.
 5. **VBA layer**: edit `.bas` → bootstrap `vbaProject.bin` once (see
    excel-ops.md) → builder injects the bin via zip surgery on every
    rebuild → re-extract IR (the macro is auditable structure — procedures
-   surface in `atlas_nodes`, with detail in the `vba_*` tables) → run the
+   surface in `marinade_nodes`, with detail in the `vba_*` tables) → run the
    in-workbook all-points reconciliation.
 6. **Regression between versions**: `marinade diff`, not re-proving (see
    SKILL.md).
