@@ -28,9 +28,15 @@ See CONTRIBUTING.md for the full guide.
 - [ ] `SCHEMA_VERSION` bumped if a documented view changed (renamed/removed view = major).
 - [ ] `skills/using-xl-marinade/` and `docs/reference/schema.md` updated to match.
 
-**If this changes the public API or CLI:**
+## Changelog
 
-- [ ] `CHANGELOG.md` updated.
+- [ ] User-visible change (behaviour, API, CLI, output schema, performance) → an
+      entry under `## [Unreleased]`, or under the pending release section if one is
+      open. Internal refactors and repo hygiene don't need one.
+- [ ] **If anything merged to `main` while this PR was open, re-check that your entry
+      is still there.** Concurrent PRs edit the same block, so the later merge
+      silently wins and no test catches it — this is how #8's speedup disappeared
+      from the 0.2.0 notes.
 
 ## Notes for the reviewer
 
