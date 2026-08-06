@@ -174,7 +174,7 @@ changelog, *the SQLite output schema is a versioned public contract*:
   they can change shape at any time.
 
 The Python package versions separately: `xl_marinade.__version__` (currently
-`0.1.0`) follows [Semantic Versioning](https://semver.org/) for the library
+`0.2.0`) follows [Semantic Versioning](https://semver.org/) for the library
 API and CLI. Don't confuse the two — a database inspected in the wild reports its
 `schema_version` (`"3.0"`), not the package version.
 

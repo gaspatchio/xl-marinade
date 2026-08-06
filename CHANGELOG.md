@@ -7,11 +7,20 @@ schema is a versioned public contract.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-06
+
 ### Changed
 - **Breaking (output schema 2.0 → 3.0):** the unified node view `atlas_nodes`
   is renamed to `marinade_nodes`. Same columns and semantics; only the view
   name changes. Databases stamped `schema_version` 3.0 no longer contain an
-  `atlas_nodes` view.
+  `atlas_nodes` view. The bundled `using-xl-marinade` skill queries the new
+  name.
+
+### Fixed
+- Extraction of rolling-window models no longer spills unbounded SQLite temp
+  space ("database or disk is full") in the range-collapse step; replaced by
+  chunked breadth aggregation + disjoint-box union counting with identical
+  output.
 
 ## [0.1.0] - 2026-08-02
 
