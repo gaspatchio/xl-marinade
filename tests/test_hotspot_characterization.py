@@ -138,3 +138,90 @@ def test_vba_paste_provenance_is_deterministic():
     ).fetchone()
     assert row is not None
     assert row[0] == "A::a"  # sorted() -> smallest proc wins, not set-order roulette
+
+
+def _create_lookup_dense_workbook(xlsx) -> None:
+    """Deterministic workbook exercising every MATCH semantic-resolution path.
+
+    All lookup arrays are constants (semantic resolution reads the value
+    snapshot; freshly built openpyxl workbooks carry no cached formula
+    values). Covers: exact hit / miss, case-insensitive string match,
+    approximate ascending (1) and descending (-1) with type filtering,
+    logical-vs-number type classes (TRUE vs 1 must resolve to different
+    positions), row arrays, full-column references (the sparse-index path),
+    and the same scan repeated across many formulas (the memoized case).
+    """
+    import openpyxl
+
+    wb = openpyxl.Workbook()
+    data = wb.active
+    data.title = "Data"
+    for i in range(1, 21):
+        data.cell(row=i, column=1, value=i * 10)  # A ascending numbers
+        data.cell(row=i, column=2, value=f"Key{i}")  # B strings
+        data.cell(row=i, column=6, value=210 - i * 10)  # F descending
+    for col, v in enumerate([True, 1, False, 0, 2], start=1):
+        data.cell(row=22, column=col, value=v)  # A22:E22 logical/number mix
+    for col in range(1, 21):
+        data.cell(row=23, column=col, value=col * 5)  # row array A23:T23
+
+    main = wb.create_sheet("Main")
+    main["A1"] = 30
+    main["A2"] = "key7"  # lowercase on purpose: Excel MATCH is case-insensitive
+    fx = [
+        "=INDEX(Data!$A$1:$A$20,MATCH(50,Data!$A$1:$A$20,0))",  # exact hit
+        "=INDEX(Data!$A$1:$A$20,MATCH(999,Data!$A$1:$A$20,0))",  # exact miss
+        "=INDEX(Data!$B$1:$B$20,MATCH($A$2,Data!$B$1:$B$20,0))",  # ci string
+        "=INDEX(Data!$A$1:$A$20,MATCH(55,Data!$A$1:$A$20,1))",  # approx asc
+        "=INDEX(Data!$F$1:$F$20,MATCH(55,Data!$F$1:$F$20,-1))",  # approx desc
+        "=MATCH(TRUE,Data!$A$22:$E$22,0)",  # logical class -> position 1
+        "=MATCH(1,Data!$A$22:$E$22,0)",  # number class -> position 2
+        "=MATCH(35,Data!$A$23:$T$23,0)",  # row array
+        "=MATCH(50,Data!A:A,0)",  # full column (sparse-index path)
+    ]
+    for i, f in enumerate(fx, start=1):
+        main.cell(row=i, column=3, value=f)
+    # The memoized case: many formulas repeating a handful of distinct scans.
+    for r in range(1, 31):
+        main.cell(
+            row=r,
+            column=5,
+            value=f"=INDEX(Data!$A$1:$A$20,MATCH({(r % 3 + 1) * 20},Data!$A$1:$A$20,0))",
+        )
+    wb.save(xlsx)
+
+
+def _match_resolution_surface(db_path) -> dict:
+    """Everything MATCH resolution can influence, keyed by stable addresses."""
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        cell_edges = conn.execute(
+            """
+            SELECT fs.sheet_name || '!' || fc.a1, ts.sheet_name || '!' || tc.a1
+            FROM cell_edges_internal e
+            JOIN cells fc ON fc.cell_id = e.from_cell_id
+            JOIN cells tc ON tc.cell_id = e.to_cell_id
+            JOIN sheets fs ON fs.sheet_id = fc.sheet_id
+            JOIN sheets ts ON ts.sheet_id = tc.sheet_id
+            ORDER BY 1, 2
+            """
+        ).fetchall()
+        metrics = conn.execute(
+            "SELECT function_name, status, count FROM resolution_metrics ORDER BY 1, 2"
+        ).fetchall()
+    finally:
+        conn.close()
+    return {
+        "binding_edges": _binding_edges(db_path),
+        "cell_edges": [list(r) for r in cell_edges],
+        "resolution_metrics": [list(r) for r in metrics],
+    }
+
+
+def test_match_resolution_surface_unchanged(tmp_path):
+    xlsx = tmp_path / "lookup.xlsx"
+    _create_lookup_dense_workbook(xlsx)
+    db = extract(xlsx, tmp_path / "ir.db")
+    surface = _match_resolution_surface(db)
+    golden = json.loads((GOLDEN / "match_resolution_surface.json").read_text())
+    assert surface == golden
