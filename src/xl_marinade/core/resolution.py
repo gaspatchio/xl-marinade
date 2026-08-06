@@ -142,6 +142,12 @@ class ResolutionEngine:
     - Uses only value_snapshot and pure semantics
     - No recalculation
     - Deterministic across runs
+
+    Snapshot (ValueSource) sources are treated as immutable for the engine's
+    lifetime: _value_index_cache and _match_scan_cache key on them and are
+    never invalidated. Live openpyxl Workbook sources are exempt from both
+    caches (the sparse index requires get_sheet_values, the MATCH memo checks
+    the source kind), so mutating a Workbook between resolutions stays safe.
     """
 
     def __init__(
@@ -158,33 +164,41 @@ class ResolutionEngine:
         """
         self.value_source = value_source
         self.manual_provider = manual_provider
+        # Classify the source ONCE: isinstance() against a runtime_checkable
+        # Protocol resolves structurally via inspect.getattr_static (~10us per
+        # call), and _get_cell_value runs once per scanned cell of every MATCH
+        # lookup range — per-call checks dominated extraction on lookup-dense
+        # sheets. value_source is only ever assigned here.
+        self._vs_is_value_source = isinstance(value_source, ValueSource)
+        self._vs_is_workbook = not self._vs_is_value_source and isinstance(value_source, Workbook)
+        # MATCH scans are pure functions of (array, lookup_value, match_type)
+        # over the immutable snapshot; formulas across a row repeat the same
+        # scan verbatim. Entries are ints/None, so no eviction needed.
+        self._match_scan_cache: dict[tuple[Any, ...], int | None] = {}
         self._value_index_cache: dict[
             str, tuple[dict[int, list[tuple[int, Any]]], dict[int, list[tuple[int, Any]]]]
         ] = {}
 
     @property
     def _sheetnames(self) -> list[str]:
-        if isinstance(self.value_source, (ValueSource, Workbook)):
+        if self._vs_is_value_source or self._vs_is_workbook:
             return self.value_source.sheetnames
         return []
 
     @property
     def _active_sheet_name(self) -> str | None:
-        if isinstance(self.value_source, ValueSource):
+        if self._vs_is_value_source:
             return self.value_source.active_sheet
-        elif isinstance(self.value_source, Workbook):
+        elif self._vs_is_workbook:
             return self.value_source.active.title if self.value_source.active else None
         return None
 
     def _get_cell_value(self, sheet: str, row: int, col: int) -> Any:
         """Get cell value using value source."""
-        if self.value_source is None:
-            return None
-
-        if isinstance(self.value_source, ValueSource):
+        if self._vs_is_value_source:
             coord = format_cell_address("", row, col)
             return self.value_source.get_value_at(sheet, coord)
-        elif isinstance(self.value_source, Workbook):
+        elif self._vs_is_workbook:
             try:
                 return self.value_source[sheet].cell(row=row, column=col).value
             except (KeyError, AttributeError, IndexError):
@@ -857,6 +871,146 @@ class ResolutionEngine:
             attempted_strategies=("fallback",),
         )
 
+    def _match_scan_position(
+        self,
+        target_sheet: str,
+        start_row: int,
+        start_col: int,
+        height: int,
+        width: int,
+        lookup_value: Any,
+        match_type: int,
+    ) -> int | None:
+        """Scan a MATCH lookup array; return the 1-based match position or None.
+
+        Results are memoized ONLY for snapshot value sources (ValueSource):
+        those are immutable for the engine's lifetime, and lookup-dense sheets
+        repeat the identical scan for every formula in a row, each scan reading
+        O(height) cells. A live openpyxl Workbook source is never cached — a
+        caller may mutate it between resolutions, and a stale position would
+        become a silently wrong dependency edge. The cache key carries the
+        lookup value's type name because Python hashes True == 1 while Excel
+        MATCH treats logicals and numbers as distinct type classes; strings are
+        lowered to mirror Excel's case-insensitive collation.
+        """
+        cacheable = self._vs_is_value_source
+        key = (
+            target_sheet,
+            start_row,
+            start_col,
+            height,
+            width,
+            match_type,
+            type(lookup_value).__name__,
+            lookup_value.lower() if isinstance(lookup_value, str) else lookup_value,
+        )
+        if cacheable:
+            try:
+                return self._match_scan_cache[key]
+            except KeyError:
+                pass
+            except TypeError:  # unhashable lookup value — scan without caching
+                cacheable = False
+
+        position: int | None = None
+        end_row = start_row + height - 1
+        end_col = start_col + width - 1
+
+        def _type_key(value: Any) -> str | None:
+            """Excel type class for MATCH comparison (logical is not a number)."""
+            if isinstance(value, bool):
+                return "bool"
+            if isinstance(value, (int, float)):
+                return "number"
+            if isinstance(value, str):
+                return "str"
+            return None
+
+        lookup_type = _type_key(lookup_value)
+
+        def _update_match_position(cell_value: Any, index: int) -> bool:
+            """
+            Update position based on match_type. Returns True if search should stop.
+            """
+            nonlocal position
+            if match_type == 0:  # Exact match (case-insensitive for strings, as Excel)
+                if isinstance(cell_value, str) and isinstance(lookup_value, str):
+                    if cell_value.lower() == lookup_value.lower():
+                        position = index  # 1-based position
+                        return True
+                elif cell_value == lookup_value:
+                    position = index  # 1-based position
+                    return True
+            elif match_type in (1, -1):
+                # Excel's approximate MATCH ignores cells whose type class
+                # differs from the lookup_value's (text vs number vs logical)
+                if cell_value is None or _type_key(cell_value) != lookup_type:
+                    return False
+                cell_cmp, lookup_cmp = cell_value, lookup_value
+                if lookup_type == "str":
+                    # Excel text collation is case-insensitive
+                    cell_cmp, lookup_cmp = cell_cmp.lower(), lookup_cmp.lower()
+                if match_type == 1:  # Largest value <= lookup (array assumed ascending)
+                    if cell_cmp <= lookup_cmp:
+                        position = index  # Keep updating to get the largest match
+                    else:
+                        return True
+                else:  # Smallest value >= lookup (array assumed descending)
+                    if cell_cmp >= lookup_cmp:
+                        position = index  # Keep updating to get the smallest match
+                    else:
+                        return True
+            return False
+
+        # Determine if column or row array
+        use_sparse_index = (
+            (height == EXCEL_MAX_ROWS or width == EXCEL_MAX_COLS)
+            and self.value_source is not None
+            and hasattr(self.value_source, "get_sheet_values")
+        )
+
+        if use_sparse_index and height > 1 and width == 1:
+            # Column array (sparse index)
+            col_index, _ = self._get_sheet_value_index(target_sheet)
+            for row, cell_value in col_index.get(start_col, []):
+                if row < start_row:
+                    continue
+                if row > end_row:
+                    break
+                if _update_match_position(cell_value, row - start_row + 1):
+                    break
+        elif use_sparse_index and width > 1 and height == 1:
+            # Row array (sparse index)
+            _, row_index = self._get_sheet_value_index(target_sheet)
+            for col, cell_value in row_index.get(start_row, []):
+                if col < start_col:
+                    continue
+                if col > end_col:
+                    break
+                if _update_match_position(cell_value, col - start_col + 1):
+                    break
+        elif height > 1 and width == 1:
+            # Column array
+            for i in range(height):
+                cell_row = start_row + i
+                cell_value = self._get_cell_value(target_sheet, cell_row, start_col)
+
+                if _update_match_position(cell_value, i + 1):
+                    break
+
+        else:
+            # Row array (caller guarantees width > 1 and height == 1)
+            for i in range(width):
+                cell_col = start_col + i
+                cell_value = self._get_cell_value(target_sheet, start_row, cell_col)
+
+                if _update_match_position(cell_value, i + 1):
+                    break
+
+        if cacheable:
+            self._match_scan_cache[key] = position
+        return position
+
     def resolve_match_semantic(
         self, ast: dict[str, Any], current_sheet: str = "", cell_address: str | None = None
     ) -> ResolutionResult:
@@ -995,105 +1149,14 @@ class ResolutionEngine:
                     result.notes = "No active sheet found"
                     return result
 
-            # Search array for matching value
-            position = None
-            end_row = start_row + height - 1
-            end_col = start_col + width - 1
-
-            def _type_key(value: Any) -> str | None:
-                """Excel type class for MATCH comparison (logical is not a number)."""
-                if isinstance(value, bool):
-                    return "bool"
-                if isinstance(value, (int, float)):
-                    return "number"
-                if isinstance(value, str):
-                    return "str"
-                return None
-
-            lookup_type = _type_key(lookup_value)
-
-            def _update_match_position(cell_value: Any, index: int) -> bool:
-                """
-                Update position based on match_type. Returns True if search should stop.
-                """
-                nonlocal position
-                if match_type == 0:  # Exact match (case-insensitive for strings, as Excel)
-                    if isinstance(cell_value, str) and isinstance(lookup_value, str):
-                        if cell_value.lower() == lookup_value.lower():
-                            position = index  # 1-based position
-                            return True
-                    elif cell_value == lookup_value:
-                        position = index  # 1-based position
-                        return True
-                elif match_type in (1, -1):
-                    # Excel's approximate MATCH ignores cells whose type class
-                    # differs from the lookup_value's (text vs number vs logical)
-                    if cell_value is None or _type_key(cell_value) != lookup_type:
-                        return False
-                    cell_cmp, lookup_cmp = cell_value, lookup_value
-                    if lookup_type == "str":
-                        # Excel text collation is case-insensitive
-                        cell_cmp, lookup_cmp = cell_cmp.lower(), lookup_cmp.lower()
-                    if match_type == 1:  # Largest value <= lookup (array assumed ascending)
-                        if cell_cmp <= lookup_cmp:
-                            position = index  # Keep updating to get the largest match
-                        else:
-                            return True
-                    else:  # Smallest value >= lookup (array assumed descending)
-                        if cell_cmp >= lookup_cmp:
-                            position = index  # Keep updating to get the smallest match
-                        else:
-                            return True
-                return False
-
-            # Determine if column or row array
-            use_sparse_index = (
-                (height == EXCEL_MAX_ROWS or width == EXCEL_MAX_COLS)
-                and self.value_source is not None
-                and hasattr(self.value_source, "get_sheet_values")
-            )
-
-            if use_sparse_index and height > 1 and width == 1:
-                # Column array (sparse index)
-                col_index, _ = self._get_sheet_value_index(target_sheet)
-                for row, cell_value in col_index.get(start_col, []):
-                    if row < start_row:
-                        continue
-                    if row > end_row:
-                        break
-                    if _update_match_position(cell_value, row - start_row + 1):
-                        break
-            elif use_sparse_index and width > 1 and height == 1:
-                # Row array (sparse index)
-                _, row_index = self._get_sheet_value_index(target_sheet)
-                for col, cell_value in row_index.get(start_row, []):
-                    if col < start_col:
-                        continue
-                    if col > end_col:
-                        break
-                    if _update_match_position(cell_value, col - start_col + 1):
-                        break
-            elif height > 1 and width == 1:
-                # Column array
-                for i in range(height):
-                    cell_row = start_row + i
-                    cell_value = self._get_cell_value(target_sheet, cell_row, start_col)
-
-                    if _update_match_position(cell_value, i + 1):
-                        break
-
-            elif width > 1 and height == 1:
-                # Row array
-                for i in range(width):
-                    cell_col = start_col + i
-                    cell_value = self._get_cell_value(target_sheet, start_row, cell_col)
-
-                    if _update_match_position(cell_value, i + 1):
-                        break
-            else:
+            # Search array for matching value (memoized; see _match_scan_position)
+            if not ((height > 1 and width == 1) or (width > 1 and height == 1)):
                 result.status = "unresolved"
                 result.notes = "MATCH lookup_array must be a single row or column"
                 return result
+            position = self._match_scan_position(
+                target_sheet, start_row, start_col, height, width, lookup_value, match_type
+            )
 
             if position is not None:
                 result.status = "resolved"
