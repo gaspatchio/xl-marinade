@@ -520,3 +520,62 @@ class TestArgumentResolutionResult:
         assert result.success is False
         assert result.failure_reason is not None
         assert "Unresolvable node type" in result.failure_reason
+
+
+class TestMatchScanCacheScope:
+    """The MATCH-scan memo must not serve stale positions from a mutable source."""
+
+    def _match_ast(self) -> dict:
+        return {
+            "type": "Function",
+            "name": "MATCH",
+            "args": [
+                {"type": "Const", "value": 30},
+                {"type": "Ref", "ref": "Data!$A$1:$A$3"},
+                {"type": "Const", "value": 0},
+            ],
+        }
+
+    def test_live_workbook_mutation_is_visible(self):
+        from openpyxl import Workbook
+
+        from xl_marinade.core.resolution import ResolutionEngine
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Data"
+        for i, v in enumerate([10, 20, 30], start=1):
+            ws.cell(row=i, column=1, value=v)
+
+        engine = ResolutionEngine(wb)
+        first = engine.resolve_match_semantic(self._match_ast(), "Data")
+        assert first.status == "resolved"
+        assert first.resolved_value == 3
+
+        ws.cell(row=1, column=1, value=30)  # 30 now first in the array
+        second = engine.resolve_match_semantic(self._match_ast(), "Data")
+        assert second.status == "resolved"
+        assert second.resolved_value == 1, (
+            "stale memoized position served from a mutated live Workbook"
+        )
+
+    def test_snapshot_source_scans_are_memoized(self):
+        from xl_marinade.core.resolution import ResolutionEngine
+
+        class _Snapshot:
+            sheetnames = ["Data"]
+            active_sheet = "Data"
+
+            def __init__(self) -> None:
+                self.reads = 0
+
+            def get_value_at(self, sheet: str, coord: str):
+                self.reads += 1
+                return {"A1": 10, "A2": 20, "A3": 30}.get(coord)
+
+        src = _Snapshot()
+        engine = ResolutionEngine(src)
+        assert engine.resolve_match_semantic(self._match_ast(), "Data").resolved_value == 3
+        reads_after_first = src.reads
+        assert engine.resolve_match_semantic(self._match_ast(), "Data").resolved_value == 3
+        assert src.reads == reads_after_first, "identical scan re-read the snapshot"

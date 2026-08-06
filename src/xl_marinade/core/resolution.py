@@ -143,10 +143,11 @@ class ResolutionEngine:
     - No recalculation
     - Deterministic across runs
 
-    The value source is treated as an immutable snapshot for the engine's
-    lifetime: both _value_index_cache and _match_scan_cache key on it and are
-    never invalidated. Mutating a live Workbook between resolutions has never
-    been part of the contract — construct a fresh engine for a fresh snapshot.
+    Snapshot (ValueSource) sources are treated as immutable for the engine's
+    lifetime: _value_index_cache and _match_scan_cache key on them and are
+    never invalidated. Live openpyxl Workbook sources are exempt from both
+    caches (the sparse index requires get_sheet_values, the MATCH memo checks
+    the source kind), so mutating a Workbook between resolutions stays safe.
     """
 
     def __init__(
@@ -169,9 +170,7 @@ class ResolutionEngine:
         # lookup range — per-call checks dominated extraction on lookup-dense
         # sheets. value_source is only ever assigned here.
         self._vs_is_value_source = isinstance(value_source, ValueSource)
-        self._vs_is_workbook = not self._vs_is_value_source and isinstance(
-            value_source, Workbook
-        )
+        self._vs_is_workbook = not self._vs_is_value_source and isinstance(value_source, Workbook)
         # MATCH scans are pure functions of (array, lookup_value, match_type)
         # over the immutable snapshot; formulas across a row repeat the same
         # scan verbatim. Entries are ints/None, so no eviction needed.
@@ -884,13 +883,17 @@ class ResolutionEngine:
     ) -> int | None:
         """Scan a MATCH lookup array; return the 1-based match position or None.
 
-        The scan is a pure function of the immutable value snapshot, so results
-        are memoized: lookup-dense sheets repeat the identical scan for every
-        formula in a row, and each scan reads O(height) cells. The cache key
-        carries the lookup value's type name because Python hashes True == 1
-        while Excel MATCH treats logicals and numbers as distinct type classes;
-        strings are lowered to mirror Excel's case-insensitive collation.
+        Results are memoized ONLY for snapshot value sources (ValueSource):
+        those are immutable for the engine's lifetime, and lookup-dense sheets
+        repeat the identical scan for every formula in a row, each scan reading
+        O(height) cells. A live openpyxl Workbook source is never cached — a
+        caller may mutate it between resolutions, and a stale position would
+        become a silently wrong dependency edge. The cache key carries the
+        lookup value's type name because Python hashes True == 1 while Excel
+        MATCH treats logicals and numbers as distinct type classes; strings are
+        lowered to mirror Excel's case-insensitive collation.
         """
+        cacheable = self._vs_is_value_source
         key = (
             target_sheet,
             start_row,
@@ -901,13 +904,13 @@ class ResolutionEngine:
             type(lookup_value).__name__,
             lookup_value.lower() if isinstance(lookup_value, str) else lookup_value,
         )
-        cacheable = True
-        try:
-            return self._match_scan_cache[key]
-        except KeyError:
-            pass
-        except TypeError:  # unhashable lookup value — scan without caching
-            cacheable = False
+        if cacheable:
+            try:
+                return self._match_scan_cache[key]
+            except KeyError:
+                pass
+            except TypeError:  # unhashable lookup value — scan without caching
+                cacheable = False
 
         position: int | None = None
         end_row = start_row + height - 1
