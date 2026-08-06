@@ -14,9 +14,11 @@ import re
 import sqlite3
 import sys
 from bisect import bisect_left, bisect_right
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
+
+from loguru import logger
 
 from xl_marinade.core.bindings import (
     Binding,
@@ -2435,6 +2437,84 @@ def _write_binding_edges_to_db(
     conn.commit()
 
 
+# _disjoint_boxes' column-strip sweep is O(column-boundaries x rects): constant
+# boundaries for the targeted row-shifted rolling windows, quadratic when
+# column spans vary per rect (measured ~0.9s at 5k varying-span rects, ~15s
+# extrapolated at 20k). Warn above this so a slow pair reads as "slow", not
+# "hung".
+_UNION_RECTS_WARN = 20_000
+
+# One past Excel's maximum row (1,048,576): a bisect sentinel that sorts after
+# any real (row_start, ...) interval key.
+_BISECT_ROW_SENTINEL = 1_048_577
+
+# Cell-row budget per _rect_breadths aggregation chunk. Bounds the GROUP BY
+# working set (the sort spill that used to exhaust disk). Module-level so tests
+# can monkeypatch a tiny budget and force a multi-chunk run.
+_CHUNK_CELL_BUDGET = 5_000_000
+
+
+def _disjoint_boxes(
+    rects: list[tuple[int, int, int, int]],
+) -> list[tuple[int, int, int, int]]:
+    """Decompose overlapping (r1, c1, r2, c2) rects into disjoint boxes.
+
+    Column-boundary sweep: for each column strip between consecutive distinct
+    column boundaries, merge the row intervals of the rects spanning that
+    strip. Rolling-window rect-sets (thousands of one-row-shifted windows over
+    the same columns) collapse to a handful of boxes, so a union cardinality
+    becomes a few disjoint COUNTs instead of a scan of every overlapping rect.
+    """
+    if len(rects) == 1:
+        return list(rects)
+    bounds = sorted({c for _, c1, _, c2 in rects for c in (c1, c2 + 1)})
+    boxes: list[tuple[int, int, int, int]] = []
+    for cs, ce in zip(bounds, bounds[1:], strict=False):
+        intervals = sorted((r1, r2) for r1, c1, r2, c2 in rects if c1 <= cs and c2 >= ce - 1)
+        if not intervals:
+            continue
+        merged_r1, merged_r2 = intervals[0]
+        for r1, r2 in intervals[1:]:
+            if r1 <= merged_r2 + 1:
+                merged_r2 = max(merged_r2, r2)
+            else:
+                boxes.append((merged_r1, cs, merged_r2, ce - 1))
+                merged_r1, merged_r2 = r1, r2
+        boxes.append((merged_r1, cs, merged_r2, ce - 1))
+    return boxes
+
+
+def _union_membership(
+    boxes: list[tuple[int, int, int, int]],
+) -> Callable[[int, int], bool]:
+    """O(log n) point-in-union test over the disjoint boxes of one rect union.
+
+    The boxes come from ``_disjoint_boxes``: column strips never overlap and
+    row intervals within a strip are disjoint, so two bisections decide
+    membership.
+    """
+    col_strips = sorted({(c1, c2) for _, c1, _, c2 in boxes})
+    strip_starts = [c1 for c1, _ in col_strips]
+    rows_by_strip: dict[tuple[int, int], list[tuple[int, int]]] = {}
+    for r1, c1, r2, c2 in boxes:
+        rows_by_strip.setdefault((c1, c2), []).append((r1, r2))
+    for intervals in rows_by_strip.values():
+        intervals.sort()
+
+    def contains(row: int, col: int) -> bool:
+        i = bisect_right(strip_starts, col) - 1
+        if i < 0:
+            return False
+        c1, c2 = col_strips[i]
+        if col > c2:
+            return False
+        intervals = rows_by_strip[(c1, c2)]
+        j = bisect_right(intervals, (row, _BISECT_ROW_SENTINEL)) - 1
+        return j >= 0 and intervals[j][0] <= row <= intervals[j][1]
+
+    return contains
+
+
 def _write_binding_edges_from_cells(conn: sqlite3.Connection) -> int:
     """Collapse cell and range edges into binding edges using SQL joins.
 
@@ -2551,33 +2631,82 @@ def _write_binding_edges_from_cells(conn: sqlite3.Connection) -> int:
             # table args) give hundreds of bindings identical or row-shifted rects
             # over the same tables; the naive per-binding join re-enumerated every
             # rect once per referencing binding. Three exact-equivalent reductions:
-            #   1. _rect_cells: populated cells per distinct rect (scan once);
+            #   1. _rect_breadths: per-(rect, to_binding) populated-cell counts,
+            #      aggregated in rect chunks — counts are stored, cell rows never
+            #      are. Issue #7: the previous _rect_cells temp table stored one
+            #      row per (rect × populated cell); rolling-window rects (each
+            #      row/column referencing a one-step-shifted window) are DISTINCT
+            #      but almost fully overlapping, so one sheet of a 2.3M-formula
+            #      forecast model (361,743 distinct rects) spilled >15 GB of
+            #      SQLite temp and died disk-full. Chunking by estimated cell
+            #      count caps the GROUP BY's sort spill regardless of rect shape.
             #   2. a pair fed by ONE rect takes the precomputed rect breadth;
-            #   3. a pair fed by SEVERAL rects needs COUNT(DISTINCT cell) over the
-            #      rect UNION (rects overlap, so per-rect breadths cannot be
-            #      summed); pairs sharing a (to_binding, rect-set) get one union
-            #      count per group — on lookup-dense sheets ~100 bindings can
-            #      share a single rect-set.
-            conn.execute("DROP TABLE IF EXISTS _rect_cells")
+            #   3. a pair fed by SEVERAL rects needs the cell count of the rect
+            #      UNION (rects overlap, so per-rect breadths cannot be summed):
+            #      the rect-set is decomposed into disjoint boxes and the target
+            #      binding's own cells — few, vs unions spanning whole sheets —
+            #      are bisected against them; pairs sharing a (to_binding,
+            #      rect-set) get one union count per group.
+            rects = conn.execute(
+                """
+                SELECT DISTINCT to_r1, to_c1, to_r2, to_c2
+                FROM _binding_range_edges WHERE to_sheet_id = ?
+                ORDER BY to_r1, to_c1, to_r2, to_c2
+                """,
+                (sheet_id,),
+            ).fetchall()
+            sheet_pop = conn.execute(
+                "SELECT COUNT(*) FROM cells WHERE sheet_id = ?", (sheet_id,)
+            ).fetchone()[0]
+            conn.execute("DROP TABLE IF EXISTS _rect_breadths")
             conn.execute(
                 """
-                CREATE TEMP TABLE _rect_cells AS
-                SELECT r.to_r1, r.to_c1, r.to_r2, r.to_c2,
-                       ctb.binding_id AS to_binding_id, c.cell_id
-                FROM (
-                    SELECT DISTINCT to_r1, to_c1, to_r2, to_c2
-                    FROM _binding_range_edges WHERE to_sheet_id = ?
-                ) r
-                JOIN cells c
-                  ON c.sheet_id = ?
-                 AND c.row BETWEEN r.to_r1 AND r.to_r2
-                 AND c.col BETWEEN r.to_c1 AND r.to_c2
-                JOIN cell_to_binding ctb ON ctb.cell_id = c.cell_id
-                """,
-                (sheet_id, sheet_id),
+                CREATE TEMP TABLE _rect_breadths (
+                    to_r1 INTEGER, to_c1 INTEGER, to_r2 INTEGER, to_c2 INTEGER,
+                    to_binding_id TEXT NOT NULL,
+                    breadth INTEGER NOT NULL
+                )
+                """
             )
+            chunk_budget = _CHUNK_CELL_BUDGET
+            chunk: list[tuple[int, int, int, int]] = []
+            chunk_est = 0
+            chunks: list[list[tuple[int, int, int, int]]] = []
+            for rect in rects:
+                r1, c1, r2, c2 = rect
+                est = min((r2 - r1 + 1) * (c2 - c1 + 1), sheet_pop)
+                if chunk and chunk_est + est > chunk_budget:
+                    chunks.append(chunk)
+                    chunk, chunk_est = [], 0
+                chunk.append(rect)
+                chunk_est += est
+            if chunk:
+                chunks.append(chunk)
+            for chunk in chunks:
+                conn.execute("DROP TABLE IF EXISTS _chunk_rects")
+                conn.execute(
+                    "CREATE TEMP TABLE _chunk_rects "
+                    "(to_r1 INTEGER, to_c1 INTEGER, to_r2 INTEGER, to_c2 INTEGER)"
+                )
+                conn.executemany("INSERT INTO _chunk_rects VALUES (?, ?, ?, ?)", chunk)
+                conn.execute(
+                    """
+                    INSERT INTO _rect_breadths
+                    SELECT r.to_r1, r.to_c1, r.to_r2, r.to_c2,
+                           ctb.binding_id, COUNT(DISTINCT c.cell_id)
+                    FROM _chunk_rects r
+                    JOIN cells c
+                      ON c.sheet_id = ?
+                     AND c.row BETWEEN r.to_r1 AND r.to_r2
+                     AND c.col BETWEEN r.to_c1 AND r.to_c2
+                    JOIN cell_to_binding ctb ON ctb.cell_id = c.cell_id
+                    GROUP BY r.to_r1, r.to_c1, r.to_r2, r.to_c2, ctb.binding_id
+                    """,
+                    (sheet_id,),
+                )
+            conn.execute("DROP TABLE IF EXISTS _chunk_rects")
             conn.execute(
-                "CREATE INDEX _rect_cells_i ON _rect_cells"
+                "CREATE INDEX _rect_breadths_i ON _rect_breadths"
                 "(to_r1, to_c1, to_r2, to_c2, to_binding_id)"
             )
             # (from_binding, to_binding, rect) rows carrying the rect's breadth.
@@ -2589,12 +2718,7 @@ def _write_binding_edges_from_cells(conn: sqlite3.Connection) -> int:
                        rp.to_r1, rp.to_c1, rp.to_r2, rp.to_c2,
                        rp.breadth, bre.is_dynamic
                 FROM _binding_range_edges bre
-                JOIN (
-                    SELECT to_r1, to_c1, to_r2, to_c2, to_binding_id,
-                           COUNT(DISTINCT cell_id) AS breadth
-                    FROM _rect_cells
-                    GROUP BY to_r1, to_c1, to_r2, to_c2, to_binding_id
-                ) rp
+                JOIN _rect_breadths rp
                   ON rp.to_r1 = bre.to_r1 AND rp.to_c1 = bre.to_c1
                  AND rp.to_r2 = bre.to_r2 AND rp.to_c2 = bre.to_c2
                 WHERE bre.to_sheet_id = ?
@@ -2631,34 +2755,64 @@ def _write_binding_edges_from_cells(conn: sqlite3.Connection) -> int:
                 pair_rects[(fb, tb)].append((r1, c1, r2, c2))
                 pair_dyn[(fb, tb)] = max(pair_dyn[(fb, tb)], dyn)
             union_breadth: dict[tuple[str, tuple[tuple[int, int, int, int], ...]], int] = {}
-            for (fb, tb), rects in pair_rects.items():
-                key = (tb, tuple(rects))
+            # Memory replaces disk here deliberately: tb_cells_cache holds
+            # each target binding's populated cells for the CURRENT sheet only,
+            # contains_cache one bisect closure per distinct rect-set, and both
+            # die with this sheet's scope. Ceiling is proportional to the
+            # sheet's populated cells — the whole collapse phase stays under
+            # ~1 GB RSS on a 2.3M-formula model, replacing the >15 GB SQLite
+            # temp spill this path used to produce.
+            contains_cache: dict[
+                tuple[tuple[int, int, int, int], ...], Callable[[int, int], bool]
+            ] = {}
+            tb_cells_cache: dict[str, list[tuple[int, int]]] = {}
+            for (fb, tb), rect_set in pair_rects.items():
+                key = (tb, tuple(rect_set))
                 if key not in union_breadth:
-                    conn.execute("DROP TABLE IF EXISTS _union_rects")
-                    conn.execute(
-                        "CREATE TEMP TABLE _union_rects "
-                        "(r1 INTEGER, c1 INTEGER, r2 INTEGER, c2 INTEGER)"
+                    # Populated cells of to_binding across the rect UNION — the
+                    # rects overlap, so this cannot be summed from per-rect
+                    # breadths. A rolling-window pair can carry tens of
+                    # thousands of overlapping rects, and no cell rows were
+                    # materialized, so: decompose the rect-set into disjoint
+                    # boxes, fetch the target binding's own cells once
+                    # (bindings are small; unions can span whole sheets), and
+                    # bisect each cell against the boxes.
+                    rects_key = tuple(rect_set)
+                    if rects_key not in contains_cache:
+                        if len(rect_set) > _UNION_RECTS_WARN:
+                            logger.warning(
+                                f"range collapse: one binding pair unions "
+                                f"{len(rect_set):,} rects; the disjoint-box "
+                                "sweep is quadratic when column spans vary, "
+                                "so this pair may take a while (it is "
+                                "working, not hung)"
+                            )
+                        contains_cache[rects_key] = _union_membership(_disjoint_boxes(rect_set))
+                    contains = contains_cache[rects_key]
+                    if tb not in tb_cells_cache:
+                        # CROSS JOIN pins the join order: drive from the
+                        # binding's few cells, not the sheet's many — the
+                        # planner otherwise scans the whole sheet per target
+                        # binding.
+                        tb_cells_cache[tb] = conn.execute(
+                            """
+                            SELECT c.row, c.col
+                            FROM cell_to_binding ctb
+                            CROSS JOIN cells c ON c.cell_id = ctb.cell_id
+                            WHERE ctb.binding_id = ? AND c.sheet_id = ?
+                            """,
+                            (tb, sheet_id),
+                        ).fetchall()
+                    union_breadth[key] = sum(
+                        1 for row, col in tb_cells_cache[tb] if contains(row, col)
                     )
-                    conn.executemany("INSERT INTO _union_rects VALUES (?, ?, ?, ?)", rects)
-                    union_breadth[key] = conn.execute(
-                        """
-                        SELECT COUNT(DISTINCT rc.cell_id)
-                        FROM _union_rects u
-                        JOIN _rect_cells rc
-                          ON rc.to_r1 = u.r1 AND rc.to_c1 = u.c1
-                         AND rc.to_r2 = u.r2 AND rc.to_c2 = u.c2
-                        WHERE rc.to_binding_id = ?
-                        """,
-                        (tb,),
-                    ).fetchone()[0]
                 conn.execute(
                     "INSERT INTO _range_pairs VALUES (?, ?, ?, ?)",
                     (fb, tb, union_breadth[key], pair_dyn[(fb, tb)]),
                 )
                 inserted += 1
-            conn.execute("DROP TABLE IF EXISTS _union_rects")
             conn.execute("DROP TABLE IF EXISTS _pair_rects")
-            conn.execute("DROP TABLE IF EXISTS _rect_cells")
+            conn.execute("DROP TABLE IF EXISTS _rect_breadths")
             dur = _t.perf_counter() - sheet_t0
             total_sheet_time += dur
             sheet_name_row = conn.execute(

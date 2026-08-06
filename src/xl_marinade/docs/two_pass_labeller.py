@@ -1519,7 +1519,7 @@ class TwoPassLabellingEngine:
 
         Assesses confidence for all labeling and classification decisions.
         Updates confidence scores in overlay database.
-        Generates Markdown review report for Cursor agent to evaluate low-confidence cases.
+        Generates Markdown review report for a reviewer to evaluate low-confidence cases.
 
         Args:
             overlay_db_path: Path to semantic overlay database

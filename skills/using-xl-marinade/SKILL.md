@@ -46,11 +46,14 @@ marinade extract path/to/book.xlsm -o out.ir.db --max-memory-mb 4000
 
 ## Query
 
-**Query the `agent_*` / `atlas_*` VIEWS, never the base tables.** The views
-are the extractor's versioned public contract (they carry `schema_version`
-`"2.0"`); base tables (`cells`, `formulas`, `cell_edges_internal`,
-`range_edges`, …) are internal storage and can change shape between releases
-without notice. If a query you need isn't covered by a view, treat that as a
+**Query the `agent_*` / `marinade_*` VIEWS, never the base tables.** The views
+are the extractor's versioned public contract. Read the database's own version
+rather than assuming one —
+`SELECT value FROM ir_metadata WHERE key = 'schema_version'` — and pin to the
+major. It is currently `"3.0"`; `marinade_nodes` was called `atlas_nodes` below
+3.0, so a database stamped `"2.0"` has the old view name. Base tables (`cells`,
+`formulas`, `cell_edges_internal`, `range_edges`, …) are internal storage and
+can change shape between releases without notice. If a query you need isn't covered by a view, treat that as a
 gap to report, not a reason to reach into base tables.
 
 **Direction convention:** `from_*` = the formula (the dependent); `to_*` =
@@ -95,7 +98,7 @@ SELECT from_cell, to_cell, cell_count, to_r1, to_c1, to_r2, to_c2
 FROM agent_dependencies WHERE dependency_type = 'range';
 
 -- VBA is structure too: procedures appear in the unified node surface
-SELECT node_id, display_name FROM atlas_nodes WHERE node_kind = 'procedure';
+SELECT node_id, display_name FROM marinade_nodes WHERE node_kind = 'procedure';
 ```
 
 Schema notes — when a query errors, list the view's columns with
@@ -112,7 +115,7 @@ Schema notes — when a query errors, list the view's columns with
 - `agent_binding_dependencies` — binding-level graph with `from_label`,
   `from_address`, `to_label`, `to_address`, `edge_count`, `kind`
   (`formula` | `via_vba_paste`).
-- `atlas_nodes` — bindings AND VBA procedures in one list: `node_kind`
+- `marinade_nodes` — bindings AND VBA procedures in one list: `node_kind`
   (`cell` | `procedure`), `display_name`. VBA IDs are
   `vba::<module>::<name>::<kind>` — split on `::`.
 - Formula-text search lives in `agent_cells_light.formula` /

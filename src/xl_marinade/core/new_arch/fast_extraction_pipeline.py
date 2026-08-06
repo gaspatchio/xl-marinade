@@ -312,7 +312,7 @@ def _wire_vba_edges(conn: sqlite3.Connection, enrich: bool = False) -> dict[str,
         return metrics
 
     # --- 1. Cell → UDF edges (from cell_udf_calls) ---
-    # Build the to_binding_id with the same format as atlas_nodes:
+    # Build the to_binding_id with the same format as marinade_nodes:
     # vba::<module>::<name>::function[::<compile_branch>]
     if has_udf_calls and has_bindings:
         cell_udf_edge_sql = """
@@ -813,7 +813,7 @@ EXIT_SLA_FAILURE = 42
 EXIT_SQLITE_VERSION_FAILURE = 43
 
 # Schema version
-SCHEMA_VERSION = "2.0"
+SCHEMA_VERSION = "3.0"
 BUILD_MODE = "fast"
 
 

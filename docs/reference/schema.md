@@ -9,7 +9,7 @@ file directly.
 
 The schema ships two layers:
 
-- **`agent_*` / `atlas_*` views** — the stable, documented query interface.
+- **`agent_*` / `marinade_*` views** — the stable, documented query interface.
 - **Raw/base tables** — the normalized storage layer underneath. Internal.
 
 The schema itself states the contract ([`schema.sql`](https://github.com/gaspatchio/xl-marinade/blob/main/src/xl_marinade/core/new_arch/schema.sql)):
@@ -59,7 +59,7 @@ Key columns: `binding_id`, `sheet`, `address` (`Sheet!A1:A10`), `shape_rows`,
 `classification`, `confidence`, `is_orphan`, `extraction_source`,
 `spatial_candidates` (JSON), `evidence` (JSON).
 
-**`atlas_nodes`** — a unified node surface: every binding plus every VBA
+**`marinade_nodes`** — a unified node surface: every binding plus every VBA
 procedure, in one queryable list of `(node_id, kind, display_name)` triples.
 Use this when you want node identity/labels across both the spreadsheet and
 VBA worlds without caring which one a node came from; use `agent_bindings`
@@ -161,22 +161,22 @@ either one if you need to support older databases.
 The extracted database carries its **own output-schema version**, distinct from
 the Python package version. It is stamped into the DB metadata and surfaced as
 `schema_version` — and as `schema_version_a`/`schema_version_b` in a
-[diff](../guide/diffing.md). It is currently `"2.0"`, and it — not the package
+[diff](../guide/diffing.md). It is currently `"3.0"`, and it — not the package
 version — governs the stability of the query surface. As stated in the project
 changelog, *the SQLite output schema is a versioned public contract*:
 
-- A breaking change to an `agent_*`/`atlas_*` view — a renamed or removed
-  column, a changed meaning for an existing column — bumps the **major**
-  output-schema version.
+- A breaking change to an `agent_*`/`marinade_*` view — a renamed or removed
+  view, a renamed or removed column, a changed meaning for an existing
+  column — bumps the **major** output-schema version.
 - Adding a new view, or a new column at the end of an existing view, bumps the
   **minor** output-schema version.
 - The raw/base tables carry **no compatibility guarantee** at any version —
   they can change shape at any time.
 
 The Python package versions separately: `xl_marinade.__version__` (currently
-`0.1.0`) follows [Semantic Versioning](https://semver.org/) for the library
+`0.2.0`) follows [Semantic Versioning](https://semver.org/) for the library
 API and CLI. Don't confuse the two — a database inspected in the wild reports its
-`schema_version` (`"2.0"`), not the package version.
+`schema_version` (`"3.0"`), not the package version.
 
 If you're generating queries against this database (by hand or via an LLM),
 target the views above and pin to the `schema_version` major — you inherit that

@@ -51,7 +51,7 @@ more reliable signals.
 This module is called during Pass 4 of the two-pass labeling engine:
 1. Pass 1-3: Generate labels and classifications deterministically
 2. Pass 4: Assess confidence, persist scores, flag low-confidence cases
-3. Cursor agent reviews flagged cases with RAG context and makes improvements
+3. A reviewer works through the flagged cases and makes improvements
 
 See: docs/phase2_documentation_agent/backlog/sprint4/story-14-agent-confidence-decisions.md
 """

@@ -450,9 +450,8 @@ def _load(conn: sqlite3.Connection) -> IRModel:
 
     # --- Resolve missing labels from label evidence (scan_above) ---
     # BindingDesc is frozen, so we replace entries whose label is None with a
-    # copy that carries the scan_above candidate.  This mirrors the cascade in
-    # atlas_service._resolve_label() so the diff binding_map carries
-    # human-readable names for both versions.
+    # copy that carries the scan_above candidate, so the diff binding_map
+    # carries human-readable names for both versions.
     _resolve_missing_labels(model)
 
     return model
@@ -461,8 +460,8 @@ def _load(conn: sqlite3.Connection) -> IRModel:
 def _resolve_missing_labels(model: IRModel) -> None:
     """Fill in BindingDesc.label for bindings that lack an explicit label.
 
-    Uses scan_above label evidence (the same tier the atlas service uses at
-    query time) so that the diff binding_map carries human-readable names.
+    Uses scan_above label evidence (the same fallback tier the extractor's
+    label cascade uses) so the diff binding_map carries human-readable names.
     BindingDesc is frozen, so we replace the dict entry with a new instance.
     """
     if not model.label_evidence:

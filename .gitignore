@@ -42,9 +42,6 @@ env/
 *.swo
 *~
 .cursor/
-# But include cursor rules (project-specific agent definitions)
-!.cursor/rules/
-!.cursor/rules/*.mdc
 
 # OS Files
 .DS_Store

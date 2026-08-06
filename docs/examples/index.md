@@ -210,10 +210,22 @@ key is configured, or the request errors — you always get the deterministic
 output, and enrichment can only add to it, never replace it with something
 worse or block the run.
 
+## A complete worked example set: lifelib actuarial workbook twins
+
+Beyond these inline how-tos, the
+[`examples/lifelib-actuarial-workbooks`](https://github.com/gaspatchio/xl-marinade/tree/examples/lifelib-actuarial-workbooks)
+branch carries five full Excel twins of open-source [lifelib](https://lifelib.io)
+actuarial models (term assurance, in-force portfolio, universal life,
+Smith-Wilson curve fitting, Solvency II SCR). Each is authored with the
+conventions Marinade rewards — machine-key rows, uniform per-column formulas,
+named ranges — and ships with committed value proofs against the Python model,
+`marinade`-based structure proofs, and in-workbook VBA batch reconciliations.
+Start with [that branch's README](https://github.com/gaspatchio/xl-marinade/blob/examples/lifelib-actuarial-workbooks/README.md).
+
 ## Next
 
 - [Quickstart](../quickstart.md) — the same extract → document → diff workflow,
   narrated end to end.
 - [CLI reference](../reference/cli.md) — every flag used above.
-- [SQLite schema](../reference/schema.md) — the full set of `agent_*`/`atlas_*`
+- [SQLite schema](../reference/schema.md) — the full set of `agent_*`/`marinade_*`
   views to query.
