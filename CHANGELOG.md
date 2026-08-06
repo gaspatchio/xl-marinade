@@ -21,6 +21,14 @@ schema is a versioned public contract.
   space ("database or disk is full") in the range-collapse step; replaced by
   chunked breadth aggregation + disjoint-box union counting with identical
   output.
+- Lookup-dense sheets (INDEX/MATCH ledgers) no longer re-scan the lookup array
+  once per formula, and no longer pay a `runtime_checkable` Protocol check per
+  cell read. Bounded-range MATCH scans are memoized per immutable snapshot —
+  never from a live `Workbook` source, whose mutations must stay visible — and
+  the value source is classified once at construction. A 15k-formula
+  INDEX/MATCH probe goes 111s → 5s and a ledger-style benchmark 231s → 17s,
+  with byte-identical extraction verified on 8 real workbooks. The memo costs
+  ~194 MB peak RSS on a 2.3M-formula model.
 
 ## [0.1.0] - 2026-08-02
 
