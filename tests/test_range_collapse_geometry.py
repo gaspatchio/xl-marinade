@@ -59,18 +59,9 @@ def test_union_membership_agrees_with_brute_force():
                 )
 
 
-def test_rolling_window_workbook_extracts_deterministically(tmp_path):
-    """End-to-end on the issue #7 shape: overlapping shifted-window ranges.
-
-    Every row's formula references a window shifted one row from its
-    neighbour's — distinct, almost fully overlapping rects. Extraction must
-    complete and be run-to-run deterministic at the binding-edge level.
-    """
-    import sqlite3
-
+def _build_rolling_workbook(xlsx):
+    """The issue #7 shape: distinct, almost fully overlapping shifted windows."""
     import openpyxl
-
-    from xl_marinade.core.api import extract
 
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -82,8 +73,55 @@ def test_rolling_window_workbook_extracts_deterministically(tmp_path):
         ws.cell(
             row=row, column=3, value=f"=SUM(A{row}:A{row + 19})+SUM(B{row}:B{min(row + 9, 80)})"
         )
-    xlsx = tmp_path / "rolling.xlsx"
     wb.save(xlsx)
+
+
+def _rolling_expected_edges():
+    """Hand-derived (from the workbook shape, not the implementation):
+    B1:B80 reads A r:r+39 for r=1..80 -> union rows 1..119, and A120 is
+    referenced by nothing (hence the A1:A119 constant binding). C1:C71
+    (uniform R1C1) reads A r:r+19 -> rows 1..90, and B r:r+9 -> all 80 B
+    cells. C72..C80 stay single-cell bindings (the min() clamp changes their
+    R1C1 pattern): each reads 20 A cells and 81-r B cells, with C80's B80:B80
+    reference landing as a single-cell formula edge."""
+    expected = {
+        ("B1:B80", "A1:A119", 119, "range_static"),
+        ("C1:C71", "A1:A119", 90, "range_static"),
+        ("C1:C71", "B1:B80", 80, "range_static"),
+        ("C80", "B1:B80", 1, "formula"),
+    }
+    expected |= {(f"C{r}", "A1:A119", 20, "range_static") for r in range(72, 81)}
+    expected |= {(f"C{r}", "B1:B80", 81 - r, "range_static") for r in range(72, 80)}
+    return expected
+
+
+def _addr_edges(db_path):
+    import sqlite3
+
+    conn = sqlite3.connect(db_path)
+    rows = conn.execute(
+        "SELECT bf.address_a1, bt.address_a1, e.edge_count, e.kind "
+        "FROM binding_edges e "
+        "JOIN bindings bf ON bf.binding_id = e.from_binding_id "
+        "JOIN bindings bt ON bt.binding_id = e.to_binding_id"
+    ).fetchall()
+    conn.close()
+    return set(rows)
+
+
+def test_rolling_window_workbook_extracts_deterministically(tmp_path):
+    """End-to-end on the issue #7 shape: overlapping shifted-window ranges.
+
+    Every row's formula references a window shifted one row from its
+    neighbour's — distinct, almost fully overlapping rects. Extraction must
+    complete and be run-to-run deterministic at the binding-edge level.
+    """
+    import sqlite3
+
+    from xl_marinade.core.api import extract
+
+    xlsx = tmp_path / "rolling.xlsx"
+    _build_rolling_workbook(xlsx)
 
     def edges(db_path):
         conn = sqlite3.connect(db_path)
@@ -100,30 +138,27 @@ def test_rolling_window_workbook_extracts_deterministically(tmp_path):
     assert e1 == e2
 
     # Semantic pin, derived by hand (not from the implementation), so a
-    # breadth regression in the SQL/geometry side fails loudly:
-    #   B1:B80 reads A r:r+39 for r=1..80 -> union rows 1..119, and A120 is
-    #   referenced by nothing (hence the A1:A119 constant binding).
-    #   C1:C71 (uniform R1C1) reads A r:r+19 -> rows 1..90, and B r:r+9 ->
-    #   all 80 B cells. C72..C80 stay single-cell bindings (the min() clamp
-    #   changes their R1C1 pattern): each reads 20 A cells and 81-r B cells,
-    #   with C80's B80:B80 reference landing as a single-cell formula edge.
-    def addr_edges(db_path):
-        conn = sqlite3.connect(db_path)
-        rows = conn.execute(
-            "SELECT bf.address_a1, bt.address_a1, e.edge_count, e.kind "
-            "FROM binding_edges e "
-            "JOIN bindings bf ON bf.binding_id = e.from_binding_id "
-            "JOIN bindings bt ON bt.binding_id = e.to_binding_id"
-        ).fetchall()
-        conn.close()
-        return set(rows)
+    # breadth regression in the SQL/geometry side fails loudly.
+    assert _addr_edges(tmp_path / "a.db") == _rolling_expected_edges()
 
-    expected = {
-        ("B1:B80", "A1:A119", 119, "range_static"),
-        ("C1:C71", "A1:A119", 90, "range_static"),
-        ("C1:C71", "B1:B80", 80, "range_static"),
-        ("C80", "B1:B80", 1, "formula"),
-    }
-    expected |= {(f"C{r}", "A1:A119", 20, "range_static") for r in range(72, 81)}
-    expected |= {(f"C{r}", "B1:B80", 81 - r, "range_static") for r in range(72, 80)}
-    assert addr_edges(tmp_path / "a.db") == expected
+
+def test_multi_chunk_breadth_aggregation_matches_hand_derived(tmp_path, monkeypatch):
+    """A multi-chunk _rect_breadths run must produce the exact same breadths.
+
+    Review finding: the chunking path was entirely uncovered — the e2e
+    workbook fits one chunk, `_rect_breadths` has no UNIQUE constraint, and a
+    rect landing in two chunks would inflate edge_count with green tests.
+    Force many chunks with a tiny budget and assert against the hand-derived
+    edge set (not against a same-code single-chunk run, so a bug common to
+    both paths cannot cancel out).
+    """
+    import xl_marinade.core.new_arch.grouping_native as gn
+    from xl_marinade.core.api import extract
+
+    xlsx = tmp_path / "rolling.xlsx"
+    _build_rolling_workbook(xlsx)
+    # Rect estimates for this workbook are ~20-120 cells each; a 500-cell
+    # budget forces the ~170 rects into dozens of chunks.
+    monkeypatch.setattr(gn, "_CHUNK_CELL_BUDGET", 500)
+    db = extract(xlsx, tmp_path / "chunked.db")
+    assert _addr_edges(db) == _rolling_expected_edges()

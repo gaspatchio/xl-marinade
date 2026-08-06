@@ -18,6 +18,8 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
 
+from loguru import logger
+
 from xl_marinade.core.bindings import (
     Binding,
     _col_to_letter,
@@ -2435,6 +2437,23 @@ def _write_binding_edges_to_db(
     conn.commit()
 
 
+# _disjoint_boxes' column-strip sweep is O(column-boundaries x rects): constant
+# boundaries for the targeted row-shifted rolling windows, quadratic when
+# column spans vary per rect (measured ~0.9s at 5k varying-span rects, ~15s
+# extrapolated at 20k). Warn above this so a slow pair reads as "slow", not
+# "hung".
+_UNION_RECTS_WARN = 20_000
+
+# One past Excel's maximum row (1,048,576): a bisect sentinel that sorts after
+# any real (row_start, ...) interval key.
+_BISECT_ROW_SENTINEL = 1_048_577
+
+# Cell-row budget per _rect_breadths aggregation chunk. Bounds the GROUP BY
+# working set (the sort spill that used to exhaust disk). Module-level so tests
+# can monkeypatch a tiny budget and force a multi-chunk run.
+_CHUNK_CELL_BUDGET = 5_000_000
+
+
 def _disjoint_boxes(
     rects: list[tuple[int, int, int, int]],
 ) -> list[tuple[int, int, int, int]]:
@@ -2490,7 +2509,7 @@ def _union_membership(
         if col > c2:
             return False
         intervals = rows_by_strip[(c1, c2)]
-        j = bisect_right(intervals, (row, 1 << 40)) - 1
+        j = bisect_right(intervals, (row, _BISECT_ROW_SENTINEL)) - 1
         return j >= 0 and intervals[j][0] <= row <= intervals[j][1]
 
     return contains
@@ -2649,7 +2668,7 @@ def _write_binding_edges_from_cells(conn: sqlite3.Connection) -> int:
                 )
                 """
             )
-            chunk_budget = 5_000_000
+            chunk_budget = _CHUNK_CELL_BUDGET
             chunk: list[tuple[int, int, int, int]] = []
             chunk_est = 0
             chunks: list[list[tuple[int, int, int, int]]] = []
@@ -2736,6 +2755,13 @@ def _write_binding_edges_from_cells(conn: sqlite3.Connection) -> int:
                 pair_rects[(fb, tb)].append((r1, c1, r2, c2))
                 pair_dyn[(fb, tb)] = max(pair_dyn[(fb, tb)], dyn)
             union_breadth: dict[tuple[str, tuple[tuple[int, int, int, int], ...]], int] = {}
+            # Memory replaces disk here deliberately: tb_cells_cache holds
+            # each target binding's populated cells for the CURRENT sheet only,
+            # contains_cache one bisect closure per distinct rect-set, and both
+            # die with this sheet's scope. Ceiling is proportional to the
+            # sheet's populated cells — the whole collapse phase stays under
+            # ~1 GB RSS on a 2.3M-formula model, replacing the >15 GB SQLite
+            # temp spill this path used to produce.
             contains_cache: dict[
                 tuple[tuple[int, int, int, int], ...], Callable[[int, int], bool]
             ] = {}
@@ -2753,6 +2779,14 @@ def _write_binding_edges_from_cells(conn: sqlite3.Connection) -> int:
                     # bisect each cell against the boxes.
                     rects_key = tuple(rect_set)
                     if rects_key not in contains_cache:
+                        if len(rect_set) > _UNION_RECTS_WARN:
+                            logger.warning(
+                                f"range collapse: one binding pair unions "
+                                f"{len(rect_set):,} rects; the disjoint-box "
+                                "sweep is quadratic when column spans vary, "
+                                "so this pair may take a while (it is "
+                                "working, not hung)"
+                            )
                         contains_cache[rects_key] = _union_membership(_disjoint_boxes(rect_set))
                     contains = contains_cache[rects_key]
                     if tb not in tb_cells_cache:
