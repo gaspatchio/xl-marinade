@@ -6,6 +6,11 @@ name: Docs
 on:
   push:
     branches: [main]
+  # A release publishes from a tag, so the last push-to-main build happens
+  # *before* the release exists — v0.2.0's docs were built 85s early. Rebuild
+  # once the release is live so anything version-dependent is current.
+  release:
+    types: [published]
   workflow_dispatch:
 
 permissions:
