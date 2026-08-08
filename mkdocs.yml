@@ -35,11 +35,18 @@ markdown_extensions:
   - toc:
       permalink: true
   - pymdownx.details
-  - pymdownx.superfences
   - pymdownx.highlight:
       pygments_lang_class: true
   - pymdownx.inlinehilite
-  - pymdownx.extra
+  # superfences is configured *through* extra, which bundles it. Registering
+  # pymdownx.superfences separately alongside extra silently loses the config —
+  # extra re-registers it with defaults and ```mermaid renders as a code block.
+  - pymdownx.extra:
+      pymdownx.superfences:
+        custom_fences:
+          - name: mermaid
+            class: mermaid
+            format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.emoji
   - pymdownx.tabbed:
       alternate_style: true
