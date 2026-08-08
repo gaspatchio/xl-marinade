@@ -26,6 +26,46 @@ gap to report, not a reason to reach into the base tables.
 
 ## The stable views
 
+Before the per-view detail, the shape of the thing. The extractor records **one
+dependency graph at two granularities**, and a node space that spans the
+spreadsheet and VBA worlds:
+
+```mermaid
+flowchart TB
+  subgraph cellgrain["cell granularity: agent_cells, agent_dependencies"]
+    direction LR
+    CB["B1<br/>=SUM(A1:A40)"] -->|reads| CA["A1 ... A40"]
+  end
+
+  subgraph bindgrain["binding granularity: agent_bindings, agent_binding_dependencies"]
+    direction LR
+    BB["B1:B80"] -->|reads| BA["A1:A119"]
+  end
+
+  CB -. grouped into .-> BB
+  CA -. grouped into .-> BA
+
+  BB --> N["marinade_nodes"]
+  VBA["VBA procedure<br/>vba::Sheet1::Refresh::sub"] --> N
+```
+
+Read it as one graph seen at two zoom levels. Every cell carrying a formula is a
+node in the fine-grained graph; cells that share a structure — a column of
+uniform formulas, a repeated block — are **grouped into a binding**, and the
+edges collapse with them. `B1` reading `A1:A40` and its 79 siblings each reading
+a one-row-shifted window become the single edge `B1:B80 → A1:A119`.
+
+Query the **binding** granularity to ask what drives what; that is the level a
+human reasons at, and it is thousands of times smaller. Drop to the **cell**
+granularity when you need a specific formula or a precise address.
+
+`marinade_nodes` is the union of bindings and VBA procedures — use it when you
+want node identity and labels without caring which world a node came from.
+
+**Direction convention:** `from_*` is the formula (the dependent); `to_*` is what
+it reads (the precedent). "What drives X" is the set of rows whose `from_*` lies
+in X.
+
 ### Cells
 
 **`agent_cells`** — every extracted cell, with its formula, value, and format,
@@ -188,10 +228,71 @@ If you're generating queries against this database (by hand or via an LLM),
 target the views above and pin to the `schema_version` major — you inherit that
 stability guarantee for free.
 
-## Example query
+## Example queries
+
+The outputs below are real, from a small forecast sheet where `A` holds inputs,
+`B1:B80` each sums a 40-row window of `A`, and `C1:C71` reads both.
+
+**What drives this output?** The direct precedents of a binding — the query
+`Ctrl+[` can't answer across sheets:
 
 ```sql
-SELECT * FROM agent_binding_dependencies;
+SELECT to_address, edge_count, kind
+  FROM agent_binding_dependencies
+ WHERE from_address = 'Forecast!C1:C71'
+ ORDER BY edge_count DESC;
+```
+
+```
+Forecast!A1:A119 | 90 | range_static
+Forecast!B1:B80  | 80 | range_static
+```
+
+`edge_count` is the breadth of the reference — how many populated cells of the
+precedent this binding actually reads.
+
+**What does it depend on, all the way back?** The full upstream cone, using
+SQLite's recursive CTE:
+
+```sql
+WITH RECURSIVE upstream(binding, address, depth) AS (
+    SELECT from_binding, from_address, 0
+      FROM agent_binding_dependencies
+     WHERE from_address = 'Forecast!C1:C71'
+    UNION
+    SELECT d.to_binding, d.to_address, u.depth + 1
+      FROM agent_binding_dependencies d
+      JOIN upstream u ON d.from_binding = u.binding
+)
+SELECT address, MIN(depth) AS depth
+  FROM upstream GROUP BY address ORDER BY depth, address;
+```
+
+```
+Forecast!C1:C71  | 0
+Forecast!A1:A119 | 1
+Forecast!B1:B80  | 1
+```
+
+`UNION` rather than `UNION ALL` is load-bearing: it deduplicates, so a circular
+reference terminates instead of looping forever. `MIN(depth)` collapses a node
+reachable by several paths — here `A1:A119` is reached both directly and through
+`B1:B80` — to its shortest distance.
+
+**What breaks if I change this?** The same query with the join reversed walks
+downstream instead:
+
+```sql
+SELECT from_address, edge_count
+  FROM agent_binding_dependencies
+ WHERE to_address = 'Forecast!A1:A119'
+ ORDER BY edge_count DESC;
+```
+
+```
+Forecast!B1:B80 | 119
+Forecast!C1:C71 | 90
+Forecast!C78    | 20
 ```
 
 ## See also
