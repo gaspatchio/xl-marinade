@@ -173,10 +173,16 @@ changelog, *the SQLite output schema is a versioned public contract*:
 - The raw/base tables carry **no compatibility guarantee** at any version —
   they can change shape at any time.
 
-The Python package versions separately: `xl_marinade.__version__` (currently
-`0.2.0`) follows [Semantic Versioning](https://semver.org/) for the library
-API and CLI. Don't confuse the two — a database inspected in the wild reports its
-`schema_version` (`"3.0"`), not the package version.
+The Python package versions separately: `xl_marinade.__version__` follows
+[Semantic Versioning](https://semver.org/) for the library API and CLI, and moves
+independently of the output schema. Don't confuse the two — a database inspected
+in the wild reports its `schema_version`, not the package version. Read the
+package version from the installed distribution rather than from documentation:
+
+```python
+import importlib.metadata
+importlib.metadata.version("xl-marinade")
+```
 
 If you're generating queries against this database (by hand or via an LLM),
 target the views above and pin to the `schema_version` major — you inherit that
