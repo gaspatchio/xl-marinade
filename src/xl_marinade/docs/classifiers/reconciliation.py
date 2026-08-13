@@ -237,7 +237,7 @@ def load_reconciliation_overrides(override_path: str) -> dict[str, dict[str, Any
         return {}
 
     try:
-        with open(override_path) as f:
+        with open(override_path, encoding="utf-8") as f:
             data = json.load(f)
 
         overrides = {}

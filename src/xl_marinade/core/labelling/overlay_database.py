@@ -52,7 +52,7 @@ def initialize_overlay_db(ir_db_path: str) -> sqlite3.Connection:
     overlay_conn.execute("PRAGMA foreign_keys = ON")
 
     # Load and execute schema
-    with open(SCHEMA_SQL_PATH) as f:
+    with open(SCHEMA_SQL_PATH, encoding="utf-8") as f:
         schema = f.read()
     overlay_conn.executescript(schema)
 

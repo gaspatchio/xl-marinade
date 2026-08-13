@@ -19,7 +19,7 @@ from typing import Any
 
 # `document` is provided lazily via __getattr__ (PEP 562), so static analysers
 # can't see it as a module attribute — the export is intentional.
-__all__ = ["document"]  # pyright: ignore[reportUnsupportedDunderAll]
+__all__ = ["document"]  # noqa: F822 # pyright: ignore[reportUnsupportedDunderAll]
 
 
 def __getattr__(name: str) -> Any:  # PEP 562 — lazy attribute access

@@ -71,7 +71,14 @@ target-version = "py311"
 # Enforced at launch (blocking in CI). The N (naming), C4 (comprehension style),
 # and SIM (refactor suggestions) families are deferred stylistic passes — a
 # tracked post-launch cleanup, not launch blockers.
-select = ["E", "F", "W", "I", "UP", "B", "A"]
+# PLW1514 (unspecified-encoding) is preview-only; explicit-preview-rules
+# scopes preview to rules named here, leaving every other rule stable. It
+# guards the Windows/locale crash class: text I/O without encoding="utf-8"
+# decodes with the platform code page (cp1252 on Windows) and dies on the
+# first non-ASCII byte.
+preview = true
+explicit-preview-rules = true
+select = ["E", "F", "W", "I", "UP", "B", "A", "PLW1514"]
 ignore = [
     "E501",   # line-too-long: mostly long log strings/URLs; deferred cleanup
     "E402",   # module-import-not-at-top: several intentional late/conditional imports

@@ -2221,7 +2221,7 @@ def run_fast_extraction(
 
     # Load schema
     schema_path = Path(__file__).parent / "schema.sql"
-    with open(schema_path) as f:
+    with open(schema_path, encoding="utf-8") as f:
         schema_sql = f.read()
 
     try:
@@ -2814,7 +2814,7 @@ def run_full_workbook_extraction(
     build_db_path = output_db.parent / f"{output_db.stem}_build.db"
 
     schema_path = Path(__file__).parent / "schema.sql"
-    with open(schema_path) as f:
+    with open(schema_path, encoding="utf-8") as f:
         schema_sql = f.read()
 
     try:
