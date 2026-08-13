@@ -891,7 +891,7 @@ class EnrichmentService:
         if attempt.model:
             record["model"] = attempt.model
 
-        with open(self.audit_log_path, "a", encoding="utf-8") as f:
+        with open(self.audit_log_path, "a", encoding="utf-8", newline="\n") as f:
             f.write(json.dumps(record) + "\n")
 
     def _redact_request(self, request: Any) -> dict[str, Any]:

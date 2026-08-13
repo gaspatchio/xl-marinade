@@ -909,8 +909,8 @@ class MutationLogger:
         Args:
             path: Output file path for mutations.json
         """
-        with open(path, "w", encoding="utf-8") as f:
+        with open(path, "w", encoding="utf-8", newline="\n") as f:
             json.dump(self.mutations, f, indent=2)
         # Ensure trailing newline
-        with open(path, "a", encoding="utf-8") as f:
+        with open(path, "a", encoding="utf-8", newline="\n") as f:
             f.write("\n")

@@ -129,7 +129,7 @@ def diff(
 
     payload = json.dumps(result, indent=2, default=str)
     if out is not None:
-        out.write_text(payload, encoding="utf-8")
+        out.write_text(payload, encoding="utf-8", newline="\n")
         _err.print(f"[green]wrote[/] {out}")
     else:
         typer.echo(payload)

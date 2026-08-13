@@ -2740,9 +2740,9 @@ def run_fast_extraction(
         telemetry_fast_path = output_db.parent / "telemetry_fast.json"
         try:
             telemetry_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(telemetry_path, "w", encoding="utf-8") as handle:
+            with open(telemetry_path, "w", encoding="utf-8", newline="\n") as handle:
                 json.dump(telemetry_payload, handle, indent=2)
-            with open(telemetry_fast_path, "w", encoding="utf-8") as handle:
+            with open(telemetry_fast_path, "w", encoding="utf-8", newline="\n") as handle:
                 json.dump(telemetry_payload, handle, indent=2)
         except OSError as exc:
             print(f"Warning: failed to write telemetry.json: {exc}", file=sys.stderr)
@@ -2765,9 +2765,9 @@ def run_fast_extraction(
         }
         try:
             telemetry_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(telemetry_path, "w", encoding="utf-8") as handle:
+            with open(telemetry_path, "w", encoding="utf-8", newline="\n") as handle:
                 json.dump(failure_payload, handle, indent=2)
-            with open(telemetry_fast_path, "w", encoding="utf-8") as handle:
+            with open(telemetry_fast_path, "w", encoding="utf-8", newline="\n") as handle:
                 json.dump(failure_payload, handle, indent=2)
         except OSError:
             pass
@@ -3284,7 +3284,7 @@ def run_full_workbook_extraction(
         telemetry_path = output_db.parent / "telemetry.json"
         try:
             telemetry_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(telemetry_path, "w", encoding="utf-8") as handle:
+            with open(telemetry_path, "w", encoding="utf-8", newline="\n") as handle:
                 json.dump(telemetry_payload, handle, indent=2)
         except OSError as exc:
             print(f"Warning: failed to write telemetry.json: {exc}", file=sys.stderr)
