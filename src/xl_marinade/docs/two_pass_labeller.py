@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from xl_marinade.core.db_uri import connect_read_only
 from xl_marinade.core.labelling.mutation_engine import (
     MutationLogger,
     OverlayState,
@@ -89,7 +90,7 @@ class TwoPassLabellingEngine:
         the dependency graph) will be filtered out in build_graph().
         """
         start_time = time.perf_counter()
-        conn = sqlite3.connect(f"file:{self.ir_db_path}?mode=ro", uri=True)
+        conn = connect_read_only(self.ir_db_path)
 
         # Use agent_bindings view for compatibility with both legacy and fast schemas
         try:

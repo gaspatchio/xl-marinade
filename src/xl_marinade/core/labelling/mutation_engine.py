@@ -2,11 +2,12 @@
 # ABOUTME: Handles set_label mutations for Sprint 1, extensible for future mutation types
 
 import json
-import sqlite3
 from dataclasses import dataclass, field
 from typing import Any
 
 from loguru import logger
+
+from xl_marinade.core.db_uri import connect_read_only
 
 from . import structural_mutations
 from .mutation_errors import (
@@ -262,7 +263,7 @@ def validate_mutations(mutations: list[dict[str, Any]], ir_db_path: str) -> None
         validate_mutation_schema(mutation)
 
     # 3. Load IR binding IDs for FK validation (fast or legacy schema)
-    ir_conn = sqlite3.connect(f"file:{ir_db_path}?mode=ro", uri=True)
+    ir_conn = connect_read_only(ir_db_path)
     cursor = ir_conn.cursor()
     cursor.execute("SELECT name FROM sqlite_master WHERE type IN ('table', 'view')")
     objects = {row[0] for row in cursor.fetchall()}

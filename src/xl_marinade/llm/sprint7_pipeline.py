@@ -51,6 +51,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from xl_marinade.core.db_uri import connect_read_only
 from xl_marinade.core.labelling.mutation_engine import MutationLogger, replay_mutations
 from xl_marinade.core.labelling.overlay_database import write_overlay_to_db
 from xl_marinade.llm.enrichment_service import (
@@ -148,7 +149,7 @@ def validate_fast_extraction(ir_db_path: str) -> None:
     Raises:
         ValueError: If build_mode != "fast"
     """
-    conn = sqlite3.connect(f"file:{ir_db_path}?mode=ro", uri=True)
+    conn = connect_read_only(ir_db_path)
     try:
         cursor = conn.execute("SELECT value FROM ir_metadata WHERE key='build_mode'")
         row = cursor.fetchone()
@@ -247,7 +248,7 @@ def _fetch_formula_evidence(
     representative_formulas: list[str] = []
     function_tokens: dict[str, int] = {}
 
-    conn = sqlite3.connect(f"file:{ir_db_path}?mode=ro", uri=True)
+    conn = connect_read_only(ir_db_path)
     try:
         objects = {
             row[0]
@@ -347,7 +348,7 @@ def _seed_baseline_mutation_if_needed(
     if mutation_logger.mutations:
         return
 
-    conn = sqlite3.connect(f"file:{ir_db_path}?mode=ro", uri=True)
+    conn = connect_read_only(ir_db_path)
     try:
         objects = {
             row[0]
@@ -890,7 +891,7 @@ def _create_baseline_overlay_with_dummy_mutation(
     """
 
     # Get first binding from IR to create a dummy mutation
-    conn = sqlite3.connect(f"file:{ir_db_path}?mode=ro", uri=True)
+    conn = connect_read_only(ir_db_path)
     cursor = conn.execute("SELECT name FROM sqlite_master WHERE type IN ('table', 'view')")
     objects = {row[0] for row in cursor.fetchall()}
 

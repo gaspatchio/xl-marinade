@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from xl_marinade.core.db_uri import connect_read_only
 from xl_marinade.core.grouping.geometry import BoundingBox, parse_a1_address
 from xl_marinade.core.parser import (
     ASTNode,
@@ -2485,7 +2486,7 @@ def generate_json_spec(overlay_db_path: str, ir_db_path: str, output_path: str) 
     # Connect to databases. overlay_conn needs uri=True so attach_ir_to_overlay()'s
     # `ATTACH DATABASE 'file:...?mode=ro'` below is parsed as a URI on this connection.
     overlay_conn = sqlite3.connect(overlay_db_path, uri=True)
-    ir_conn = sqlite3.connect(f"file:{ir_db_path}?mode=ro", uri=True)
+    ir_conn = connect_read_only(ir_db_path)
 
     try:
         # Attach IR to overlay for joins

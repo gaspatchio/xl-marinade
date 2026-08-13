@@ -6,6 +6,8 @@ import sqlite3
 from collections import Counter
 from pathlib import Path
 
+from xl_marinade.core.db_uri import attach_read_only
+
 logger = logging.getLogger(__name__)
 
 
@@ -53,7 +55,7 @@ class SheetContextRefiner:
         # as a URI rather than a literal filename — matches the pattern used in
         # two_pass_labeller.py and core/labelling/overlay_database.py.
         overlay_conn = sqlite3.connect(overlay_db_path, uri=True)
-        overlay_conn.execute(f"ATTACH DATABASE 'file:{self.ir_db_path}?mode=ro' AS ir")
+        attach_read_only(overlay_conn, self.ir_db_path, "ir")
 
         # Group bindings by sheet
         sheet_groups = self._group_bindings_by_sheet(overlay_conn)
