@@ -14,6 +14,7 @@ Design reference: §6.2 Principle 3/4, §6.5, §7.1 of memory_efficient_extracti
 """
 
 import hashlib
+import os
 import sqlite3
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -638,18 +639,33 @@ class BulkLoader:
 
         output_path = Path(output_path)
 
-        # Remove existing output
-        if output_path.exists():
-            output_path.unlink()
+        # VACUUM INTO a sibling temp file, then replace the target atomically.
+        # Deleting the target first (as this used to) meant a VACUUM that
+        # failed part-way — a full disk is the realistic case, and it is
+        # exactly when a user re-runs an extraction — destroyed the previous
+        # good database and produced no new one. os.replace is atomic on
+        # POSIX and on Windows for same-volume paths, so the target is either
+        # the old database or the complete new one, never nothing.
+        # VACUUM INTO refuses to write an existing file, so clear any temp
+        # left behind by an earlier interrupted run.
+        tmp_path = output_path.with_name(output_path.name + ".tmp-vacuum")
+        if tmp_path.exists():
+            tmp_path.unlink()
 
         # VACUUM INTO (requires SQLite 3.27+)
         # Use parameterized query to prevent SQL injection
-        with self.conn:
-            self.conn.execute("VACUUM INTO ?", (str(output_path),))
+        try:
+            with self.conn:
+                self.conn.execute("VACUUM INTO ?", (str(tmp_path),))
+        except BaseException:
+            tmp_path.unlink(missing_ok=True)
+            raise
 
         # Close connection (no writes after VACUUM INTO)
         self.conn.close()
         self.conn = None
+
+        os.replace(tmp_path, output_path)
 
     def get_peak_rss_mb(self) -> float:
         """
