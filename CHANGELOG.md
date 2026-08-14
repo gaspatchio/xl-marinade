@@ -8,6 +8,13 @@ schema is a versioned public contract.
 ## [Unreleased]
 
 ### Fixed
+- A failed or interrupted `marinade extract` no longer destroys the previous
+  output database. The final VACUUM wrote to the target after unlinking it, so
+  a full disk or a Ctrl-C left the user with neither the old database nor a new
+  one; the write now goes to a sibling temp file moved into place atomically.
+  Note the tradeoff: the previous database is retained until the new one is
+  complete, so extraction now needs room for both at once and fails cleanly on
+  a nearly-full disk where it previously succeeded destructively.
 - `marinade extract` crashed on ANY workbook under a non-UTF-8 locale
   (`'charmap' codec can't decode byte 0x90` on Windows): text files were
   read and written with the platform's default encoding. All text I/O now

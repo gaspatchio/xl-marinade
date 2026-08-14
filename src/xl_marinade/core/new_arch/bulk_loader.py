@@ -665,7 +665,14 @@ class BulkLoader:
         self.conn.close()
         self.conn = None
 
-        os.replace(tmp_path, output_path)
+        # os.replace consumes tmp_path on success, so the unlink is a no-op
+        # then. It matters on failure — a Windows PermissionError when another
+        # process still holds the output open would otherwise strand a
+        # full-size .tmp-vacuum next to the database the caller still has.
+        try:
+            os.replace(tmp_path, output_path)
+        finally:
+            tmp_path.unlink(missing_ok=True)
 
     def get_peak_rss_mb(self) -> float:
         """
