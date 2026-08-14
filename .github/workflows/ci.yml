@@ -56,6 +56,23 @@ jobs:
         # Windows' default shell).
         run: uv run pytest tests/ -q
 
+  # The branch ruleset requires a check named exactly "Tests". Matrix jobs
+  # report one context per leg ("Tests (windows-latest, py3.13)"), so making
+  # `tests` a matrix removed the required context entirely — every PR would
+  # wait forever on a check that can no longer report. This job keeps that one
+  # name stable and green only when every leg passed, so the matrix can grow or
+  # shrink without touching branch protection.
+  tests-gate:
+    name: Tests
+    needs: tests
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every matrix leg to have succeeded
+        run: |
+          echo "matrix result: ${{ needs.tests.result }}"
+          test "${{ needs.tests.result }}" = "success"
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
