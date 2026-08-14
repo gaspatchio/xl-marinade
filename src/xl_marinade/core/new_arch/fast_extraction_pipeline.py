@@ -817,6 +817,17 @@ SCHEMA_VERSION = "3.0"
 BUILD_MODE = "fast"
 
 
+def telemetry_path_for(output_db: Path, kind: str = "telemetry") -> Path:
+    """Return the sidecar telemetry path for ``output_db``.
+
+    Named after the database rather than a fixed ``telemetry.json``, which
+    silently overwrote any same-named file in a directory the user chose for
+    their own artifacts — and collided between two extractions sharing an
+    output directory (issue #31).
+    """
+    return output_db.with_name(f"{output_db.name}.{kind}.json")
+
+
 def get_git_sha() -> str:
     """Get current git commit SHA."""
     try:
@@ -2736,8 +2747,8 @@ def run_fast_extraction(
             },
         }
 
-        telemetry_path = output_db.parent / "telemetry.json"
-        telemetry_fast_path = output_db.parent / "telemetry_fast.json"
+        telemetry_path = telemetry_path_for(output_db)
+        telemetry_fast_path = telemetry_path_for(output_db, "telemetry_fast")
         try:
             telemetry_path.parent.mkdir(parents=True, exist_ok=True)
             with open(telemetry_path, "w", encoding="utf-8", newline="\n") as handle:
@@ -2750,8 +2761,8 @@ def run_fast_extraction(
         return telemetry_payload
 
     except Exception as e:
-        telemetry_path = output_db.parent / "telemetry.json"
-        telemetry_fast_path = output_db.parent / "telemetry_fast.json"
+        telemetry_path = telemetry_path_for(output_db)
+        telemetry_fast_path = telemetry_path_for(output_db, "telemetry_fast")
         failure_payload = {
             "schema_version": SCHEMA_VERSION,
             "build_mode": BUILD_MODE,
@@ -3281,7 +3292,7 @@ def run_full_workbook_extraction(
             },
         }
 
-        telemetry_path = output_db.parent / "telemetry.json"
+        telemetry_path = telemetry_path_for(output_db)
         try:
             telemetry_path.parent.mkdir(parents=True, exist_ok=True)
             with open(telemetry_path, "w", encoding="utf-8", newline="\n") as handle:

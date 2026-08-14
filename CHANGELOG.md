@@ -7,7 +7,22 @@ schema is a versioned public contract.
 
 ## [Unreleased]
 
+### Added
+- `marinade --version` (and `-V`) report the installed version. Previously the
+  only way to learn it was package metadata.
+
+### Changed
+- Extraction telemetry is written to `<database>.telemetry.json` beside the
+  output rather than a fixed `telemetry.json`. The old fixed name silently
+  overwrote any same-named file in the chosen directory, and two extractions
+  sharing an output directory clobbered each other's telemetry.
+
 ### Fixed
+- `marinade extract -o <dir>/<file>` now creates a missing output directory
+  instead of failing with SQLite's bare `unable to open database file`, which
+  named neither the cause nor the path and arrived after the CLI had already
+  printed the output path as though it were fine. If the directory cannot be
+  created, the error now names it.
 - A database path containing `#`, `%HH` or `'` no longer opens the wrong file.
   Read-only opens built a SQLite URI by interpolating the path into
   `file:{path}?mode=ro`, so SQLite parsed filename characters as URI syntax: a
