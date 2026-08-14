@@ -95,11 +95,20 @@ def test_docs_schema_version_claims_match_the_pipeline_constant():
             if SCHEMA_CONTEXT in run_up and CLAIM_ANCHOR in claim_run_up:
                 found.append((path, match.group(1)))
 
-    assert found, (
-        "no schema-version claim found in docs/ or skills/ — the prose was reworded "
-        "and this "
-        f"test silently stopped checking. Update SCHEMA_CONTEXT in {__file__}."
-    )
+    # Per-root, not aggregate: docs/ and skills/ ship independently, so one
+    # tree's claim must not stand in for the other's. Asserting only that
+    # *some* claim exists would let the skill's claim be reworded away while
+    # the docs claim kept the test green — the silent-loss-of-coverage failure
+    # this guard exists to prevent.
+    for root in PROSE_ROOTS:
+        if not root.is_dir():
+            continue
+        assert any(root in path.parents for path, _ in found), (
+            f"no live schema-version claim found under {root.name}/ — either the "
+            "prose was reworded (update CLAIM_ANCHOR/SCHEMA_CONTEXT in "
+            f"{Path(__file__).name}) or that tree stopped stating the version, in "
+            "which case drop it from PROSE_ROOTS deliberately."
+        )
     wrong = [(str(p), v) for p, v in found if v != SCHEMA_VERSION]
     assert not wrong, (
         f"docs claim a stale output-schema version (pipeline says {SCHEMA_VERSION}): {wrong}"
