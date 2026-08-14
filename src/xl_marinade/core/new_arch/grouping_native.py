@@ -2395,6 +2395,44 @@ def _write_bindings_to_db(
         )
     """)
 
+    # formula_id is set above from the binding's spatial top-left cell, which is
+    # the wrong choice on a MIXED binding: when the first data row carries a
+    # special case — an unguarded first period, a ROUND that only applies to the
+    # opening row — that one-off became agent_bindings.formula_pattern for the
+    # whole range. Observed at 1 occurrence against 110 on a real UL projection
+    # (issue #12), where trusting it drops the lapse gate that appears from the
+    # second row on.
+    #
+    # Re-point it at the binding's DOMINANT formula. Ties keep the top-left,
+    # which is both the previous behaviour and a total order — MIN(cell_id) is
+    # the spatial top-left because cell_id packs (sheet, row, col) row-major, so
+    # the choice stays deterministic across runs and platforms.
+    #
+    # Done as one set-based pass rather than per binding: the alternative needs
+    # a cell_id -> formula_id map in Python, which is ~200 MB on a 2.3M-formula
+    # model.
+    conn.execute("""
+        UPDATE bindings
+        SET formula_id = (
+            SELECT c.formula_id
+            FROM cell_to_binding ctb
+            JOIN cells c ON c.cell_id = ctb.cell_id
+            WHERE ctb.binding_id = bindings.binding_id
+              AND c.formula_id IS NOT NULL
+            GROUP BY c.formula_id
+            ORDER BY COUNT(*) DESC, MIN(c.cell_id) ASC
+            LIMIT 1
+        )
+        WHERE binding_type = 'formula'
+          AND EXISTS (
+              SELECT 1
+              FROM cell_to_binding ctb
+              JOIN cells c ON c.cell_id = ctb.cell_id
+              WHERE ctb.binding_id = bindings.binding_id
+                AND c.formula_id IS NOT NULL
+          )
+    """)
+
     if has_label_candidate_table and label_candidate_rows:
         label_candidate_rows.sort(
             key=lambda row: (row[0], row[4], row[5], row[6], row[1], row[2], row[3])
