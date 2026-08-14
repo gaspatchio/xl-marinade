@@ -47,7 +47,12 @@ def _text_writes_without_newline(py: Path) -> list[str]:
         is_write = any(m in {"w", "a", "wt", "at"} for m in modes) or name == "write_text"
         if not is_write or "encoding" not in kwargs:
             continue
-        if "newline" not in kwargs:
+        # The VALUE matters, not just the keyword. `newline=None` is the
+        # default that translates "\n" to os.linesep — accepting it would let
+        # the exact bug back in while the gate stayed green, and on POSIX no
+        # runtime check would notice.
+        newline = next((kw.value for kw in node.keywords if kw.arg == "newline"), None)
+        if not isinstance(newline, ast.Constant) or newline.value != "\n":
             out.append(f"{py.relative_to(SRC)}:{node.lineno}")
     return out
 
