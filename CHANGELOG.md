@@ -18,6 +18,13 @@ schema is a versioned public contract.
   sharing an output directory clobbered each other's telemetry.
 
 ### Fixed
+- `agent_bindings.formula_pattern` now reports the binding's **dominant**
+  formula instead of its top-left cell's. On a binding the init merger created
+  by folding an initialisation cell into the range it seeds, the top-left is the
+  one-off — observed reporting a formula holding 1 cell of 111 on a real UL
+  projection. Worse on a recurrence: the init formula carries no self-reference,
+  so a consumer reading `formula_pattern` to detect recursion saw none. Ties
+  keep the top-left, so single-formula bindings are unchanged.
 - `marinade extract -o <dir>/<file>` now creates a missing output directory
   instead of failing with SQLite's bare `unable to open database file`, which
   named neither the cause nor the path and arrived after the CLI had already
