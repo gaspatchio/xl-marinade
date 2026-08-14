@@ -480,7 +480,7 @@ def replay_mutations(
         MutationSequenceError: If sequence invalid
     """
     # 1. Load mutations
-    with open(mutations_path) as f:
+    with open(mutations_path, encoding="utf-8") as f:
         mutations = json.load(f)
 
     # 2. Validate all mutations (all-or-nothing)
@@ -890,7 +890,7 @@ class MutationLogger:
             If file exists, loads mutations and sets next_id to max(existing_ids) + 1.
         """
         try:
-            with open(path) as f:
+            with open(path, encoding="utf-8") as f:
                 existing_mutations = json.load(f)
                 self.mutations = existing_mutations
                 if existing_mutations:
@@ -909,8 +909,8 @@ class MutationLogger:
         Args:
             path: Output file path for mutations.json
         """
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             json.dump(self.mutations, f, indent=2)
         # Ensure trailing newline
-        with open(path, "a") as f:
+        with open(path, "a", encoding="utf-8") as f:
             f.write("\n")

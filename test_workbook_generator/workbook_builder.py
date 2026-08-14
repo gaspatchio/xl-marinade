@@ -371,12 +371,12 @@ def create_validation_report(wb: Workbook, output_path: Path | None = None) -> s
 
         # Save to file if path provided
         if output_path:
-            output_path.write_text(report)
+            output_path.write_text(report, encoding="utf-8")
 
         return report
 
     except Exception as e:
         error_report = f"Error creating validation report: {e}"
         if output_path:
-            output_path.write_text(error_report)
+            output_path.write_text(error_report, encoding="utf-8")
         return error_report

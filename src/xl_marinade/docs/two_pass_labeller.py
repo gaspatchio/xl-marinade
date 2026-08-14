@@ -796,7 +796,9 @@ class TwoPassLabellingEngine:
 
         start_time = time.perf_counter()
         # Write mutations to temporary file for replay
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".json", delete=False, encoding="utf-8"
+        ) as f:
             json.dump(self.mutation_logger.mutations, f)
             temp_path = f.name
 

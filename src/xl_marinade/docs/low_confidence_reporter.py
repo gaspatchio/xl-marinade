@@ -61,7 +61,7 @@ def generate_review_report(
     # Sort cases by lowest confidence first
     cases_sorted = sorted(cases, key=lambda c: min(c.label_confidence, c.classification_confidence))
 
-    with open(output_path, "w") as f:
+    with open(output_path, "w", encoding="utf-8") as f:
         f.write("# Low-Confidence Labeling & Classification Review\n\n")
         f.write(f"**Confidence Threshold:** {threshold:.2f}\n\n")
         f.write(f"**Total Cases Flagged:** {len(cases)}\n\n")

@@ -2453,7 +2453,7 @@ def validate_json_spec(spec: dict[str, Any]) -> list[str]:
 
     # Load schema lazily to avoid module-level side effects
     try:
-        with open(SCHEMA_PATH) as f:
+        with open(SCHEMA_PATH, encoding="utf-8") as f:
             schema = json.load(f)
     except (OSError, json.JSONDecodeError) as e:
         return [f"Failed to load schema from {SCHEMA_PATH}: {e}"]
@@ -2568,7 +2568,7 @@ def generate_json_spec(overlay_db_path: str, ir_db_path: str, output_path: str) 
 
         # Write to file with pretty formatting and trailing newline
         write_start = time.perf_counter()
-        with open(output_path, "w") as f:
+        with open(output_path, "w", encoding="utf-8") as f:
             json.dump(spec, f, indent=2)
             f.write("\n")
         _log_timing("write_spec_file", time.perf_counter() - write_start)

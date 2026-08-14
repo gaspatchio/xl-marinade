@@ -120,7 +120,7 @@ class MarkdownGenerator:
                 raise FileNotFoundError(f"Spec file not found: {spec_path}")
 
             load_start = time.perf_counter()
-            with open(spec_path) as f:
+            with open(spec_path, encoding="utf-8") as f:
                 spec = json.load(f)
             _log_timing("load_spec", time.perf_counter() - load_start)
         else:
@@ -211,7 +211,7 @@ class MarkdownGenerator:
         output_file.parent.mkdir(parents=True, exist_ok=True)
 
         write_start = time.perf_counter()
-        with open(output_file, "w") as f:
+        with open(output_file, "w", encoding="utf-8") as f:
             f.write(markdown)
         _log_timing("write_markdown", time.perf_counter() - write_start)
 

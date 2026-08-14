@@ -26,7 +26,10 @@ _err = Console(stderr=True)
 
 @app.callback()
 def _main() -> None:
-    """XL Marinade — deterministic Excel formula-graph extractor."""
+    """XL Marinade - deterministic Excel formula-graph extractor."""
+    # ASCII only: this docstring is rendered into --help on stdout, which is
+    # strict-encoded under a non-UTF-8 locale (cp932/cp949 Windows pipes, legacy
+    # latin-1 locales) -- a non-ASCII character there crashes `marinade --help`.
 
 
 @app.command()

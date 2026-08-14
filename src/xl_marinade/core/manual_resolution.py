@@ -94,7 +94,7 @@ def load_manual_resolutions(json_path: Path) -> dict[str, dict[str, Any]]:
         ValueError: If JSON is invalid or missing required fields
     """
     try:
-        with open(json_path) as f:
+        with open(json_path, encoding="utf-8") as f:
             data = json.load(f)
     except json.JSONDecodeError as e:
         raise ValueError(f"Invalid JSON in manual resolutions file: {e}") from e

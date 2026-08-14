@@ -7,6 +7,12 @@ schema is a versioned public contract.
 
 ## [Unreleased]
 
+### Fixed
+- `marinade extract` crashed on ANY workbook under a non-UTF-8 locale
+  (`'charmap' codec can't decode byte 0x90` on Windows): text files were
+  read and written with the platform's default encoding. All text I/O now
+  passes `encoding="utf-8"` explicitly, enforced by ruff's PLW1514.
+
 ## [0.2.0] - 2026-08-06
 
 ### Changed
