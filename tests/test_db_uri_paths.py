@@ -103,6 +103,24 @@ def test_no_raw_uri_interpolation_remains():
     )
 
 
+def test_attach_alias_must_be_an_identifier(tmp_path):
+    """The one thing left interpolated into SQL is checked instead of bound.
+
+    An ATTACH alias is a SQL identifier, so it cannot be a bound parameter.
+    Callers pass a literal today; this keeps that from silently becoming an
+    injection point.
+    """
+    db = _make_db("plain", tmp_path)
+    conn = sqlite3.connect(":memory:", uri=True)
+    try:
+        with pytest.raises(ValueError, match="plain identifier"):
+            attach_read_only(conn, db, "ir; DROP TABLE cells; --")
+        attach_read_only(conn, db, "ir")  # the literal callers actually use
+        assert conn.execute("SELECT COUNT(*) FROM ir.agent_cells").fetchone()[0] >= 0
+    finally:
+        conn.close()
+
+
 def test_diff_end_to_end_under_hostile_directory(tmp_path):
     """`marinade diff` is a full product path over two read-only URI opens."""
     from xl_marinade.core.api import diff

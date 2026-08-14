@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: 2026 Klaas Stijnen
-#
-# SPDX-License-Identifier: MIT
 """Safe SQLite URI construction for read-only database opens.
 
 Interpolating a filesystem path into ``f"file:{path}?mode=ro"`` is wrong: the
@@ -43,5 +40,18 @@ def attach_read_only(conn: sqlite3.Connection, path: str | Path, alias: str) -> 
     connection must have been opened with ``uri=True`` for SQLite to parse the
     bound value as a URI — every caller here uses ``connect_read_only`` or
     passes ``uri=True`` explicitly.
+
+    ``alias`` is a SQL identifier, which cannot be bound as a parameter, so it
+    is checked instead. Every caller today passes the literal ``"ir"``; the
+    guard is what keeps that from quietly becoming an injection point if a
+    future caller derives the alias from input.
+
+    Raises:
+        ValueError: If ``alias`` is not a plain identifier.
     """
+    if not alias.isidentifier():
+        raise ValueError(
+            f"ATTACH alias must be a plain identifier, got {alias!r}. "
+            "Aliases are SQL identifiers and cannot be parameter-bound."
+        )
     conn.execute(f"ATTACH DATABASE ? AS {alias}", (read_only_uri(path),))
