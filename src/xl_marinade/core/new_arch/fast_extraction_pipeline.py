@@ -22,11 +22,11 @@ Design reference: docs/phase2_documentation_agent/design/memory_efficient_extrac
 import bisect
 import contextlib
 import hashlib
+import importlib.metadata
 import json
 import logging
 import re
 import sqlite3
-import subprocess
 import sys
 import time
 import zipfile
@@ -828,20 +828,21 @@ def telemetry_path_for(output_db: Path, kind: str = "telemetry") -> Path:
     return output_db.with_name(f"{output_db.name}.{kind}.json")
 
 
-def get_git_sha() -> str:
-    """Get current git commit SHA."""
+def get_extractor_version() -> str:
+    """Version of the installed extractor, stamped into every artifact.
+
+    Deliberately NOT `git rev-parse`. That read the *caller's* working
+    directory, so the IR recorded whichever repository the user happened to be
+    standing in; and it ran a 5-second subprocess, so under load the timeout
+    fired on one run and not the next — two extractions of the same workbook
+    then disagreed on `extractor_git_sha`, which is a non-empty self-diff of an
+    artifact whose whole promise is determinism. Package metadata is constant
+    for an installed version and needs no subprocess, so it cannot time out,
+    cannot pick up an unrelated repository, and cannot fail the run.
+    """
     try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=5,
-            check=True,
-        )
-        return result.stdout.strip()
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
+        return importlib.metadata.version("xl-marinade")
+    except importlib.metadata.PackageNotFoundError:  # running from a source tree
         return "unknown"
 
 
@@ -2226,7 +2227,7 @@ def run_fast_extraction(
     print(f"  Memory budget: {max_memory_mb} MB", file=sys.stderr)
 
     # Get git SHA and workbook checksum
-    git_sha = get_git_sha()
+    extractor_version = get_extractor_version()
     workbook_sha256 = compute_workbook_sha256(workbook_path)
 
     # Create build DB path (temporary)
@@ -2664,7 +2665,7 @@ def run_fast_extraction(
                     "build_mode": BUILD_MODE,
                     "extraction_mode": "rooted",
                     "sqlite_version": sqlite3.sqlite_version,
-                    "extractor_git_sha": git_sha,
+                    "extractor_version": extractor_version,
                     "workbook_sha256": workbook_sha256,
                     "original_filename": Path(workbook_path).name,
                 }
@@ -2730,7 +2731,7 @@ def run_fast_extraction(
             "schema_version": SCHEMA_VERSION,
             "build_mode": BUILD_MODE,
             "sqlite_version": sqlite3.sqlite_version,
-            "extractor_git_sha": git_sha,
+            "extractor_version": extractor_version,
             "workbook_sha256": workbook_sha256,
             "ir_db_path": str(output_db),
             "total_cells": total_cells,
@@ -2767,7 +2768,7 @@ def run_fast_extraction(
             "schema_version": SCHEMA_VERSION,
             "build_mode": BUILD_MODE,
             "sqlite_version": sqlite3.sqlite_version,
-            "extractor_git_sha": git_sha,
+            "extractor_version": extractor_version,
             "workbook_sha256": workbook_sha256,
             "ir_db_path": str(output_db),
             "telemetry": {
@@ -2821,7 +2822,7 @@ def run_full_workbook_extraction(
     print(f"  Output: {output_db}", file=sys.stderr)
     print(f"  Memory budget: {max_memory_mb} MB", file=sys.stderr)
 
-    git_sha = get_git_sha()
+    extractor_version = get_extractor_version()
     workbook_sha256 = compute_workbook_sha256(workbook_path)
 
     build_db_path = output_db.parent / f"{output_db.stem}_build.db"
@@ -3222,7 +3223,7 @@ def run_full_workbook_extraction(
                     "build_mode": BUILD_MODE,
                     "extraction_mode": "full_workbook",
                     "sqlite_version": sqlite3.sqlite_version,
-                    "extractor_git_sha": git_sha,
+                    "extractor_version": extractor_version,
                     "workbook_sha256": workbook_sha256,
                     "original_filename": Path(workbook_path).name,
                 }
@@ -3275,7 +3276,7 @@ def run_full_workbook_extraction(
             "build_mode": BUILD_MODE,
             "extraction_mode": "full_workbook",
             "sqlite_version": sqlite3.sqlite_version,
-            "extractor_git_sha": git_sha,
+            "extractor_version": extractor_version,
             "workbook_sha256": workbook_sha256,
             "ir_db_path": str(output_db),
             "total_cells": total_cells,

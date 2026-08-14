@@ -47,7 +47,7 @@ class TelemetryData:
     sqlite_version: str = ""
     schema_version: str = ""
     build_mode: str = ""
-    extractor_git_sha: str = ""
+    extractor_version: str = ""
     workbook_sha256: str = ""
     ir_db_path: str = ""
 
@@ -76,7 +76,7 @@ class TelemetryData:
             "sqlite_version": self.sqlite_version,
             "schema_version": self.schema_version,
             "build_mode": self.build_mode,
-            "extractor_git_sha": self.extractor_git_sha,
+            "extractor_version": self.extractor_version,
             "workbook_sha256": self.workbook_sha256,
             "ir_db_path": self.ir_db_path,
         }
@@ -173,7 +173,7 @@ class TelemetryCollector:
         sqlite_version: str,
         schema_version: str,
         build_mode: str,
-        extractor_git_sha: str,
+        extractor_version: str,
         workbook_sha256: str,
         ir_db_path: str,
     ) -> None:
@@ -181,7 +181,7 @@ class TelemetryCollector:
         self.data.sqlite_version = sqlite_version
         self.data.schema_version = schema_version
         self.data.build_mode = build_mode
-        self.data.extractor_git_sha = extractor_git_sha
+        self.data.extractor_version = extractor_version
         self.data.workbook_sha256 = workbook_sha256
         self.data.ir_db_path = ir_db_path
 
