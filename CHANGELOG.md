@@ -8,6 +8,12 @@ schema is a versioned public contract.
 ## [Unreleased]
 
 ### Fixed
+- `apply_actuarial_classification` no longer reports failure for a run that
+  succeeded. Its completion banner was the package's only non-ASCII write to
+  stdout, which Windows encodes with the ANSI code page under `errors='strict'`
+  when redirected — and the banner fires after the overlay database is
+  committed, so the `UnicodeEncodeError` turned a finished run into a non-zero
+  exit. The banner is now ASCII and goes to stderr.
 - A failed or interrupted `marinade extract` no longer destroys the previous
   output database. The final VACUUM wrote to the target after unlinking it, so
   a full disk or a Ctrl-C left the user with neither the old database nor a new
