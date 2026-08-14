@@ -7,6 +7,12 @@ schema is a versioned public contract.
 
 ## [Unreleased]
 
+### Fixed
+- `marinade document` is now byte-reproducible: the generation timestamp in
+  `documentation.md` and `model_spec.json` honours `SOURCE_DATE_EPOCH` (the
+  reproducible-builds convention), so two runs over one IR database produce
+  identical artifacts. Without the variable the wall clock is used, as before.
+
 ### Added
 - `marinade --version` (and `-V`) report the installed version. Previously the
   only way to learn it was package metadata.
