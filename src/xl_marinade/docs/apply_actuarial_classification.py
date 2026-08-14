@@ -3,6 +3,7 @@
 
 import logging
 import sqlite3
+import sys
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -472,4 +473,8 @@ if __name__ == "__main__":
         mutations_path=None,  # CLI default, user can extend if needed
     )
 
-    print(f"\n✅ Classified {count} bindings")
+    # stderr + ASCII: stdout is strict-encoded with the platform code page when
+    # redirected or captured (cp1252 on Windows cannot encode U+2705), and this
+    # banner runs AFTER the overlay DB is written — a crash here would make a
+    # completed run look like a failure to any caller reading the exit code.
+    print(f"\nClassified {count} bindings", file=sys.stderr)
