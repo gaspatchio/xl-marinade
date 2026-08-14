@@ -9,6 +9,7 @@ Exit codes: 0 success, 1 generic error, 3 memory-budget exceeded, 4 LLM unavaila
 
 from __future__ import annotations
 
+import importlib.metadata
 import importlib.util
 import json
 from pathlib import Path
@@ -24,8 +25,28 @@ app = typer.Typer(add_completion=False)
 _err = Console(stderr=True)
 
 
+def _version_callback(value: bool) -> None:
+    """Print the installed version and exit, before any argument validation."""
+    if not value:
+        return
+    # Read the installed distribution rather than a module constant: it is the
+    # version the user actually has, and it cannot drift from the package
+    # metadata the way a hand-maintained __version__ can.
+    typer.echo(importlib.metadata.version("xl-marinade"))
+    raise typer.Exit
+
+
 @app.callback()
-def _main() -> None:
+def _main(
+    version: bool = typer.Option(  # noqa: ARG001 - consumed by the eager callback
+        False,
+        "--version",
+        "-V",
+        callback=_version_callback,
+        is_eager=True,
+        help="Show the installed version and exit.",
+    ),
+) -> None:
     """XL Marinade - deterministic Excel formula-graph extractor."""
     # ASCII only: this docstring is rendered into --help on stdout, which is
     # strict-encoded under a non-UTF-8 locale (cp932/cp949 Windows pipes, legacy

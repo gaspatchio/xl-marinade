@@ -36,6 +36,19 @@ def extract(
     )
 
     workbook_path, out_path = Path(workbook), Path(out)
+
+    # Create the output's parent rather than letting SQLite fail on it. The
+    # bare "unable to open database file" names neither the cause nor the path,
+    # and it arrived *after* the CLI had already printed the output path as
+    # though it were fine (issues #17, #31). The telemetry writer alongside
+    # this one already created its parent, so the two disagreed.
+    try:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise ExtractionError(
+            f"cannot create the output directory {str(out_path.parent)!r}: {exc}"
+        ) from exc
+
     try:
         run_full_workbook_extraction(
             workbook_path, out_path, max_memory_mb=max_memory_mb, enrich=enrich
