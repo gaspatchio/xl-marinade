@@ -1,8 +1,5 @@
 name: CI
 
-# Staged under publish/workflows/ until make-public relocates this file to
-# .github/workflows/ in the public tree — it does not run on the private repo.
-
 on:
   push:
     branches: [main]
@@ -20,13 +17,28 @@ concurrency:
 
 jobs:
   tests:
-    name: Tests
-    runs-on: ubuntu-latest
+    name: Tests (${{ matrix.os }}, py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # windows-latest is not optional cover: a user hit a cp1252 decode
+        # crash on EVERY workbook (issue #18) that a POSIX/UTF-8 runner cannot
+        # reproduce. macOS keeps the third path-and-filesystem flavour honest.
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.11", "3.13"]
+        include:
+          # The interpreter the field report came from.
+          - os: windows-latest
+            python-version: "3.14"
+          - os: ubuntu-latest
+            python-version: "3.14"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6
         with:
           version: "latest"
+          python-version: ${{ matrix.python-version }}
           cache-dependency-glob: |
             uv.lock
             pyproject.toml
@@ -39,7 +51,27 @@ jobs:
       #   test_docs_no_llm, test_core_no_egress, test_import_cleanliness,
       #   test_core_no_llm_dep, test_core_no_docagent
       - name: Run tests
-        run: PYTHONPATH=src uv run pytest tests/ -q
+        # pyproject sets pythonpath=src for pytest, so no shell-specific env
+        # prefix is needed (the old PYTHONPATH=src form is not valid on
+        # Windows' default shell).
+        run: uv run pytest tests/ -q
+
+  # The branch ruleset requires a check named exactly "Tests". Matrix jobs
+  # report one context per leg ("Tests (windows-latest, py3.13)"), so making
+  # `tests` a matrix removed the required context entirely — every PR would
+  # wait forever on a check that can no longer report. This job keeps that one
+  # name stable and green only when every leg passed, so the matrix can grow or
+  # shrink without touching branch protection.
+  tests-gate:
+    name: Tests
+    needs: tests
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every matrix leg to have succeeded
+        run: |
+          echo "matrix result: ${{ needs.tests.result }}"
+          test "${{ needs.tests.result }}" = "success"
 
   lint:
     name: Lint
@@ -52,6 +84,12 @@ jobs:
           cache-dependency-glob: |
             uv.lock
             pyproject.toml
+      - name: Check the lockfile is current
+        # CONTRIBUTING tells contributors to run `uv sync --locked`; without
+        # this gate a pyproject change without a relock leaves that command
+        # failing on a fresh clone while CI stays green (`--frozen` skips the
+        # check, and a later bare `uv run` silently re-locks on the runner).
+        run: uv lock --check
       - name: Install dependencies
         run: uv sync --frozen --group dev
       - name: Run ruff check
