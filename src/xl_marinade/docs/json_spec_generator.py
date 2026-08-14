@@ -2568,7 +2568,7 @@ def generate_json_spec(overlay_db_path: str, ir_db_path: str, output_path: str) 
 
         # Write to file with pretty formatting and trailing newline
         write_start = time.perf_counter()
-        with open(output_path, "w", encoding="utf-8") as f:
+        with open(output_path, "w", encoding="utf-8", newline="\n") as f:
             json.dump(spec, f, indent=2)
             f.write("\n")
         _log_timing("write_spec_file", time.perf_counter() - write_start)

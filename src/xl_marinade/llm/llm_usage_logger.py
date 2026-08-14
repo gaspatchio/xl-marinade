@@ -57,5 +57,5 @@ def log_llm_usage(
     if extra:
         event.update(extra)
 
-    with open(path, "a", encoding="utf-8") as f:
+    with open(path, "a", encoding="utf-8", newline="\n") as f:
         f.write(json.dumps(event, sort_keys=True) + "\n")

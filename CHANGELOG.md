@@ -8,6 +8,12 @@ schema is a versioned public contract.
 ## [Unreleased]
 
 ### Fixed
+- Generated text artifacts are now byte-identical across platforms.
+  `documentation.md`, `model_spec.json`, the `marinade diff` changelist,
+  `telemetry.json` and the mutation/usage logs were written in text mode
+  without `newline=`, so Python translated every `\n` to `\r\n` on Windows —
+  spurious diffs for anything hashing or comparing two runs, against a tool
+  whose stated contract is determinism. All text writes now pin `newline="\n"`.
 - `apply_actuarial_classification` no longer reports failure for a run that
   succeeded. Its completion banner was the package's only non-ASCII write to
   stdout, which Windows encodes with the ANSI code page under `errors='strict'`

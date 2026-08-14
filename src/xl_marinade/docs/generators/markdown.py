@@ -211,7 +211,7 @@ class MarkdownGenerator:
         output_file.parent.mkdir(parents=True, exist_ok=True)
 
         write_start = time.perf_counter()
-        with open(output_file, "w", encoding="utf-8") as f:
+        with open(output_file, "w", encoding="utf-8", newline="\n") as f:
             f.write(markdown)
         _log_timing("write_markdown", time.perf_counter() - write_start)
 

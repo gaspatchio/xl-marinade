@@ -395,7 +395,9 @@ def _replay_and_write_overlay(
 
 def _write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n"
+    )
 
 
 def run_sprint7_pipeline(config: Sprint7PipelineConfig) -> Sprint7PipelineResult:
@@ -451,7 +453,7 @@ def run_sprint7_pipeline(config: Sprint7PipelineConfig) -> Sprint7PipelineResult
         else:
             logger.info("Replay-only mode: no existing mutations.json found; nothing to replay")
 
-        with open(rejected_proposals_path, "w", encoding="utf-8") as f:
+        with open(rejected_proposals_path, "w", encoding="utf-8", newline="\n") as f:
             json.dump([], f, indent=2)
         logger.info(f"Rejected proposals written to: {rejected_proposals_path}")
         return result
@@ -841,7 +843,7 @@ def run_sprint7_pipeline(config: Sprint7PipelineConfig) -> Sprint7PipelineResult
     # ========================================================================
 
     # Write rejected proposals
-    with open(rejected_proposals_path, "w", encoding="utf-8") as f:
+    with open(rejected_proposals_path, "w", encoding="utf-8", newline="\n") as f:
         json.dump(rejected_proposals, f, indent=2)
 
     logger.info(f"Rejected proposals written to: {rejected_proposals_path}")
@@ -903,7 +905,7 @@ def _create_baseline_overlay_with_dummy_mutation(
     if not row:
         # No bindings in IR - create empty mutations file
         # (This will fail write_overlay_to_db but that's expected)
-        with open(mutations_path, "w", encoding="utf-8") as f:
+        with open(mutations_path, "w", encoding="utf-8", newline="\n") as f:
             json.dump([], f, indent=2)
         return
 
@@ -923,7 +925,7 @@ def _create_baseline_overlay_with_dummy_mutation(
     }
 
     # Write mutations file
-    with open(mutations_path, "w", encoding="utf-8") as f:
+    with open(mutations_path, "w", encoding="utf-8", newline="\n") as f:
         json.dump([dummy_mutation], f, indent=2)
 
     # Replay to create overlay (enrichment path: skip conflicting mutations)
