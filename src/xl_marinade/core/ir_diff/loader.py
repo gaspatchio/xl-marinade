@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import sqlite3
 
+from xl_marinade.core.db_uri import connect_read_only
 from xl_marinade.core.ir_diff.model import (
     BindingDesc,
     BindingEdgeTuple,
@@ -46,7 +47,7 @@ def load_model(db_path: str) -> IRModel:
     Returns:
         Populated IRModel instance.
     """
-    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    conn = connect_read_only(db_path)
     conn.row_factory = sqlite3.Row
     try:
         return _load(conn)

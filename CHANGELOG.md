@@ -8,6 +8,14 @@ schema is a versioned public contract.
 ## [Unreleased]
 
 ### Fixed
+- A database path containing `#`, `%HH` or `'` no longer opens the wrong file.
+  Read-only opens built a SQLite URI by interpolating the path into
+  `file:{path}?mode=ro`, so SQLite parsed filename characters as URI syntax: a
+  `#` truncated the path at a fragment marker and took `?mode=ro` with it,
+  silently opening — and creating — a different, empty database with no
+  read-only guarantee, which surfaced as "no bindings" rather than an error.
+  Paths now go through `Path.as_uri()`, and ATTACH binds the filename as a
+  parameter.
 - Generated text artifacts are now byte-identical across platforms.
   `documentation.md`, `model_spec.json`, the `marinade diff` changelist,
   `telemetry.json` and the mutation/usage logs were written in text mode

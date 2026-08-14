@@ -8,6 +8,7 @@ from bisect import bisect_right
 from collections import deque
 from pathlib import Path
 
+from xl_marinade.core.db_uri import connect_read_only
 from xl_marinade.core.ref_converter import parse_cell_address
 from xl_marinade.docs.utils.ir_schema import detect_dependency_edges
 
@@ -220,7 +221,7 @@ def build_dependency_graph(ir_db_path: str) -> "nx.DiGraph | dict[str, set[str]]
         raise FileNotFoundError(f"IR database not found: {ir_db_path}")
 
     # Read-only connection
-    conn = sqlite3.connect(f"file:{ir_db_path}?mode=ro", uri=True)
+    conn = connect_read_only(ir_db_path)
 
     # Get root binding IDs from user_roots
     try:

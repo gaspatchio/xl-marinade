@@ -11,6 +11,7 @@ from pathlib import Path
 
 from loguru import logger
 
+from xl_marinade.core.db_uri import connect_read_only
 from xl_marinade.docs.apply_actuarial_classification import apply_actuarial_classification
 from xl_marinade.docs.generators.markdown import MarkdownGenerator
 from xl_marinade.docs.json_spec_generator import generate_json_spec
@@ -30,7 +31,7 @@ def _validate_ir_db(ir_db: Path) -> None:
     fail here with a clean message, not deep in the labeller.
     """
     try:
-        conn = sqlite3.connect(f"file:{ir_db}?mode=ro", uri=True)
+        conn = connect_read_only(ir_db)
         try:
             row = conn.execute("SELECT 1 FROM agent_bindings LIMIT 1").fetchone()
         finally:

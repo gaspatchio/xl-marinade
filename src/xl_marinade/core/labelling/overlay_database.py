@@ -5,6 +5,8 @@ import json
 import sqlite3
 from pathlib import Path
 
+from xl_marinade.core.db_uri import attach_read_only, connect_read_only
+
 from .mutation_engine import DETERMINISTIC_TIMESTAMP, BindingOverlay, OverlayState
 
 # Schema and version constants
@@ -48,7 +50,10 @@ def initialize_overlay_db(ir_db_path: str) -> sqlite3.Connection:
         raise FileNotFoundError(f"IR database not found: {ir_db_path}")
 
     # Create in-memory overlay
-    overlay_conn = sqlite3.connect(":memory:")
+    # uri=True so a later attach_ir_to_overlay() can bind a file: URI on this
+    # connection; harmless for plain paths, which SQLite only treats as URIs
+    # when they start with "file:".
+    overlay_conn = sqlite3.connect(":memory:", uri=True)
     overlay_conn.execute("PRAGMA foreign_keys = ON")
 
     # Load and execute schema
@@ -57,7 +62,7 @@ def initialize_overlay_db(ir_db_path: str) -> sqlite3.Connection:
     overlay_conn.executescript(schema)
 
     # Connect to IR (read-only)
-    ir_conn = sqlite3.connect(f"file:{ir_db_path}?mode=ro", uri=True)
+    ir_conn = connect_read_only(ir_db_path)
 
     # Insert metadata - try fast schema first, fall back to legacy
     try:
@@ -107,7 +112,7 @@ def attach_ir_to_overlay(overlay_conn: sqlite3.Connection, ir_db_path: str) -> N
     if not Path(ir_db_path).exists():
         raise FileNotFoundError(f"IR database not found: {ir_db_path}")
 
-    overlay_conn.execute(f"ATTACH DATABASE 'file:{ir_db_path}?mode=ro' AS ir")
+    attach_read_only(overlay_conn, ir_db_path, "ir")
 
 
 def write_overlay_to_db(

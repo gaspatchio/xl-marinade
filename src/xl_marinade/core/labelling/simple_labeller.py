@@ -8,6 +8,8 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
+from xl_marinade.core.db_uri import connect_read_only
+
 from .header_context import build_header_context
 from .mutation_engine import MutationLogger, replay_mutations
 from .overlay_database import write_overlay_to_db
@@ -632,7 +634,7 @@ def label_all_bindings(
     if not Path(ir_db_path).exists():
         raise FileNotFoundError(f"IR database not found: {ir_db_path}")
 
-    ir_conn = sqlite3.connect(f"file:{ir_db_path}?mode=ro", uri=True)
+    ir_conn = connect_read_only(ir_db_path)
 
     # Get all bindings from agent view
     rows = ir_conn.execute("""

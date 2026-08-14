@@ -45,9 +45,9 @@ See: docs/phase2_documentation_agent/backlog/sprint7/STORY_sprint7_04_dynamic_mu
 """
 
 import logging
-import sqlite3
 from typing import Any
 
+from xl_marinade.core.db_uri import connect_read_only
 from xl_marinade.core.labelling.mutation_engine import (
     MutationLogger,
     OverlayState,
@@ -90,7 +90,7 @@ class InlineMutationManager:
 
     def _load_ir_binding_metadata(self) -> None:
         """Load binding metadata from IR for conservation validation."""
-        conn = sqlite3.connect(f"file:{self.ir_db_path}?mode=ro", uri=True)
+        conn = connect_read_only(self.ir_db_path)
         cursor = conn.cursor()
 
         # Try fast schema first, fall back to legacy
