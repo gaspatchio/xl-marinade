@@ -18,6 +18,14 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4.4.0 — so syft can read pyproject at the tag
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e   # v6 — provides `uvx` for `twine check`
+        with:
+          # PINNED, and this is the job where it matters most: uv decides the
+          # core metadata version written into the wheel. Tracking `latest`
+          # here is what broke v0.3.0's first publish — uv began emitting
+          # Metadata-Version 2.5 and the pinned publisher rejected every
+          # artifact. 0.12.5 is the version that built what is on PyPI now.
+          # Bump deliberately, and re-run a release when you do.
+          version: "0.12.5"
 
       - name: Build sdist + universal wheel
         run: uv build
