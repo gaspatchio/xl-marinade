@@ -7,6 +7,13 @@ schema is a versioned public contract.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-15
+
+A platform-hardening release. 0.2.0 could not complete a single extraction on a
+non-UTF-8 Windows console, and several outputs were not byte-reproducible
+between two runs of the same input — against determinism being the point of the
+artifact. The output schema is unchanged at 3.0.
+
 ### Added
 - `marinade --version` (and `-V`) report the installed version. Previously the
   only way to learn it was package metadata.
