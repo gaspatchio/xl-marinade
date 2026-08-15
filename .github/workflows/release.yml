@@ -33,12 +33,21 @@ jobs:
           output-file: sbom.cdx.json
           upload-release-assets: false  # we attach it manually in the release step
 
+      # NOTE: this runs `uvx twine`, which resolves the LATEST twine, while the
+      # publish action below runs its own pinned copy. The two can disagree —
+      # and did: v0.3.0's first attempt passed here and failed inside the action
+      # on `Metadata-Version: 2.5`. When this step passes and publishing still
+      # rejects the metadata, the action's twine is the stale one, not this.
       - name: Check distribution metadata
         run: uvx twine check --strict dist/*
 
       - name: Publish to PyPI (Trusted Publishing)
         if: github.repository == 'gaspatchio/xl-marinade'
-        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b   # v1.14.0
+        # v1.14.2 is the first release bundling twine 7, which accepts core
+        # metadata 2.5. `setup-uv` tracks `latest`, so uv started emitting 2.5
+        # and the v1.14.0 pin rejected every wheel we built — a stale pin here
+        # breaks releases whenever the build toolchain moves forward.
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33   # v1.14.2
         with:
           packages-dir: dist
           # OIDC Trusted Publishing — no token. PEP 740 attestations are generated automatically.
