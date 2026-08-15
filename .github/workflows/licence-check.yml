@@ -15,6 +15,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6
+        with:
+          version: "0.12.5"   # pinned in lockstep with the other workflows
       - name: Install reuse
         run: uv tool install reuse
       - name: Run reuse lint
@@ -27,6 +29,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6
+        with:
+          version: "0.12.5"   # pinned in lockstep with the other workflows
       - name: Install workspace + pip-licenses
         run: |
           uv sync --frozen
