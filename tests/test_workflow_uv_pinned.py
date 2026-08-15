@@ -35,7 +35,9 @@ NEXT_STEP = re.compile(r"^\s*-\s")
 def _setup_uv_pins() -> list[tuple[str, int, str | None]]:
     """Return (workflow, line number, pinned version or None) per setup-uv step."""
     found: list[tuple[str, int, str | None]] = []
-    for path in sorted(WORKFLOWS.glob("*.yml")):
+    # Both extensions: GitHub Actions runs `.yaml` too, so globbing only `.yml`
+    # would let a new workflow float its uv version with the guard still green.
+    for path in sorted([*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")]):
         lines = path.read_text(encoding="utf-8").splitlines()
         for i, line in enumerate(lines):
             match = SETUP_UV.match(line)
