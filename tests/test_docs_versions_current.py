@@ -21,7 +21,13 @@ import importlib.metadata
 import re
 from pathlib import Path
 
-DOCS = Path(__file__).resolve().parent.parent / "docs"
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# Every tree of user-facing prose that can state a version, not just docs/.
+# skills/using-xl-marinade ships to agents and states the output-schema
+# version verbatim — it is the file whose staleness prompted this guard, and
+# it sat outside the original docs/-only glob (#33).
+PROSE_ROOTS = (REPO_ROOT / "docs", REPO_ROOT / "skills")
 
 # The docs deliberately name no package version — it cannot be kept current, and
 # a reader who needs it can ask the installed distribution. So this is a negative
@@ -42,9 +48,21 @@ QUOTED_VERSION = re.compile(r'`"([0-9]+\.[0-9]+)"`')
 SCHEMA_CONTEXT = "schema_version"
 SCHEMA_LOOKBACK = 250
 
+# Only the *live* claim is guarded — "It is currently `"3.0"`". Prose may also
+# reference older versions on purpose (the skill explains that a database
+# stamped `"2.0"` carries the pre-rename view name), and flagging those would
+# make the guard punish correct documentation.
+CLAIM_ANCHOR = "currently"
+CLAIM_ANCHOR_LOOKBACK = 40
+
 
 def _markdown_sources() -> list[tuple[Path, str]]:
-    return [(p, p.read_text(encoding="utf-8")) for p in sorted(DOCS.rglob("*.md"))]
+    return [
+        (path, path.read_text(encoding="utf-8"))
+        for root in PROSE_ROOTS
+        if root.is_dir()
+        for path in sorted(root.rglob("*.md"))
+    ]
 
 
 def test_docs_never_hardcode_the_package_version():
@@ -56,7 +74,7 @@ def test_docs_never_hardcode_the_package_version():
             ]
             if any(term in window for term in PACKAGE_TERMS):
                 line = text.count("\n", 0, match.start()) + 1
-                offenders.append(f"{path.name}:{line} -> {match.group(0)}")
+                offenders.append(f"{path.relative_to(REPO_ROOT)}:{line} -> {match.group(0)}")
 
     assert not offenders, (
         "docs name a package version, which cannot be kept current — installed is "
@@ -73,13 +91,24 @@ def test_docs_schema_version_claims_match_the_pipeline_constant():
     for path, text in _markdown_sources():
         for match in QUOTED_VERSION.finditer(text):
             run_up = text[max(0, match.start() - SCHEMA_LOOKBACK) : match.start()]
-            if SCHEMA_CONTEXT in run_up:
+            claim_run_up = text[max(0, match.start() - CLAIM_ANCHOR_LOOKBACK) : match.start()]
+            if SCHEMA_CONTEXT in run_up and CLAIM_ANCHOR in claim_run_up:
                 found.append((path, match.group(1)))
 
-    assert found, (
-        "no schema-version claim found in docs/ — the prose was reworded and this "
-        f"test silently stopped checking. Update SCHEMA_CONTEXT in {__file__}."
-    )
+    # Per-root, not aggregate: docs/ and skills/ ship independently, so one
+    # tree's claim must not stand in for the other's. Asserting only that
+    # *some* claim exists would let the skill's claim be reworded away while
+    # the docs claim kept the test green — the silent-loss-of-coverage failure
+    # this guard exists to prevent.
+    for root in PROSE_ROOTS:
+        if not root.is_dir():
+            continue
+        assert any(root in path.parents for path, _ in found), (
+            f"no live schema-version claim found under {root.name}/ — either the "
+            "prose was reworded (update CLAIM_ANCHOR/SCHEMA_CONTEXT in "
+            f"{Path(__file__).name}) or that tree stopped stating the version, in "
+            "which case drop it from PROSE_ROOTS deliberately."
+        )
     wrong = [(str(p), v) for p, v in found if v != SCHEMA_VERSION]
     assert not wrong, (
         f"docs claim a stale output-schema version (pipeline says {SCHEMA_VERSION}): {wrong}"
