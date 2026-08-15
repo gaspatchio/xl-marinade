@@ -7,23 +7,32 @@ schema is a versioned public contract.
 
 ## [Unreleased]
 
-### Fixed
-- `marinade document` is now byte-reproducible: the generation timestamp in
-  `documentation.md` and `model_spec.json` honours `SOURCE_DATE_EPOCH` (the
-  reproducible-builds convention), so two runs over one IR database produce
-  identical artifacts. Without the variable the wall clock is used, as before.
-
 ### Added
 - `marinade --version` (and `-V`) report the installed version. Previously the
   only way to learn it was package metadata.
 
 ### Changed
+- **`ir_metadata` key `extractor_git_sha` is replaced by `extractor_version`.**
+  `ir_metadata` is a base table and carries no compatibility guarantee, so
+  `schema_version` is unchanged — but anything reading that key by name needs
+  updating.
 - Extraction telemetry is written to `<database>.telemetry.json` beside the
   output rather than a fixed `telemetry.json`. The old fixed name silently
   overwrote any same-named file in the chosen directory, and two extractions
   sharing an output directory clobbered each other's telemetry.
 
 ### Fixed
+- Two extractions of the same workbook could disagree. The IR stamped
+  `extractor_git_sha` from `git rev-parse` run in the caller's working
+  directory with a 5-second timeout, so under load the timeout fired on one
+  run and not the next (and any run outside a git checkout recorded
+  `unknown`), producing a non-empty self-diff. The stamp is now
+  `extractor_version`, taken from package metadata: constant per installed
+  version, no subprocess, no dependence on the caller's directory.
+- `marinade document` is now byte-reproducible: the generation timestamp in
+  `documentation.md` and `model_spec.json` honours `SOURCE_DATE_EPOCH` (the
+  reproducible-builds convention), so two runs over one IR database produce
+  identical artifacts. Without the variable the wall clock is used, as before.
 - `agent_bindings.formula_pattern` now reports the binding's **dominant**
   formula instead of its top-left cell's. On a binding the init merger created
   by folding an initialisation cell into the range it seeds, the top-left is the
