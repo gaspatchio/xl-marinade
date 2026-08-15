@@ -4,7 +4,6 @@
 import json
 import logging
 import time
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +12,7 @@ from xl_marinade.docs.utils.formatting import (
     format_time_series,
     format_value_for_display,
 )
+from xl_marinade.docs.utils.generation_time import generation_timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -181,7 +181,7 @@ class MarkdownGenerator:
             "metadata": metadata,
             "variables": variables,
             "variables_by_class": grouped,
-            "generation_timestamp": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            "generation_timestamp": generation_timestamp(),
             "total_variables": len(variables),
             "assumption_count": len(grouped["Assumption"]),
             "policyholder_data_count": len(grouped["Policyholder Data"]),

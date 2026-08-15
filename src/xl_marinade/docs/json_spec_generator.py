@@ -7,7 +7,6 @@ import re
 import sqlite3
 import time
 from collections.abc import Callable, Iterable
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +22,7 @@ from xl_marinade.core.parser import (
 )
 from xl_marinade.docs.semantic_index.axis_extraction import TIME_AXIS_NAME
 from xl_marinade.docs.utils.formula_explainer import generate_explanation
+from xl_marinade.docs.utils.generation_time import generation_timestamp
 from xl_marinade.docs.utils.ir_schema import detect_dependency_edges
 from xl_marinade.docs.utils.range_matching import find_binding_for_range
 
@@ -651,7 +651,7 @@ def create_metadata(
     metadata = {
         "model_name": _pick_model_name(ir_meta),
         "schema_version": "0.5.0",
-        "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "generated_at": generation_timestamp(),
         "workbook_guid": overlay_meta.get("ir_workbook_guid", "unknown"),
         "overlay_version": overlay_meta.get("overlay_version", "0.1"),
     }
