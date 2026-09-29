@@ -58,7 +58,11 @@ from xl_marinade.core.ir_diff.verify import verify_diff
 # individual-cell value_changes set, so row-bindings whose cells changed value
 # are correctly tagged 'changed' (methodology shift) instead of 'same'. Pure
 # enrichment-logic change; stale enrich caches carry the wrong continuity tag.
-IR_DIFF_CACHE_VERSION = 7
+# v8 = issue #42 — unedited cells no longer surface as workbook edits: table
+# members compared by binding position, BINDING_METADATA_CHANGED and edges
+# re-resolved out of unedited formulas tagged ir_inference, and every change
+# now carries an explicit "layer".
+IR_DIFF_CACHE_VERSION = 8
 
 
 def diff_ir(db_a: str, db_b: str) -> dict:
@@ -132,6 +136,15 @@ def diff_ir(db_a: str, db_b: str) -> dict:
     return _build_output(a, b, changes, binding_match, a_norm, b_norm)
 
 
+def _layer_of(change: Change) -> str:
+    """The change's layer: its own override, else the one its type implies."""
+    if change.layer:
+        return change.layer
+    if change.type in CT.IR_INFERENCE_TYPES:
+        return CT.LAYER_IR_INFERENCE
+    return CT.LAYER_WORKBOOK
+
+
 def _classify_formula_change(old_f: str | None, new_f: str | None) -> str:
     """Classify a formula change as reference_shift or logic_change.
 
@@ -178,9 +191,7 @@ def _build_output(
 
     serialized_changes = []
     for i, c in enumerate(changes):
-        entry = {"seq": i + 1, "type": c.type, **c.details}
-        if c.type in CT.IR_INFERENCE_TYPES:
-            entry["layer"] = "ir_inference"
+        entry = {"seq": i + 1, "type": c.type, **c.details, "layer": _layer_of(c)}
         if c.type == CT.BINDING_FORMULA_CHANGED:
             # Backfill old_formula from original model when canonicalization lost it
             if not entry.get("old_formula") and entry.get("binding_id_a"):
@@ -358,8 +369,9 @@ def _build_summary(changes: list[Change]) -> dict:
         "label_evidence_changed": 0,
         "resolution_metrics_changed": 0,
         "metadata_changed": 0,
-        # Roll-up of CT.IR_INFERENCE_TYPES (tables / label evidence / time
-        # annotations): extractor-derived changes, not workbook edits.
+        # Roll-up of every change in the ir_inference layer (tables, label
+        # evidence, binding metadata, time annotations, and edges re-resolved
+        # out of unedited formulas): extractor-derived, not workbook edits.
         "ir_inference_changes": 0,
     }
 
@@ -448,6 +460,6 @@ def _build_summary(changes: list[Change]) -> dict:
         elif c.type in metric_types:
             s["resolution_metrics_changed"] += 1
 
-    s["ir_inference_changes"] = sum(1 for c in changes if c.type in CT.IR_INFERENCE_TYPES)
+    s["ir_inference_changes"] = sum(1 for c in changes if _layer_of(c) == CT.LAYER_IR_INFERENCE)
 
     return s

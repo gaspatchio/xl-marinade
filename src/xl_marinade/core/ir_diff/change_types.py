@@ -166,6 +166,12 @@ SUMMARY_ONLY_TYPES: frozenset[str] = frozenset(
     }
 )
 
+# The changelist's two layers; every emitted change carries one. "workbook" is
+# an edit a person made; "ir_inference" is extractor output that moved as a
+# consequence and must not be counted as an edit.
+LAYER_WORKBOOK = "workbook"
+LAYER_IR_INFERENCE = "ir_inference"
+
 # Change types produced by IR *inference* (the extractor's semantic layer:
 # table-candidate detection, binding-label evidence gathering, binding
 # metadata, time-axis annotation) rather than by a workbook edit. These can

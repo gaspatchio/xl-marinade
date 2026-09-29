@@ -661,14 +661,89 @@ def diff_cells(
     return changes
 
 
+def _formula_stable_cells(a: IRModel, b: IRModel, cell_match: CellMatch) -> set[CellKey]:
+    """Formula cells at the same canonical position in A and B, formula unchanged.
+
+    An edge out of such a cell cannot have moved because the cell was edited:
+    its formula is the same text. When the edge moves anyway, the extractor
+    re-resolved it against something else that changed -- a lookup key's
+    cached value, a defined name's destination, a table's extent -- and that
+    cause is reported as its own change (VALUE_CHANGED,
+    NAME_DESTINATIONS_CHANGED, BINDING_RESIZED, ...).
+
+    Cells matched to a different position (binding-relative matches) are
+    excluded: their edges move with them, and that stays a workbook change.
+    """
+    stable: set[CellKey] = set()
+    for ck_a, ck_b in cell_match.matched.items():
+        if ck_a != ck_b:
+            continue
+        sa, sb = a.cells.get(ck_a), b.cells.get(ck_b)
+        if sa and sb and sa.formula_r1c1 and same_formula(sa.formula_r1c1, sb.formula_r1c1):
+            stable.add(ck_a)
+    return stable
+
+
+def _formula_stable_bindings(
+    a: IRModel,
+    b: IRModel,
+    cell_match: CellMatch,
+    binding_match: BindingMatch,
+    stable_cells: set[CellKey],
+) -> set[BindingKey]:
+    """Bindings at the same position with the same members and no formula edit.
+
+    A binding edge between two such bindings is an aggregate of cell edges out
+    of formula-stable cells, so it can only move for the same reasons they can.
+    Computed as one pass over cell membership that marks the UNstable bindings,
+    so no per-binding member sets are materialised on large workbooks.
+    """
+
+    def unedited(ck: CellKey) -> bool:
+        if cell_match.matched.get(ck) != ck:
+            return False  # added, removed, or matched to another position
+        sa, sb = a.cells.get(ck), b.cells.get(ck)
+        has_formula = bool(sa and sa.formula_r1c1) or bool(sb and sb.formula_r1c1)
+        return not has_formula or ck in stable_cells
+
+    unstable: set[BindingKey] = set()
+    for ck, bkeys_a in a.cell_to_binding.items():
+        bkeys_b = b.cell_to_binding.get(ck, [])
+        if not unedited(ck):
+            unstable.update(bkeys_a, bkeys_b)
+        elif bkeys_a != bkeys_b and set(bkeys_a) != set(bkeys_b):
+            unstable.update(set(bkeys_a) ^ set(bkeys_b))  # membership moved
+    for ck, bkeys_b in b.cell_to_binding.items():
+        if ck not in a.cell_to_binding:
+            unstable.update(bkeys_b)  # member only in B
+
+    return {ak for ak, bk in binding_match.matched.items() if ak == bk and ak not in unstable}
+
+
 def diff_edges(
     a: IRModel,
     b: IRModel,
     cell_match: CellMatch,
     binding_match: BindingMatch,
 ) -> list[Change]:
-    """Diff dependency graph edges."""
+    """Diff dependency graph edges.
+
+    An edge change out of a formula-stable cell (or between formula-stable
+    bindings) is tagged ir_inference: nothing edited that formula, so the edge
+    is a re-resolution, not an edit (issue #42 -- a lookup whose key changed
+    value moved its edges on cells nobody touched).
+    """
     changes = []
+    stable_cells = _formula_stable_cells(a, b, cell_match)
+    stable_bindings = _formula_stable_bindings(a, b, cell_match, binding_match, stable_cells)
+
+    def cell_layer(ck: CellKey) -> str | None:
+        return CT.LAYER_IR_INFERENCE if ck in stable_cells else None
+
+    def binding_layer(from_key: BindingKey, to_key: BindingKey) -> str | None:
+        if from_key in stable_bindings and to_key in stable_bindings:
+            return CT.LAYER_IR_INFERENCE
+        return None
 
     # Cell internal edges
     for edge in sorted(a.cell_edges - b.cell_edges):
@@ -677,6 +752,7 @@ def diff_edges(
                 type=CT.CELL_EDGE_REMOVED,
                 sort_key=(edge.from_key.sheet, edge.from_key.row, edge.from_key.col),
                 details={"from": _ck_str(edge.from_key), "to": _ck_str(edge.to_key)},
+                layer=cell_layer(edge.from_key),
             )
         )
     for edge in sorted(b.cell_edges - a.cell_edges):
@@ -685,6 +761,7 @@ def diff_edges(
                 type=CT.CELL_EDGE_ADDED,
                 sort_key=(edge.from_key.sheet, edge.from_key.row, edge.from_key.col),
                 details={"from": _ck_str(edge.from_key), "to": _ck_str(edge.to_key)},
+                layer=cell_layer(edge.from_key),
             )
         )
 
@@ -695,6 +772,7 @@ def diff_edges(
                 type=CT.EXTERNAL_EDGE_REMOVED,
                 sort_key=(edge.from_key.sheet, edge.from_key.row, edge.from_key.col),
                 details={"from": _ck_str(edge.from_key), "external_ref": edge.external_ref},
+                layer=cell_layer(edge.from_key),
             )
         )
     for edge in sorted(b.external_edges - a.external_edges):
@@ -703,6 +781,7 @@ def diff_edges(
                 type=CT.EXTERNAL_EDGE_ADDED,
                 sort_key=(edge.from_key.sheet, edge.from_key.row, edge.from_key.col),
                 details={"from": _ck_str(edge.from_key), "external_ref": edge.external_ref},
+                layer=cell_layer(edge.from_key),
             )
         )
 
@@ -713,6 +792,7 @@ def diff_edges(
                 type=CT.RANGE_EDGE_REMOVED,
                 sort_key=(edge.from_key.sheet, edge.from_key.row, edge.from_key.col),
                 details={"from": _ck_str(edge.from_key), "to_range": edge.to_range_a1},
+                layer=cell_layer(edge.from_key),
             )
         )
     for edge in sorted(b.range_edges - a.range_edges):
@@ -721,6 +801,7 @@ def diff_edges(
                 type=CT.RANGE_EDGE_ADDED,
                 sort_key=(edge.from_key.sheet, edge.from_key.row, edge.from_key.col),
                 details={"from": _ck_str(edge.from_key), "to_range": edge.to_range_a1},
+                layer=cell_layer(edge.from_key),
             )
         )
 
@@ -731,6 +812,7 @@ def diff_edges(
                 type=CT.BINDING_EDGE_REMOVED,
                 sort_key=(edge.from_key.sheet, edge.from_key.top_left_row),
                 details={"from_sheet": edge.from_key.sheet, "to_sheet": edge.to_key.sheet},
+                layer=binding_layer(edge.from_key, edge.to_key),
             )
         )
     for edge in sorted(b.binding_edges - a.binding_edges):
@@ -739,6 +821,7 @@ def diff_edges(
                 type=CT.BINDING_EDGE_ADDED,
                 sort_key=(edge.from_key.sheet, edge.from_key.top_left_row),
                 details={"from_sheet": edge.from_key.sheet, "to_sheet": edge.to_key.sheet},
+                layer=binding_layer(edge.from_key, edge.to_key),
             )
         )
 

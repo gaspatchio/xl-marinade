@@ -9,6 +9,9 @@ changed:
 - a binding's label-scan context records the cached values of its neighbours,
   so editing one input re-hashed the bindings around it; that surfaced as
   BINDING_METADATA_CHANGED with no layer, i.e. as a workbook edit.
+- a lookup resolved against cached values moves its edges when its key's value
+  changes; those edges came out of formulas nobody edited, yet were reported
+  as workbook edits.
 
 `Calc!B4:B5` look up `Data` by the key in `Calc!B1`; `Proj` is three parallel
 formula columns, which is what the extractor groups into a table candidate.
@@ -24,13 +27,16 @@ import pytest
 import xl_marinade
 
 
-def _workbook(path: Path, *, key: int = 3, rate: float = 0.05) -> Path:
+def _workbook(path: Path, *, key: int = 3, rate: float = 0.05, value_col: str = "B") -> Path:
     wb = openpyxl.Workbook()
     calc = wb.active
     calc.title = "Calc"
     calc["A1"], calc["B1"] = "Selected ID", key
     calc["A2"], calc["B2"] = "Rate", rate
-    calc["A4"], calc["B4"] = "Value", "=INDEX(Data!$B$2:$B$11,MATCH($B$1,Data!$A$2:$A$11,0))"
+    calc["A4"], calc["B4"] = (
+        "Value",
+        f"=INDEX(Data!${value_col}$2:${value_col}$11,MATCH($B$1,Data!$A$2:$A$11,0))",
+    )
     calc["A5"], calc["B5"] = "Weight", "=INDEX(Data!$C$2:$C$11,MATCH($B$1,Data!$A$2:$A$11,0))"
     calc["A6"], calc["B6"] = "Result", "=B4*B5*(1+B2)"
 
@@ -61,7 +67,7 @@ def diff_against_base(tmp_path_factory: pytest.TempPathFactory) -> Callable[...,
     base_db = xl_marinade.extract(_workbook(root / "base.xlsx"), root / "base.db")
     cache: dict[str, dict] = {}
 
-    def run(name: str, **edit: float) -> dict:
+    def run(name: str, **edit: int | float | str) -> dict:
         if name not in cache:
             book = _workbook(root / f"{name}.xlsx", **edit)
             cache[name] = xl_marinade.diff(base_db, xl_marinade.extract(book, root / f"{name}.db"))
@@ -115,3 +121,64 @@ def test_neighbour_metadata_churn_is_inference(
     assert {c.get("layer") for c in metadata} == {"ir_inference"}, [
         (c["address"], c.get("layer")) for c in metadata
     ]
+
+
+def _workbook_layer(result: dict) -> list[dict]:
+    """The changes a reviewer must account for, minus the file-provenance row."""
+    return [
+        c
+        for c in result["changes"]
+        if c["layer"] == "workbook" and c["type"] != "IR_METADATA_CHANGED"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("edit", "cell"), [("key", "Calc!1,2"), ("rate", "Calc!2,2")], ids=["key", "rate"]
+)
+def test_a_one_cell_edit_is_one_workbook_edit(
+    diff_against_base: Callable[..., dict], edit: str, cell: str
+) -> None:
+    edits = _workbook_layer(diff_against_base(edit, **EDITS[edit]))
+
+    assert [(c["type"], c.get("cell")) for c in edits] == [("VALUE_CHANGED", cell)], (
+        "one cell was edited, but the workbook layer reports "
+        f"{[(c['type'], c.get('cell') or c.get('address') or c.get('from')) for c in edits]}"
+    )
+
+
+def test_lookup_edges_moved_by_a_key_value_are_inference(
+    diff_against_base: Callable[..., dict],
+) -> None:
+    result = diff_against_base("key", **EDITS["key"])
+
+    moved = [c for c in result["changes"] if "EDGE" in c["type"]]
+    assert {c.get("from") for c in moved} >= {"Calc!R4C2", "Calc!R5C2"}, (
+        "fixture no longer resolves Calc!B4:B5 to a single Data row, so the key edit "
+        f"cannot move their edges: {moved}"
+    )
+    assert {c["layer"] for c in moved} == {"ir_inference"}, [
+        (c["type"], c.get("from"), c["layer"]) for c in moved
+    ]
+
+
+def test_a_formula_edit_keeps_its_edges_in_the_workbook_layer(
+    diff_against_base: Callable[..., dict],
+) -> None:
+    """Guard against over-tagging: an edge that moved because its formula did is an edit."""
+    result = diff_against_base("formula", value_col="C")
+
+    formula = [c for c in result["changes"] if c["type"] == "FORMULA_CHANGED"]
+    assert [c["cell"] for c in formula] == ["Calc!4,2"]
+    edges = [c for c in result["changes"] if "EDGE" in c["type"] and c.get("from") == "Calc!R4C2"]
+    assert edges, "re-pointing Calc!B4 at Data!C should move its edges"
+    assert {c["layer"] for c in edges} == {"workbook"}, [(c["type"], c["layer"]) for c in edges]
+
+
+@pytest.mark.parametrize("edit", sorted(EDITS))
+def test_every_change_carries_a_layer(diff_against_base: Callable[..., dict], edit: str) -> None:
+    result = diff_against_base(edit, **EDITS[edit])
+
+    assert {c.get("layer") for c in result["changes"]} <= {"workbook", "ir_inference"}
+    assert result["summary"]["ir_inference_changes"] == sum(
+        c["layer"] == "ir_inference" for c in result["changes"]
+    )
