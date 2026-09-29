@@ -8,6 +8,24 @@ schema is a versioned public contract.
 ## [Unreleased]
 
 ### Changed
+- **Breaking (extraction output): lookups written against defined names or
+  `LET` variables now resolve like their explicit-range equivalents** (split
+  from #42). `INDEX(MP_Age, MATCH(PointID, MP_ID, 0))` previously stopped at
+  `partial_resolved` and left `UNRESOLVED:MP_Age` in `cell_edges_external`,
+  while the same lookup written with ranges resolved to the row its key
+  selects. For every such lookup:
+  - it gains a cell edge to the cell its key selects in the cached values;
+  - its `UNRESOLVED:<name>` external edge is removed;
+  - `resolution_metrics` counts it `resolved`, not `partial_resolved`;
+  - the binding edge between the lookup and its table changes from
+    `kind = 'range_static'` (weight = table size) to `kind = 'formula'`
+    (weight = resolved cells), as it already did for explicit-range lookups.
+
+  Which binding depends on which is unchanged, and workbooks without name-based
+  lookups extract identically. Across the five lifelib example workbooks the
+  change adds 8–1,155 cell edges and removes 216–4,582 `UNRESOLVED` edges per
+  workbook, with no measurable change in extraction time. Formula-valued,
+  external and multi-area names keep the previous fallback.
 - **Every entry in a `marinade diff` changelist now carries a `layer`** —
   `"workbook"` for an edit, `"ir_inference"` for extractor output that moved as
   a consequence. Previously only inference entries were tagged, so an untagged
