@@ -308,8 +308,10 @@ def _load(conn: sqlite3.Connection) -> IRModel:
         JOIN sheets s ON s.sheet_id = tc.sheet_id
         ORDER BY s.sheet_name, tc.r1, tc.c1, tc.candidate_id
     """):
-        # Load members for this candidate
-        members = []
+        # Load members for this candidate, keyed by binding POSITION so they
+        # compare across versions (see TableDesc.members).
+        members: list[tuple[int, BindingKey | str, str | None]] = []
+        member_ids: list[str] = []
         for mrow in conn.execute(
             """
             SELECT ordinal, binding_id, role_hint
@@ -319,8 +321,10 @@ def _load(conn: sqlite3.Connection) -> IRModel:
         """,
             (row["candidate_id"],),
         ):
-            bk_repr = mrow["binding_id"]  # original ID, will be resolved during matching
-            members.append((mrow["ordinal"], bk_repr, mrow["role_hint"]))
+            binding_id = mrow["binding_id"]
+            member_key = binding_id_to_key.get(binding_id, binding_id)
+            members.append((mrow["ordinal"], member_key, mrow["role_hint"]))
+            member_ids.append(binding_id)
 
         model.tables[row["candidate_id"]] = TableDesc(
             candidate_id=row["candidate_id"],
@@ -334,6 +338,7 @@ def _load(conn: sqlite3.Connection) -> IRModel:
             confidence=row["confidence"],
             reasons_json=row["reasons_top3_json"],
             members=tuple(members),
+            member_binding_ids=tuple(member_ids),
         )
 
     # --- Formula families ---

@@ -278,7 +278,12 @@ def canonicalize_model(
             range_a1=td.range_a1,
             confidence=td.confidence,
             reasons_json=td.reasons_json,
-            members=td.members,
+            # Map member positions into B's namespace, as families do below.
+            members=tuple(
+                (ordinal, binding_key_map.get(m, m) if isinstance(m, BindingKey) else m, role)
+                for ordinal, m, role in td.members
+            ),
+            member_binding_ids=td.member_binding_ids,
         )
 
     # --- Families ---

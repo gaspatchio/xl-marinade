@@ -15,6 +15,7 @@ from xl_marinade.core.ir_diff.model import (
     Change,
     IRModel,
     SheetMatch,
+    TableDesc,
 )
 
 # A single-quoted sheet prefix whose name needs no quoting (plain identifier).
@@ -236,12 +237,14 @@ def diff_tables(a: IRModel, b: IRModel) -> list[Change]:
                 "range_a1",
                 "confidence",
                 "reasons_json",
-                "members",
             ):
                 va = getattr(ta, attr)
                 vb = getattr(tb, attr)
                 if va != vb:
                     diffs[attr] = {"old": va, "new": vb}
+            # Compared by member position; reported by binding_id.
+            if ta.members != tb.members:
+                diffs["members"] = {"old": _member_rows(ta), "new": _member_rows(tb)}
             if diffs:
                 changes.append(
                     Change(
@@ -251,6 +254,14 @@ def diff_tables(a: IRModel, b: IRModel) -> list[Change]:
                     )
                 )
     return changes
+
+
+def _member_rows(td: TableDesc) -> list[tuple[int, str, str | None]]:
+    """A table's members as the changelist reports them: (ordinal, binding_id, role_hint)."""
+    return [
+        (ordinal, binding_id, role)
+        for (ordinal, _, role), binding_id in zip(td.members, td.member_binding_ids, strict=True)
+    ]
 
 
 def _formula_change_is_partition_artifact(

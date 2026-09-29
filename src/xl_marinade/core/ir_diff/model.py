@@ -141,7 +141,14 @@ class TableDesc:
     range_a1: str
     confidence: float
     reasons_json: str
-    members: tuple[tuple[int, str, str | None], ...] = ()  # (ordinal, binding_key_repr, role_hint)
+    # (ordinal, member, role_hint). `member` is the member binding's position
+    # key, NOT its binding_id: binding_ids are seeded with the workbook's
+    # sha256, so every id differs between any two versions of a workbook and
+    # comparing them reported every table as changed on any edit (issue #42).
+    # A member id with no binding row falls back to the raw id.
+    members: tuple[tuple[int, BindingKey | str, str | None], ...] = ()
+    # The members' binding_ids, parallel to `members`: what the changelist shows.
+    member_binding_ids: tuple[str, ...] = ()
 
 
 # ---------------------------------------------------------------------------
