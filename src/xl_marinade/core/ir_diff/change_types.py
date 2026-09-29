@@ -167,16 +167,23 @@ SUMMARY_ONLY_TYPES: frozenset[str] = frozenset(
 )
 
 # Change types produced by IR *inference* (the extractor's semantic layer:
-# table-candidate detection, binding-label evidence gathering, time-axis
-# annotation) rather than by a workbook edit. These can churn when IR
-# segmentation shifts even though no cell changed, so consumers auditing
-# workbook edits report them separately from the edit signal.
+# table-candidate detection, binding-label evidence gathering, binding
+# metadata, time-axis annotation) rather than by a workbook edit. These can
+# churn when IR segmentation shifts even though no cell changed, so consumers
+# auditing workbook edits report them separately from the edit signal.
+#
+# BINDING_METADATA_CHANGED belongs here: every field it compares (confidence,
+# is_orphan, extraction_source, evidence/spatial hashes) is extractor output.
+# The spatial blob in particular records the cached VALUES of the cells a
+# label scan passes over, so editing one input re-hashes every neighbouring
+# binding -- issue #42 saw Control!C7:C11 and D4 "change" when only C4 did.
 IR_INFERENCE_TYPES: frozenset[str] = frozenset(
     {
         TABLE_CANDIDATE_ADDED,
         TABLE_CANDIDATE_REMOVED,
         TABLE_CANDIDATE_CHANGED,
         BINDING_LABEL_EVIDENCE_CHANGED,
+        BINDING_METADATA_CHANGED,
         TIME_INDEX_CANDIDATE_ADDED,
         TIME_INDEX_CANDIDATE_REMOVED,
         TIME_INDEX_CANDIDATE_CHANGED,

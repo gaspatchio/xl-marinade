@@ -11,13 +11,14 @@ def _c(ctype):
     return Change(type=ctype)
 
 
-def test_inference_types_cover_exactly_the_three_semantic_categories():
+def test_inference_types_cover_exactly_the_semantic_categories():
     expected = frozenset(
         {
             CT.TABLE_CANDIDATE_ADDED,
             CT.TABLE_CANDIDATE_REMOVED,
             CT.TABLE_CANDIDATE_CHANGED,
             CT.BINDING_LABEL_EVIDENCE_CHANGED,
+            CT.BINDING_METADATA_CHANGED,
             CT.TIME_INDEX_CANDIDATE_ADDED,
             CT.TIME_INDEX_CANDIDATE_REMOVED,
             CT.TIME_INDEX_CANDIDATE_CHANGED,

@@ -6,6 +6,9 @@ changed:
 
 - table candidates compared their members by binding_id, which is seeded with
   the workbook's sha256 -- so every multi-member table "changed" on any edit.
+- a binding's label-scan context records the cached values of its neighbours,
+  so editing one input re-hashed the bindings around it; that surfaced as
+  BINDING_METADATA_CHANGED with no layer, i.e. as a workbook edit.
 
 `Calc!B4:B5` look up `Data` by the key in `Calc!B1`; `Proj` is three parallel
 formula columns, which is what the extractor groups into a table candidate.
@@ -96,3 +99,19 @@ def test_fixture_has_a_multi_member_table(tmp_path: Path) -> None:
         .fetchone()
     )
     assert members and members > 1
+
+
+@pytest.mark.parametrize("edit", sorted(EDITS))
+def test_neighbour_metadata_churn_is_inference(
+    diff_against_base: Callable[..., dict], edit: str
+) -> None:
+    result = diff_against_base(edit, **EDITS[edit])
+
+    metadata = [c for c in result["changes"] if c["type"] == "BINDING_METADATA_CHANGED"]
+    assert metadata, (
+        "fixture no longer re-hashes a neighbouring binding's label context, so it "
+        "cannot show that the churn is classified as inference"
+    )
+    assert {c.get("layer") for c in metadata} == {"ir_inference"}, [
+        (c["address"], c.get("layer")) for c in metadata
+    ]
