@@ -136,16 +136,19 @@ One JSON document, three layers to read in order:
   (`unchanged` | `modified` | `added` | `removed` | `moved`), `address_a/b`,
   `label_a/b`. This labeled map is the agent-consumable changelist.
 - **`changes`** — the per-event detail. Each carries `seq`, `type`, and a
-  **`layer`**:
+  **`layer`** (always present — filter on it, never on its absence):
   - `layer = "workbook"` — real workbook edits (`FORMULA_CHANGED`,
-    `BINDING_FORMULA_CHANGED`, `BINDING_ADDED`, `COLS_INSERTED`,
-    `*_EDGE_ADDED`). `BINDING_FORMULA_CHANGED` carries `modification_kind`
-    (`logic_change` vs a reference shift) — the logic changes are your
-    review set.
+    `VALUE_CHANGED`, `BINDING_FORMULA_CHANGED`, `BINDING_ADDED`,
+    `COLS_INSERTED`, and `*_EDGE_*` out of a cell whose formula changed).
+    `BINDING_FORMULA_CHANGED` carries `modification_kind` (`logic_change` vs
+    a reference shift) — the logic changes are your review set.
   - `layer = "ir_inference"` — extractor-derived, NOT workbook edits
-    (`TABLE_CANDIDATE_*`, `BINDING_LABEL_EVIDENCE_CHANGED`). These churn as
-    IR segmentation shifts even when no cell changed; `summary` counts them
-    as `ir_inference_changes`. **Never count them as edits in an audit.**
+    (`TABLE_CANDIDATE_*`, `BINDING_LABEL_EVIDENCE_CHANGED`,
+    `BINDING_METADATA_CHANGED`, and `*_EDGE_*` out of a cell whose formula
+    did NOT change — e.g. a lookup re-resolved because its key's value
+    moved). These churn around a real edit even though the cells they name
+    were not touched; `summary` counts them as `ir_inference_changes`.
+    **Never count them as edits in an audit.**
 
 Practical rules:
 

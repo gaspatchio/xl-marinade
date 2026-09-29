@@ -7,6 +7,30 @@ schema is a versioned public contract.
 
 ## [Unreleased]
 
+### Changed
+- **Every entry in a `marinade diff` changelist now carries a `layer`** —
+  `"workbook"` for an edit, `"ir_inference"` for extractor output that moved as
+  a consequence. Previously only inference entries were tagged, so an untagged
+  entry had to be read as an edit. `summary.ir_inference_changes` counts the
+  inference layer.
+- `BINDING_METADATA_CHANGED` is now in the `ir_inference` layer: every field it
+  compares (confidence, orphan flag, extraction source, evidence and label-scan
+  hashes) is extractor output.
+
+### Fixed
+- `marinade diff` reported cells nobody edited as changed (#42). A one-cell
+  edit to a lifelib BasicTerm_S workbook produced 13–29 extra entries: every
+  table candidate, the bindings around the edited cell, and — once lookups
+  resolve — the edges of every lookup keyed by the edited cell. Now:
+  - table-candidate members are compared by binding position, not by
+    `binding_id` (which is seeded with the workbook's hash, so it differs
+    between any two versions);
+  - neighbouring bindings whose label-scan context picked up the edited
+    cell's value are reported as `ir_inference`, not as edits;
+  - an edge change out of a cell whose formula did not change — a lookup
+    re-resolved because its key changed value — is `ir_inference`; edges that
+    moved because their formula changed stay in the `workbook` layer.
+
 ## [0.3.0] - 2026-08-15
 
 A platform-hardening release. 0.2.0 could not complete a single extraction on a

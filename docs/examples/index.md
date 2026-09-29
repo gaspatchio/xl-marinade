@@ -128,19 +128,20 @@ reference) reports the change once, at the binding level, not once per cell:
 ```json
 {
   "summary": {
-    "total_changes": 8,
+    "total_changes": 7,
     "bindings_formula_changed": 1,
     "cells_formula_changed": 5,
-    "ir_inference_changes": 1
+    "ir_inference_changes": 0
   },
   "changes": [
     {
-      "seq": 3,
+      "seq": 2,
       "type": "BINDING_FORMULA_CHANGED",
       "sheet": "Sheet1",
       "address": "C3:C7",
       "old_formula": "RC[-1]*0.02",
       "new_formula": "RC[-1]*0.03",
+      "layer": "workbook",
       "modification_kind": "logic_change"
     }
   ]
@@ -152,10 +153,12 @@ reference) reports the change once, at the binding level, not once per cell:
 column, rolled up into that one `BINDING_FORMULA_CHANGED` entry.
 `modification_kind: "logic_change"` (rather than `reference_shift`) confirms this
 is a real formula edit, not just references moving because of an insertion
-elsewhere in the sheet. `ir_inference_changes: 1` is unrelated noise — a
-table-candidate re-ranking that shifted because the underlying bindings changed,
-not because you edited a cell — and is worth filtering out before you review a
-changelist:
+elsewhere in the sheet. `ir_inference_changes: 0` says nothing in the
+extractor's inference layer moved. When something does — a table candidate, a
+binding's label evidence, or a lookup's edges re-resolved because its key
+changed value — those entries carry `"layer": "ir_inference"`: consequences
+of an edit, not edits. Every change carries a `layer`, so keep the workbook
+layer before you review a changelist:
 
 ```python
 import json
@@ -163,9 +166,7 @@ from pathlib import Path
 
 changelist = json.loads(Path("changelist.json").read_text())
 
-workbook_edits = [
-    c for c in changelist["changes"] if c.get("layer") != "ir_inference"
-]
+workbook_edits = [c for c in changelist["changes"] if c["layer"] == "workbook"]
 for change in workbook_edits:
     if change["type"] == "BINDING_FORMULA_CHANGED":
         print(

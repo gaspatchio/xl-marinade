@@ -44,12 +44,22 @@ carries `old_formula` and `new_formula`; a resize carries old and new shapes).
 
 Not every entry in `changes` represents something a person edited in the
 workbook. Some of extraction's output is **inferred** — table-candidate
-detection, binding-label evidence, and time-axis annotations are all derived by
-the extractor's semantic layer, and can shift between two extractions even when
-no cell in the workbook changed at all. Those entries carry `"layer":
-"ir_inference"` and are rolled up separately in `summary.ir_inference_changes`,
-so a consumer that only cares about actual workbook edits can filter the
-inference layer out rather than mistaking it for a genuine change.
+detection, binding-label evidence, binding metadata, and time-axis annotations
+are all derived by the extractor's semantic layer, and can shift between two
+extractions even when the cells they name were not touched. Every entry
+carries a `"layer"`: `"workbook"` for an edit, `"ir_inference"` for inference.
+The inference layer is rolled up separately in `summary.ir_inference_changes`,
+so a consumer that only cares about actual workbook edits can filter it out
+rather than mistaking it for a genuine change.
+
+Edge changes are classified per change. An edge that appeared or disappeared
+because its cell's formula changed is part of that edit (`"workbook"`). An
+edge out of a cell whose formula is **unchanged** is `"ir_inference"`: nothing
+edited that formula, so the extractor re-resolved it against something else
+that did change. The common case is a lookup — `INDEX`/`MATCH` or `VLOOKUP`
+resolved to the row its key currently selects — whose key changed value. The
+key's own `VALUE_CHANGED` is the edit; the lookup's moved edges are its
+consequence.
 
 ## Reference shift vs. logic change
 
