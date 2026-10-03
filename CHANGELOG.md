@@ -7,6 +7,15 @@ schema is a versioned public contract.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-03
+
+A correctness release for lookups and diffs. Lookups written against defined
+names or `LET` variables now resolve into the graph (#43), and a one-cell edit
+no longer makes `marinade diff` report unedited cells as edits (#42). The
+first is a **breaking change to extraction output**: the same name-based
+workbook extracts to different edges under 0.3.0 and 0.4.0. The output schema
+is unchanged at 3.0.
+
 ### Changed
 - **Breaking (extraction output): lookups written against defined names or
   `LET` variables now resolve like their explicit-range equivalents** (split
