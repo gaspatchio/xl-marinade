@@ -74,9 +74,11 @@ finds coincident second drivers.
   anything not traceable to a documented change is flagged.
 - A zero-unexplained-changes claim covers the **`layer: "workbook"`**
   changes only. The **`layer: "ir_inference"`** changes (`TABLE_CANDIDATE_*`,
-  `BINDING_LABEL_EVIDENCE_CHANGED`; counted in `summary.ir_inference_changes`)
-  are extractor inference that churns benignly across versions — they need
-  no per-event adjudication and must not be counted as edits.
+  `BINDING_LABEL_EVIDENCE_CHANGED`, `BINDING_METADATA_CHANGED`, and edge
+  changes out of cells whose formula did not change; counted in
+  `summary.ir_inference_changes`) are extractor inference that churns
+  benignly across versions — they need no per-event adjudication and must
+  not be counted as edits.
 - Diff only adjacent versions of one lineage; diverged workbooks produce
   noise at the scale of the whole book — use targeted SQL instead.
 - **Subagent fan-out contract**: marinade never needs Excel, so IR

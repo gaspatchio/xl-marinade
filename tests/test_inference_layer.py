@@ -11,13 +11,14 @@ def _c(ctype):
     return Change(type=ctype)
 
 
-def test_inference_types_cover_exactly_the_three_semantic_categories():
+def test_inference_types_cover_exactly_the_semantic_categories():
     expected = frozenset(
         {
             CT.TABLE_CANDIDATE_ADDED,
             CT.TABLE_CANDIDATE_REMOVED,
             CT.TABLE_CANDIDATE_CHANGED,
             CT.BINDING_LABEL_EVIDENCE_CHANGED,
+            CT.BINDING_METADATA_CHANGED,
             CT.TIME_INDEX_CANDIDATE_ADDED,
             CT.TIME_INDEX_CANDIDATE_REMOVED,
             CT.TIME_INDEX_CANDIDATE_CHANGED,
@@ -66,3 +67,14 @@ def test_summary_inference_zero_when_no_semantic_changes():
     s = _build_summary([_c(CT.VALUE_CHANGED)])
     assert s["ir_inference_changes"] == 0
     assert s["label_evidence_changed"] == 0
+
+
+def test_summary_counts_a_per_change_layer_override():
+    """An edge re-resolved out of an unedited formula is inference; an edited one is not."""
+    changes = [
+        Change(type=CT.CELL_EDGE_ADDED, layer=CT.LAYER_IR_INFERENCE),
+        Change(type=CT.CELL_EDGE_ADDED),
+    ]
+    s = _build_summary(changes)
+    assert s["edges_changed"] == 2
+    assert s["ir_inference_changes"] == 1
