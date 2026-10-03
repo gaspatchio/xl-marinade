@@ -63,6 +63,7 @@ from xl_marinade.core.new_arch.formula_normalizer import (
     shift_shared_formula_a1,
 )
 from xl_marinade.core.new_arch.grouping_native import run_grouping_on_fast_output
+from xl_marinade.core.new_arch.lookup_names import expand_names
 from xl_marinade.core.new_arch.memory_budget import MemoryBudgetConfig
 from xl_marinade.core.new_arch.reference_extractor import Edge, ReferenceExtractor
 from xl_marinade.core.new_arch.styles_parser import DateFormatInfo, parse_date_format_info
@@ -1432,6 +1433,10 @@ class TraversalContext:
             ast = parse_formula(formula_a1)
         except Exception:
             return []
+        # Resolve lookups written against defined names or LET variables exactly
+        # as their explicit-range twins (INDEX(MP_Age, MATCH(PointID, MP_ID, 0))
+        # was stuck at partial_resolved + UNRESOLVED:MP_Age).
+        ast = expand_names(ast, ctx.sheet_name, self.ref_extractor.resolve_defined_name)
 
         semantic_refs: list[str] = []
         # Refs that come from an Issue #1 by-value cache resolution are

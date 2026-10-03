@@ -992,17 +992,29 @@ class ReferenceExtractor:
         # Would need table metadata to resolve to range
         return [Edge(type="external", external_ref=f"UNRESOLVED:{ref}")]
 
+    def resolve_defined_name(self, name: str, sheet_name: str) -> list[str] | None:
+        """Resolve a defined name to its A1 ranges, as a formula on `sheet_name` sees it.
+
+        Sheet-scoped names win on their own sheet; names are case-insensitive, as
+        in Excel. Returns None for an unknown, external or formula-valued name.
+        """
+        if not self.name_table_map:
+            return None
+
+        resolved = self.name_table_map.resolve_name(name, scope=sheet_name)
+        if not resolved and self._defined_name_lookup:
+            candidates = self._defined_name_lookup.get(name.lower(), [])
+            for candidate in candidates:
+                resolved = self.name_table_map.resolve_name(candidate, scope=sheet_name)
+                if resolved:
+                    break
+        return resolved or None
+
     def _extract_defined_name_edges(self, name: str, ctx: FormulaContext) -> list[Edge] | None:
         if not self.name_table_map:
             return None
 
-        resolved = self.name_table_map.resolve_name(name, scope=ctx.sheet_name)
-        if not resolved and self._defined_name_lookup:
-            candidates = self._defined_name_lookup.get(name.lower(), [])
-            for candidate in candidates:
-                resolved = self.name_table_map.resolve_name(candidate, scope=ctx.sheet_name)
-                if resolved:
-                    break
+        resolved = self.resolve_defined_name(name, ctx.sheet_name)
 
         if not resolved:
             # Dynamic (formula-valued) names resolve to [] just like an unknown

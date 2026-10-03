@@ -63,8 +63,11 @@ to the source model:
 4. Keep lookup-table headers NUMERIC with display formats (`'"Term "0'`),
    never text — a text header makes every dependent MATCH #N/A. Know that
    INDEX/XLOOKUP/CHOOSE/VLOOKUP/MATCH emit a `DYNAMIC:` marker plus their
-   argument refs; INDIRECT/OFFSET stay opaque — avoid them in generated
-   models.
+   argument refs and, when the file carries cached values, an edge to the
+   cell the key currently selects — whether written with ranges, defined
+   names or LET variables. That edge follows the key's VALUE: a key edit
+   moves it, and `marinade diff` reports the move as `ir_inference`.
+   INDIRECT/OFFSET stay opaque — avoid them in generated models.
 5. **Array math must be CSE.** Plain openpyxl-written formulas get legacy
    semantics: Excel 365 silently inserts implicit intersection (`@`)
    before range names used as array arguments (`TRANSPOSE(@Vec)` →
