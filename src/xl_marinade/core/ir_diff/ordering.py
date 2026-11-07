@@ -1,4 +1,4 @@
-# ABOUTME: Stage 5b — Deterministic 12-tier ordering for diff changes.
+# ABOUTME: Stage 5b — Deterministic 13-tier ordering for diff changes.
 # ABOUTME: Within each tier, sort by canonical key then JSON fallback.
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ def order_changes(changes: list[Change]) -> list[Change]:
     Ordering tiers (lower = earlier):
     0: metadata, 1: root, 2: sheets, 3: rows/cols, 4: names, 5: tables,
     6: bindings, 7: cells, 8: label evidence/time, 9: edges,
-    10: families, 11: resolution metrics
+    10: families, 11: resolution metrics, 12: VBA
 
     Within a tier: sort by sort_key tuple, then by JSON of details as final tie-break.
 

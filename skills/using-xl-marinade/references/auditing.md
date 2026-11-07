@@ -79,6 +79,11 @@ finds coincident second drivers.
   `summary.ir_inference_changes`) are extractor inference that churns
   benignly across versions — they need no per-event adjudication and must
   not be counted as edits.
+- VBA edits are in the diff (`VBA_*`, `layer: "workbook"`, counted in
+  `summary.vba_*`) and need the same adjudication as formula edits; review
+  every `VBA_PROCEDURE_LOGIC_CHANGED` / `SIGNATURE_CHANGED` /
+  `VBA_DECLARATIONS_CHANGED` body against intent. Extract every version with
+  `oletools` installed, or a version without it reads as all VBA removed.
 - Diff only adjacent versions of one lineage; diverged workbooks produce
   noise at the scale of the whole book — use targeted SQL instead.
 - **Subagent fan-out contract**: marinade never needs Excel, so IR
