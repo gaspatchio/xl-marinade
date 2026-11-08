@@ -7,6 +7,19 @@ schema is a versioned public contract.
 
 ## [Unreleased]
 
+### Added
+- The extracted database records whether its VBA was read (#48):
+  `ir_metadata` key `vba_extraction` is `extracted`, `no_vba_project`,
+  `skipped_no_oletools` or `failed`. Previously, extracting a macro workbook
+  without the `[vba]` extra left every VBA table empty and nothing in the
+  database said so, so it read exactly like a workbook with no macros.
+  `ir_metadata` is a base table, so `schema_version` is unchanged at 3.0.
+
+### Fixed
+- A damaged `xl/vbaProject.bin` is now reported as a failed VBA extraction.
+  olevba fell back to reading it as plain text, which found no modules, so the
+  workbook was silently treated as having none.
+
 ## [0.4.0] - 2026-10-03
 
 A correctness release for lookups and diffs. Lookups written against defined

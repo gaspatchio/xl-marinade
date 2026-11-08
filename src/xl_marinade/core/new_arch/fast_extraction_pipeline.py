@@ -555,7 +555,7 @@ def _compute_vba_sheet_affinity(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def _extract_and_store_vba(workbook_path: Path, conn: sqlite3.Connection) -> dict:
+def _extract_and_store_vba(workbook_path: Path, conn: sqlite3.Connection) -> dict[str, int | str]:
     """
     Phase 2 VBA extraction stage: full grammar-based extraction of all procedures,
     declarations, event handlers, and security findings via xl_marinade.core.vba.
@@ -571,10 +571,14 @@ def _extract_and_store_vba(workbook_path: Path, conn: sqlite3.Connection) -> dic
         conn: Open SQLite connection to the build database
 
     Returns:
-        Dict with extraction stats: {procedures, modules, declarations, events,
-        security_findings, udfs_inserted, parse_errors}
+        Dict with extraction stats: {status, procedures, modules, declarations,
+        events, security_findings, udfs_inserted, parse_errors}. ``status`` is
+        a VBA_STATUS_* value, or "failed" if extraction or storage raised.
     """
-    stats = {
+    stats: dict[str, int | str] = {
+        # ir_metadata 'vba_extraction'; stays "failed" unless the extractor
+        # ran and every table was written.
+        "status": "failed",
         "procedures": 0,
         "modules": 0,
         "declarations": 0,
@@ -595,6 +599,7 @@ def _extract_and_store_vba(workbook_path: Path, conn: sqlite3.Connection) -> dic
     except Exception:
         logger.exception("extract_vba raised for %s", workbook_path)
         return stats
+    stats["status"] = extraction.status
 
     stats["modules"] = len(extraction.modules)
     stats["procedures"] = len(extraction.procedures)
@@ -644,6 +649,7 @@ def _extract_and_store_vba(workbook_path: Path, conn: sqlite3.Connection) -> dic
         _store_vba_phase3_tables(conn, extraction)
     except Exception:
         logger.exception("Failed to populate Phase 3 VBA tables for %s", workbook_path)
+        stats["status"] = "failed"
 
     return stats
 
@@ -2422,7 +2428,8 @@ def run_fast_extraction(
                     f"{s.get('declarations', 0)} decls, "
                     f"{s.get('udfs_inserted', 0)} UDFs stored, "
                     f"{s.get('security_findings', 0)} security, "
-                    f"{s.get('parse_errors', 0)} errors",
+                    f"{s.get('parse_errors', 0)} errors "
+                    f"({s.get('status', 'failed')})",
                     file=sys.stderr,
                 )
 
@@ -2669,6 +2676,8 @@ def run_fast_extraction(
                     "schema_version": SCHEMA_VERSION,
                     "build_mode": BUILD_MODE,
                     "extraction_mode": "rooted",
+                    # A stage that raised leaves vba_stats[0] empty: "failed".
+                    "vba_extraction": str(vba_stats[0].get("status", "failed")),
                     "sqlite_version": sqlite3.sqlite_version,
                     "extractor_version": extractor_version,
                     "workbook_sha256": workbook_sha256,
@@ -2989,7 +2998,8 @@ def run_full_workbook_extraction(
                     f"{s.get('declarations', 0)} decls, "
                     f"{s.get('udfs_inserted', 0)} UDFs stored, "
                     f"{s.get('security_findings', 0)} security, "
-                    f"{s.get('parse_errors', 0)} errors",
+                    f"{s.get('parse_errors', 0)} errors "
+                    f"({s.get('status', 'failed')})",
                     file=sys.stderr,
                 )
 
@@ -3227,6 +3237,8 @@ def run_full_workbook_extraction(
                     "schema_version": SCHEMA_VERSION,
                     "build_mode": BUILD_MODE,
                     "extraction_mode": "full_workbook",
+                    # A stage that raised leaves vba_stats[0] empty: "failed".
+                    "vba_extraction": str(vba_stats[0].get("status", "failed")),
                     "sqlite_version": sqlite3.sqlite_version,
                     "extractor_version": extractor_version,
                     "workbook_sha256": workbook_sha256,

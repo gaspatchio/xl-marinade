@@ -29,7 +29,7 @@ import re
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 logger = logging.getLogger(__name__)
 
@@ -95,10 +95,21 @@ class VBAParseError:
     line: int | None = None
 
 
+# Recorded as ir_metadata 'vba_extraction', so a reader of the database can
+# tell "this workbook has no macros" from "its macros were not read" (#48).
+VBA_STATUS_EXTRACTED = "extracted"
+VBA_STATUS_NO_VBA_PROJECT = "no_vba_project"
+VBA_STATUS_SKIPPED_NO_OLETOOLS = "skipped_no_oletools"
+VBA_STATUS_FAILED = "failed"
+
+
 @dataclass
 class VBAExtraction:
     """Complete VBA extraction result for a workbook."""
 
+    # One of the VBA_STATUS_* values: whether the tables below are the
+    # workbook's VBA, or empty/partial because it was not (fully) read.
+    status: str = "extracted"
     modules: list[VBAModule] = field(default_factory=list)
     procedures: list[VBAProcedure] = field(default_factory=list)
     declarations: list[VBADeclaration] = field(default_factory=list)
@@ -551,7 +562,7 @@ def _extract_procedures_from_source(
     return procedures, declarations, errors
 
 
-def _open_vba_parser(path: Path):
+def _open_vba_parser(path: Path) -> tuple[Any, bytes | None, str]:
     """Open a VBA_Parser for either an OOXML container or a legacy CDF file.
 
     Modern .xlsm/.xlam are ZIP-wrapped OOXML; we read xl/vbaProject.bin
@@ -559,26 +570,40 @@ def _open_vba_parser(path: Path):
     twice. Legacy .xla/.xls files are stored in the OLE Compound Document
     File format and don't have a ZIP container, so for those we hand the file
     path to olevba and let it open via olefile. Returns ``(parser, vba_data)``
-    where ``vba_data`` is None for the legacy path.
+    where ``vba_data`` is None for the legacy path, plus the VBA_STATUS_*
+    to record when no parser could be opened.
     """
     from oletools.olevba import VBA_Parser
 
     try:
         with zipfile.ZipFile(path) as zf:
             if "xl/vbaProject.bin" not in zf.namelist():
-                return None, None  # OOXML container with no VBA project
+                # OOXML container with no VBA project
+                return None, None, VBA_STATUS_NO_VBA_PROJECT
             vba_data = zf.read("xl/vbaProject.bin")
-        return VBA_Parser(filename="vbaProject.bin", data=vba_data), vba_data
+        parser = VBA_Parser(filename="vbaProject.bin", data=vba_data)
+        # vbaProject.bin is always an OLE compound file. olevba falls back to
+        # parsing anything else as plain-text VBA, which finds no modules and
+        # would make a damaged project read as an empty one.
+        if parser.type != "OLE":
+            logger.warning(
+                "xl/vbaProject.bin in %s is not an OLE compound file (olevba read it as %s)",
+                path,
+                parser.type,
+            )
+            parser.close()
+            return None, None, VBA_STATUS_FAILED
+        return parser, vba_data, VBA_STATUS_EXTRACTED
     except zipfile.BadZipFile:
         # Not a ZIP — likely a legacy CDF .xla/.xls. Let olevba open it.
         try:
-            return VBA_Parser(filename=str(path)), None
+            return VBA_Parser(filename=str(path)), None, VBA_STATUS_EXTRACTED
         except Exception:
             logger.exception("Legacy CDF VBA_Parser construction failed for %s", path)
-            return None, None
+            return None, None, VBA_STATUS_FAILED
     except (KeyError, OSError):
         logger.exception("Failed to read xl/vbaProject.bin from %s", path)
-        return None, None
+        return None, None, VBA_STATUS_FAILED
 
 
 def extract_vba(xlsm_path: Path | str) -> VBAExtraction:
@@ -604,13 +629,14 @@ def extract_vba(xlsm_path: Path | str) -> VBAExtraction:
             "oletools not installed — VBA extraction skipped "
             "(pip install xl-marinade[vba] to enable)"
         )
-        return VBAExtraction()
+        return VBAExtraction(status=VBA_STATUS_SKIPPED_NO_OLETOOLS)
 
     path = Path(xlsm_path)
     extraction = VBAExtraction()
 
-    vba_parser, vba_data = _open_vba_parser(path)
+    vba_parser, vba_data, open_status = _open_vba_parser(path)
     if vba_parser is None:
+        extraction.status = open_status
         return extraction
 
     try:
@@ -640,6 +666,7 @@ def extract_vba(xlsm_path: Path | str) -> VBAExtraction:
             extraction.parse_errors.extend(errors)
     except Exception:
         logger.exception("Module extraction failed for %s", path)
+        extraction.status = VBA_STATUS_FAILED
     finally:
         try:
             vba_parser.close()
