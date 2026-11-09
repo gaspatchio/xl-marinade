@@ -89,7 +89,11 @@ same procedure are compared branch to branch. `summary` counts them as
 
 VBA is extracted only when `oletools` is installed. A database extracted
 without it has no VBA, so diffing it against one extracted with it reports
-every module as added or removed.
+every module as added or removed. Each database records whether its VBA was
+read in `ir_metadata` key `vba_extraction` (see
+[VBA extraction](vba.md)). Trust the `VBA_*` entries only when both sides are
+`extracted` or `no_vba_project`. When the key differs between the two
+databases, the changelist also carries an `IR_METADATA_CHANGED` entry for it.
 
 ## Reference shift vs. logic change
 

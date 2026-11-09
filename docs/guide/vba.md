@@ -67,6 +67,15 @@ network access — the same macro source always produces the same bridging edges
 so a value that "changes by magic" via a macro stays traceable to the specific
 procedure that wrote it.
 
+## Comparing versions
+
+`marinade diff` compares the VBA of two databases module by module and
+procedure by procedure, including code outside procedures. It reports added,
+removed, renamed and edited procedures, and separates comment-only edits from
+logic changes. See [VBA changes](diffing.md#vba-changes) for the change types.
+Check `vba_extraction` on both databases first: a side extracted without the
+`[vba]` extra makes every module look added or removed.
+
 ## Where LLM enrichment fits
 
 Static analysis can't resolve every reference — a range built up from string

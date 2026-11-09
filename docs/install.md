@@ -68,7 +68,10 @@ dependencies. Two add-ons are opt-in:
 - **`[llm]`** — adds the bring-your-own-key LLM documentation tier (`--enrich`,
   `xl_marinade.llm`). See [LLM add-on](llm.md) for setup and configuration.
 - **`[vba]`** — adds deterministic parsing of VBA macros, so macro-driven mutations
-  show up as edges in the formula graph (see [What it does](index.md#what-it-does)).
+  show up as edges in the formula graph (see [What it does](index.md#what-it-does))
+  and `marinade diff` reports macro changes. Without it, a macro workbook's VBA is
+  not read, and the database records `vba_extraction = skipped_no_oletools` so it
+  can't be mistaken for one with no macros (see [VBA extraction](guide/vba.md)).
 
 Neither extra changes the deterministic behavior of `extract`, `diff`, or plain
 `document` — they only add capability on top.
