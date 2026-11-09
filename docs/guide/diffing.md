@@ -32,7 +32,7 @@ The output is a JSON object with these top-level keys:
 | `schema_version_a` / `schema_version_b` | The IR schema version each input database was extracted with. |
 | `workbook_sha256_a` / `workbook_sha256_b` | The provenance hash of each source workbook, carried over from extraction. |
 | `root_a` / `root_b` | The extraction root (sheet + range), if either database was a rooted extraction; `null` for a full-workbook extraction. |
-| `summary` | Counts of changes by category — bindings added/removed/moved/resized/formula-changed, cell value/format/dtype changes, sheet and row/column edits, and more (see below). |
+| `summary` | Counts of changes by category — bindings added/removed/moved/resized/formula-changed, cell value/format/dtype changes, sheet and row/column edits, VBA modules and procedures, and more (see below). |
 | `binding_map` | A flat list mapping every binding in A to its match in B (or `null` if added/removed), each with a `diff_state` of `unchanged`, `modified`, `moved`, `removed`, or `added`. |
 | `changes` | The ordered list of individual changes that make up the diff. |
 
@@ -60,6 +60,36 @@ that did change. The common case is a lookup — `INDEX`/`MATCH` or `VLOOKUP`
 resolved to the row its key currently selects — whose key changed value. The
 key's own `VALUE_CHANGED` is the edit; the lookup's moved edges are its
 consequence.
+
+## VBA changes
+
+For a macro-enabled workbook, the diff also compares the VBA recorded in
+`vba_modules` and `vba_procedures`. These entries are workbook edits
+(`"layer": "workbook"`) and come after every other change:
+
+| Type | Meaning |
+|---|---|
+| `VBA_MODULE_ADDED` / `VBA_MODULE_REMOVED` | A module (`module`, e.g. `BatchRunner.bas`) exists in only one version. Its procedures are also reported as added/removed. |
+| `VBA_PROCEDURE_ADDED` / `VBA_PROCEDURE_REMOVED` | A procedure exists in only one version. A removal with `"ambiguous_rename": true` had several equally likely rename targets, each reported as added. |
+| `VBA_PROCEDURE_LOGIC_CHANGED` | The body changed beyond comments, whitespace and case. |
+| `VBA_PROCEDURE_SIGNATURE_CHANGED` | As above, and the declaration line changed (`signature_a` / `signature_b`). |
+| `VBA_PROCEDURE_RENAMED` / `VBA_PROCEDURE_RENAMED_AND_MODIFIED` | The same procedure under a new name in the same module (`procedure_a` → `procedure_b`), with or without a body edit. |
+| `VBA_PROCEDURE_COSMETIC_CHANGED` | Only comments, whitespace, case or line continuations changed. |
+| `VBA_DECLARATIONS_CHANGED` | Module code outside every procedure changed: `Option` statements, `Declare`s, module-level variables and constants. |
+| `VBA_DECLARATIONS_COSMETIC_CHANGED` | Only comments, whitespace or `Attribute` lines outside procedures changed. |
+
+Procedure entries carry `module`, `procedure`, `kind`, `compile_branch` and
+the line range (`lines`, or `lines_a` / `lines_b` for a matched pair; 1-based and inclusive) to look the
+bodies up in `vba_procedures`. Two branches of an `#If` block that define the
+same procedure are compared branch to branch. `summary` counts them as
+`vba_modules_added`, `vba_modules_removed`, `vba_procedures_added`,
+`vba_procedures_removed`, `vba_procedures_renamed`,
+`vba_procedures_logic_changed`, `vba_declarations_changed` and
+`vba_cosmetic_changes`.
+
+VBA is extracted only when `oletools` is installed. A database extracted
+without it has no VBA, so diffing it against one extracted with it reports
+every module as added or removed.
 
 ## Reference shift vs. logic change
 

@@ -16,6 +16,23 @@ schema is a versioned public contract.
   `ir_metadata` is a base table, so `schema_version` is unchanged at 3.0.
 
 ### Fixed
+- `marinade diff` now reports VBA changes (#47). It never read the VBA tables,
+  so a macro edit diffed to nothing: deleting all 13 modules from a lifelib
+  SmithWilson workbook produced only `IR_METADATA_CHANGED`. The changelist now
+  carries `VBA_MODULE_*`, `VBA_PROCEDURE_*` and `VBA_DECLARATIONS_*` entries
+  (all `layer: "workbook"`, ordered after every other change), and `summary`
+  gains eight `vba_*` counts, which are zero for workbooks without VBA. Along
+  the way, three defects in the previously unused VBA comparison are fixed:
+  - the two branches of an `#If` block that define the same procedure
+    overwrote each other, so an edit to one branch could go unreported;
+  - a procedure with several equally likely rename targets was dropped from
+    the result instead of being reported as removed;
+  - a rename with an unchanged body was always classified as renamed *and*
+    modified, because the comparison included the line naming the procedure.
+
+  Code outside procedures (`Option` statements, `Declare`s, module-level
+  variables and constants) is compared too, so any edit to a module's code shows
+  up as at least one change.
 - A damaged `xl/vbaProject.bin` is now reported as a failed VBA extraction.
   olevba fell back to reading it as plain text, which found no modules, so the
   workbook was silently treated as having none.
