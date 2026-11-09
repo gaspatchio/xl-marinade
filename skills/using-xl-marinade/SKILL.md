@@ -149,6 +149,15 @@ One JSON document, three layers to read in order:
     moved). These churn around a real edit even though the cells they name
     were not touched; `summary` counts them as `ir_inference_changes`.
     **Never count them as edits in an audit.**
+  - VBA edits are `layer = "workbook"` too, after everything else:
+    `VBA_MODULE_ADDED|REMOVED`, `VBA_PROCEDURE_ADDED|REMOVED|RENAMED|
+    RENAMED_AND_MODIFIED|LOGIC_CHANGED|SIGNATURE_CHANGED|COSMETIC_CHANGED`,
+    `VBA_DECLARATIONS_CHANGED|COSMETIC_CHANGED` (module code outside
+    procedures), counted in `summary.vba_*`. Each names `module`,
+    `procedure`, `kind`, `compile_branch` and `lines` (`lines_a`/`lines_b`
+    for a matched pair) — read the
+    bodies from `vba_procedures` in each db. `*_COSMETIC_CHANGED` is
+    comments/whitespace/case only.
 
 Practical rules:
 

@@ -30,6 +30,7 @@ from xl_marinade.core.ir_diff.loader import load_model
 from xl_marinade.core.ir_diff.model import BindingMatch, Change, IRModel
 from xl_marinade.core.ir_diff.ordering import order_changes
 from xl_marinade.core.ir_diff.sheet_match import match_sheets
+from xl_marinade.core.ir_diff.vba_diff import diff_vba
 from xl_marinade.core.ir_diff.verify import verify_diff
 
 # Cache-invalidation version for the diff algorithm AND its inputs.
@@ -62,7 +63,10 @@ from xl_marinade.core.ir_diff.verify import verify_diff
 # members compared by binding position, BINDING_METADATA_CHANGED and edges
 # re-resolved out of unedited formulas tagged ir_inference, and every change
 # now carries an explicit "layer".
-IR_DIFF_CACHE_VERSION = 8
+# v9 = issue #47 — VBA module, declaration and procedure changes are emitted
+# (VBA_* types, tier 12) and summary gains vba_* counts; before this a VBA
+# edit produced no change at all.
+IR_DIFF_CACHE_VERSION = 9
 
 
 def diff_ir(db_a: str, db_b: str) -> dict:
@@ -125,6 +129,7 @@ def diff_ir(db_a: str, db_b: str) -> dict:
     changes += diff_edges(a_norm, b_norm, cell_match, binding_match)
     changes += diff_families(a_norm, b_norm, binding_match)
     changes += diff_resolution_metrics(a_norm, b_norm)
+    changes += diff_vba(db_a, db_b)
 
     # Order deterministically
     changes = order_changes(changes)
@@ -369,6 +374,15 @@ def _build_summary(changes: list[Change]) -> dict:
         "label_evidence_changed": 0,
         "resolution_metrics_changed": 0,
         "metadata_changed": 0,
+        "vba_modules_added": 0,
+        "vba_modules_removed": 0,
+        "vba_declarations_changed": 0,
+        "vba_procedures_added": 0,
+        "vba_procedures_removed": 0,
+        "vba_procedures_renamed": 0,
+        "vba_procedures_logic_changed": 0,
+        # Comment/whitespace/case-only edits, to procedures or declarations.
+        "vba_cosmetic_changes": 0,
         # Roll-up of every change in the ir_inference layer (tables, label
         # evidence, binding metadata, time annotations, and edges re-resolved
         # out of unedited formulas): extractor-derived, not workbook edits.
@@ -406,6 +420,17 @@ def _build_summary(changes: list[Change]) -> dict:
         CT.NAME_METADATA_CHANGED: "names_changed",
         CT.BINDING_LABEL_EVIDENCE_CHANGED: "label_evidence_changed",
         CT.IR_METADATA_CHANGED: "metadata_changed",
+        CT.VBA_MODULE_ADDED: "vba_modules_added",
+        CT.VBA_MODULE_REMOVED: "vba_modules_removed",
+        CT.VBA_DECLARATIONS_CHANGED: "vba_declarations_changed",
+        CT.VBA_PROCEDURE_ADDED: "vba_procedures_added",
+        CT.VBA_PROCEDURE_REMOVED: "vba_procedures_removed",
+        CT.VBA_PROCEDURE_RENAMED: "vba_procedures_renamed",
+        CT.VBA_PROCEDURE_RENAMED_AND_MODIFIED: "vba_procedures_renamed",
+        CT.VBA_PROCEDURE_SIGNATURE_CHANGED: "vba_procedures_logic_changed",
+        CT.VBA_PROCEDURE_LOGIC_CHANGED: "vba_procedures_logic_changed",
+        CT.VBA_PROCEDURE_COSMETIC_CHANGED: "vba_cosmetic_changes",
+        CT.VBA_DECLARATIONS_COSMETIC_CHANGED: "vba_cosmetic_changes",
     }
 
     edge_types = {
