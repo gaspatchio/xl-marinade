@@ -7,6 +7,16 @@ schema is a versioned public contract.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-09
+
+A VBA release. `marinade diff` now reports macro changes (#47); before this, a
+VBA edit, even deleting every module, diffed to nothing. The extracted
+database also records whether its VBA was read at all (#48), so a macro
+workbook extracted without the `[vba]` extra no longer looks like one with no
+macros. Diff output gains `VBA_*` change types and eight `summary.vba_*`
+counts, and `ir_metadata` gains `vba_extraction`. The output schema is
+unchanged at 3.0.
+
 ### Added
 - The extracted database records whether its VBA was read (#48):
   `ir_metadata` key `vba_extraction` is `extracted`, `no_vba_project`,
