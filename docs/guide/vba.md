@@ -11,6 +11,22 @@ static-analysis library for Office file formats — nothing in the `[vba]` path
 executes the macro. Without the extra installed, `extract` still runs normally;
 it simply produces no VBA nodes or edges.
 
+Every database records whether its VBA was read, in `ir_metadata`:
+
+```sql
+SELECT value FROM ir_metadata WHERE key = 'vba_extraction';
+```
+
+| Value | Meaning |
+|---|---|
+| `extracted` | The VBA tables hold the workbook's VBA. |
+| `no_vba_project` | The workbook has no VBA project, e.g. any `.xlsx`. |
+| `skipped_no_oletools` | The `[vba]` extra is not installed, so the VBA was not read. The tables are empty whether or not the workbook has macros. |
+| `failed` | Reading or storing the VBA raised (see the extraction log). The tables may be empty or partial. |
+
+Empty VBA tables mean "no macros" only when the value is `no_vba_project`.
+Databases from before this key existed have no row for it.
+
 ## What gets captured
 
 For every VBA project embedded in the workbook, extraction captures:

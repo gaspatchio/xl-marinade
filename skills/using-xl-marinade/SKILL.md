@@ -33,7 +33,12 @@ marinade extract path/to/book.xlsx -o out.ir.db      # .xlsx or .xlsm
 marinade extract path/to/book.xlsm -o out.ir.db --max-memory-mb 4000
 ```
 
-- Works on `.xlsx` and `.xlsm` (VBA is parsed into the IR).
+- Works on `.xlsx` and `.xlsm` (VBA is parsed into the IR when the `[vba]`
+  extra is installed). Empty VBA tables mean "no macros" ONLY if
+  `SELECT value FROM ir_metadata WHERE key = 'vba_extraction'` is
+  `no_vba_project`; `skipped_no_oletools` means the macros were never read
+  (install `xl-marinade[vba]` and re-extract), `failed` means they may be
+  partial. Re-extract before auditing or diffing VBA in either case.
 - **Recalculate in Excel and save before extracting** if you will read
   cached *values* — openpyxl saves STRIP cached values. Formula/edge
   *structure* does not need a recalc.
