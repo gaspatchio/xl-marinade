@@ -461,6 +461,25 @@ def diff_bindings(
                 )
             )
 
+    # Bindings that went with deleted rows/columns (#53). Canonicalization
+    # cannot place them in B's coordinates, so they never reach matching;
+    # before this they vanished from the diff. Keyed by their A address.
+    for ak in sorted(a.axis_removed_bindings):
+        ad = a.axis_removed_bindings[ak]
+        changes.append(
+            Change(
+                type=CT.BINDING_REMOVED,
+                sort_key=(ak.sheet, ak.top_left_row, ak.top_left_col),
+                details={
+                    "sheet": ak.sheet,
+                    "address": ad.address_a1,
+                    "label": ad.label,
+                    "binding_id_a": ad.original_binding_id,
+                    "with_axis_deletion": True,
+                },
+            )
+        )
+
     # Unmatched B bindings
     for bk in sorted(binding_match.added):
         bd = b.bindings.get(bk)

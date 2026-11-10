@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+from collections.abc import Callable
 
 from xl_marinade.core.ir_diff.lcs import alignment_to_maps, lcs_alignment
 from xl_marinade.core.ir_diff.model import (
@@ -50,45 +52,11 @@ def detect_axis_edits(
         cols_a = sorted(cols_tok_a.get(sa, {}))
         cols_b = sorted(cols_tok_b.get(sb, {}))
 
-        # Row alignment via LCS on signatures
-        row_sigs_a = [_axis_sig(rows_tok_a[sa][r]) for r in rows_a]
-        row_sigs_b = [_axis_sig(rows_tok_b[sb][r]) for r in rows_b]
-        row_alignment = lcs_alignment(row_sigs_a, row_sigs_b)
-        row_map, rows_inserted, rows_deleted = alignment_to_maps(
-            row_alignment,
-            rows_a,
-            rows_b,
+        row_map, rows_inserted, rows_deleted = _align_axis(
+            rows_tok_a.get(sa, {}), rows_tok_b.get(sb, {}), rows_a, rows_b, "row"
         )
-
-        # Fallback: rows that exist at the same index in both A and B but have
-        # different signatures should still be mapped as identity (content change,
-        # not structural insert/delete). This prevents treating formula/value edits
-        # as spurious row insertions/deletions.
-        row_map, rows_inserted, rows_deleted = _add_identity_fallback(
-            row_map,
-            rows_inserted,
-            rows_deleted,
-            set(rows_a),
-            set(rows_b),
-        )
-
-        # Column alignment
-        col_sigs_a = [_axis_sig(cols_tok_a[sa][c]) for c in cols_a]
-        col_sigs_b = [_axis_sig(cols_tok_b[sb][c]) for c in cols_b]
-        col_alignment = lcs_alignment(col_sigs_a, col_sigs_b)
-        col_map, cols_inserted, cols_deleted = alignment_to_maps(
-            col_alignment,
-            cols_a,
-            cols_b,
-        )
-
-        # Same fallback for columns
-        col_map, cols_inserted, cols_deleted = _add_identity_fallback(
-            col_map,
-            cols_inserted,
-            cols_deleted,
-            set(cols_a),
-            set(cols_b),
+        col_map, cols_inserted, cols_deleted = _align_axis(
+            cols_tok_a.get(sa, {}), cols_tok_b.get(sb, {}), cols_a, cols_b, "col"
         )
 
         result[sa] = AxisMap(
@@ -98,75 +66,86 @@ def detect_axis_edits(
             rows_deleted=rows_deleted,
             cols_inserted=cols_inserted,
             cols_deleted=cols_deleted,
+            deleted_row_keys=frozenset(set(rows_a) - set(row_map)),
+            deleted_col_keys=frozenset(set(cols_a) - set(col_map)),
         )
 
     return result
 
 
-def _add_identity_fallback(
-    key_map: dict[int, int],
-    inserted_runs: list[tuple[int, int]],
-    deleted_runs: list[tuple[int, int]],
-    keys_a: set[int],
-    keys_b: set[int],
+def _align_axis(
+    tok_a: dict[int, list],
+    tok_b: dict[int, list],
+    keys_a: list[int],
+    keys_b: list[int],
+    axis: str,
 ) -> tuple[dict[int, int], list[tuple[int, int]], list[tuple[int, int]]]:
-    """Add identity mappings for keys present in both A and B but unmatched by LCS.
+    """Align one axis (rows or cols) of a matched sheet pair.
 
-    When a row/col exists at the same index in both databases but has different
-    content (formula/value changed), the LCS won't match it. This fallback maps
-    such rows/cols as identity (content change, not structural edit), and removes
-    them from the inserted/deleted runs.
+    Four passes, each confined to the stretches the previous ones left
+    unmatched, so an earlier, stricter match is never overridden:
 
-    Returns updated (key_map, inserted_runs, deleted_runs).
+    1. strict: the full content signature (the original alignment);
+    2. loose: formulas with this axis's reference coordinates blanked out,
+       so a row/column whose relative references now span an inserted or
+       deleted one still matches itself (#53);
+    3. label: only the non-formula cells (header labels, constants), so a
+       column whose formula changed -- e.g. to #REF! after a column it read
+       was deleted -- still matches by its header (#53);
+    4. identity: a key present on both sides inside the same unmatched
+       stretch is a content edit in place, not a delete plus an insert.
+
+    Returns (key_map, inserted_runs, deleted_runs) as alignment_to_maps does.
     """
-    already_mapped_a = set(key_map.keys())
-    already_mapped_b = set(key_map.values())
+    strict_a = [_axis_sig(tok_a[k]) for k in keys_a]
+    strict_b = [_axis_sig(tok_b[k]) for k in keys_b]
+    alignment = lcs_alignment(strict_a, strict_b)
+    # The later passes only look inside gaps with keys left on both sides,
+    # and only compute signatures for those keys: an unedited axis (every
+    # key strictly matched on one side) costs nothing extra.
+    if len(alignment) < min(len(keys_a), len(keys_b)):
+        alignment = _refine_gaps(
+            alignment,
+            lambda i: _axis_sig(tok_a[keys_a[i]], loose=axis),
+            lambda j: _axis_sig(tok_b[keys_b[j]], loose=axis),
+            len(keys_a),
+            len(keys_b),
+        )
+        alignment = _refine_gaps(
+            alignment,
+            lambda i: _label_sig(tok_a[keys_a[i]], ("a", keys_a[i])),
+            lambda j: _label_sig(tok_b[keys_b[j]], ("b", keys_b[j])),
+            len(keys_a),
+            len(keys_b),
+        )
+        alignment = _identity_in_gaps(alignment, keys_a, keys_b)
+    return alignment_to_maps(alignment, keys_a, keys_b)
 
-    # Keys present in both but not yet mapped
-    common_unmapped = (keys_a - already_mapped_a) & (keys_b - already_mapped_b)
 
-    if not common_unmapped:
-        return key_map, inserted_runs, deleted_runs
-
-    # Add identity mappings
-    new_map = dict(key_map)
-    for k in sorted(common_unmapped):
-        new_map[k] = k
-
-    # Rebuild inserted/deleted runs excluding the now-mapped keys
-    mapped_b = set(new_map.values())
-    mapped_a = set(new_map.keys())
-
-    new_inserted = _rebuild_runs_excluding(inserted_runs, mapped_b)
-    new_deleted = _rebuild_runs_excluding(deleted_runs, mapped_a)
-
-    return new_map, new_inserted, new_deleted
-
-
-def _rebuild_runs_excluding(
-    runs: list[tuple[int, int]],
-    exclude: set[int],
+def _identity_in_gaps(
+    alignment: list[tuple[int, int]],
+    keys_a: list[int],
+    keys_b: list[int],
 ) -> list[tuple[int, int]]:
-    """Rebuild contiguous runs after excluding some keys."""
-    new_runs = []
-    for start, count in runs:
-        # Expand run into individual keys
-        keys = [start + i for i in range(count)]
-        # Filter out excluded keys and rebuild runs
-        remaining = [k for k in keys if k not in exclude]
-        # Group into contiguous runs
-        if remaining:
-            run_start = remaining[0]
-            run_len = 1
-            for i in range(1, len(remaining)):
-                if remaining[i] == remaining[i - 1] + 1:
-                    run_len += 1
-                else:
-                    new_runs.append((run_start, run_len))
-                    run_start = remaining[i]
-                    run_len = 1
-            new_runs.append((run_start, run_len))
-    return new_runs
+    """Pair equal keys left unmatched within the same gap between matches.
+
+    Replaces a global fallback that paired any key unmatched on both sides
+    with itself. After an interior deletion that paired columns across the
+    gap with whatever now sat at their old address -- and could cross
+    existing matches (A col 47 -> B col 47 while A col 48 -> B col 46),
+    which is what placed #53's deletions at the sheet's tail.
+    """
+    bounds = [(-1, -1), *alignment, (len(keys_a), len(keys_b))]
+    out: list[tuple[int, int]] = []
+    for (pa, pb), (na, nb) in zip(bounds, bounds[1:], strict=False):
+        b_pos = {keys_b[j]: j for j in range(pb + 1, nb)}
+        for i in range(pa + 1, na):
+            j = b_pos.get(keys_a[i])
+            if j is not None:
+                out.append((i, j))
+        if na < len(keys_a):
+            out.append((na, nb))
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -204,11 +183,111 @@ def _gather_axis_tokens(
     return rows, cols
 
 
-def _axis_sig(keyed_tokens: list) -> str:
+def _axis_sig(keyed_tokens: list, loose: str | None = None) -> str:
     """Hash a row's (col, token) list — or a column's (row, token) list —
     ordered by the cross-axis coordinate, matching the original ordering of
-    a full (row, col) sort filtered to one row/col."""
+    a full (row, col) sort filtered to one row/col.
+
+    ``loose`` ("row" or "col") hashes formulas with that axis's coordinate
+    blanked out of every reference: see ``_refine_gaps``.
+    """
     keyed_tokens.sort(key=lambda kt: kt[0])
     tokens = [t for _, t in keyed_tokens]
+    if loose is not None:
+        tokens = [_loosen(t, loose) for t in tokens]
     raw = json.dumps(tokens, separators=(",", ":"), sort_keys=True)
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+# ---------------------------------------------------------------------------
+# Gap refinement (issue #53)
+# ---------------------------------------------------------------------------
+
+# One R1C1 reference: an optional row part and an optional column part, at
+# least one present. The lookarounds keep it out of names and function calls
+# (ROUND(, COUNT(, Proj_RC). String literals are skipped by _loosen.
+_R1C1_REF = re.compile(
+    r"(?<![A-Za-z0-9_.!])"
+    r"(?=[RC])"
+    r"(?P<row>R(?:\[-?\d+\]|\d+)?)?"
+    r"(?P<col>C(?:\[-?\d+\]|\d+)?)?"
+    r"(?![A-Za-z0-9_(\[])"
+)
+_STRING_LITERAL = re.compile(r'"[^"]*"')
+
+
+def _label_sig(keyed_tokens: list, own: tuple[str, int]) -> str:
+    """Hash only the non-formula cells (labels, constants) of a row/column.
+
+    A row/column with none gets a signature unique to itself (``own``), so
+    rows/columns cannot match each other on having no labels at all.
+    """
+    values = [t for _, t in sorted(keyed_tokens, key=lambda kt: kt[0]) if t[0] == "V"]
+    if not values:
+        return f"unlabelled:{own[0]}:{own[1]}"
+    raw = json.dumps(values, separators=(",", ":"), sort_keys=True)
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+def _loosen_formula(formula: str, axis: str) -> str:
+    """Blank the ``axis`` coordinate ("row" or "col") of every reference."""
+
+    def sub(m: re.Match[str]) -> str:
+        row, col = m.group("row"), m.group("col")
+        if not row and not col:
+            return m.group(0)
+        if axis == "col":
+            return (row or "") + ("C*" if col else "")
+        return ("R*" if row else "") + (col or "")
+
+    parts: list[str] = []
+    pos = 0
+    for lit in _STRING_LITERAL.finditer(formula):
+        parts.append(_R1C1_REF.sub(sub, formula[pos : lit.start()]))
+        parts.append(lit.group(0))
+        pos = lit.end()
+    parts.append(_R1C1_REF.sub(sub, formula[pos:]))
+    return "".join(parts)
+
+
+def _loosen(token: tuple, axis: str) -> tuple:
+    if token[0] != "F":
+        return token
+    return (token[0], _loosen_formula(token[1], axis), *token[2:])
+
+
+def _refine_gaps(
+    alignment: list[tuple[int, int]],
+    sig_a: Callable[[int], str],
+    sig_b: Callable[[int], str],
+    len_a: int,
+    len_b: int,
+) -> list[tuple[int, int]]:
+    """Re-align each unmatched stretch between strict matches on loose signatures.
+
+    Deleting an interior column changes the R1C1 text of every formula that
+    reaches across the gap (RC[-5] becomes RC[-3]), so every column to its
+    right gets a new strict signature and the strict LCS matches none of
+    them. The identity fallback then paired them by position, which put
+    the deletion at the sheet's tail and turned every shifted column into a
+    "label change" (#53). Loose signatures ignore the coordinate on the
+    deleted axis, so a column keeps its signature when it moves; its header
+    label and values still tell it apart from its neighbours.
+
+    Strict matches are kept as they are: only the stretches between them
+    (and before the first / after the last) are re-aligned. ``sig_a(i)`` /
+    ``sig_b(j)`` give the signature of the i-th / j-th key, and are only
+    called for keys inside such a stretch.
+    """
+    bounds = [(-1, -1), *alignment, (len_a, len_b)]
+    refined: list[tuple[int, int]] = []
+    for (pa, pb), (na, nb) in zip(bounds, bounds[1:], strict=False):
+        if na - pa > 1 and nb - pb > 1:
+            gap = lcs_alignment(
+                [sig_a(i) for i in range(pa + 1, na)],
+                [sig_b(j) for j in range(pb + 1, nb)],
+            )
+            refined.extend((pa + 1 + i, pb + 1 + j) for i, j in gap)
+        if na < len_a:
+            refined.append((na, nb))
+    return refined

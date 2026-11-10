@@ -137,14 +137,20 @@ def _find_runs(
     keys: Sequence[int],
     matched_indices: set[int],
 ) -> list[tuple[int, int]]:
-    """Find contiguous runs of unmatched indices, return as (first_key, count)."""
+    """Find contiguous runs of unmatched keys, return as (first_key, count).
+
+    A run is contiguous in key value, not just in position: unmatched keys 3
+    and 7 with 4-6 unoccupied are two runs, (3, 1) and (7, 1), not (3, 2),
+    which would read as "keys 3 and 4" (#53).
+    """
     runs = []
     i = 0
     n = len(keys)
     while i < n:
         if i not in matched_indices:
             start = i
-            while i < n and i not in matched_indices:
+            i += 1
+            while i < n and i not in matched_indices and keys[i] == keys[i - 1] + 1:
                 i += 1
             runs.append((keys[start], i - start))
         else:

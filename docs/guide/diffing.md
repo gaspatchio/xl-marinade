@@ -33,7 +33,7 @@ The output is a JSON object with these top-level keys:
 | `workbook_sha256_a` / `workbook_sha256_b` | The provenance hash of each source workbook, carried over from extraction. |
 | `root_a` / `root_b` | The extraction root (sheet + range), if either database was a rooted extraction; `null` for a full-workbook extraction. |
 | `summary` | Counts of changes by category — bindings added/removed/moved/resized/formula-changed, cell value/format/dtype changes, sheet and row/column edits, VBA modules and procedures, and more (see below). |
-| `binding_map` | A flat list mapping every binding in A to its match in B (or `null` if added/removed), each with a `diff_state` of `unchanged`, `modified`, `moved`, `removed`, or `added`. |
+| `binding_map` | A flat list mapping every binding in A to its match in B (or `null` if added/removed), each with a `diff_state` of `unchanged`, `modified`, `moved`, `removed`, or `added`, and `shifted` (true when only an inserted or deleted row/column changed its address). |
 | `changes` | The ordered list of individual changes that make up the diff. |
 
 Each entry in `changes` is `{"seq": <position>, "type": <change type>, ...}`,
@@ -94,6 +94,38 @@ read in `ir_metadata` key `vba_extraction` (see
 [VBA extraction](vba.md)). Trust the `VBA_*` entries only when both sides are
 `extracted` or `no_vba_project`. When the key differs between the two
 databases, the changelist also carries an `IR_METADATA_CHANGED` entry for it.
+
+## Inserted and deleted rows and columns
+
+Rows and columns are aligned per sheet before anything else is compared, so an
+insertion or deletion is reported once, where it happened, rather than as
+edits to everything after it:
+
+- `ROWS_INSERTED` / `ROWS_DELETED` / `COLS_INSERTED` / `COLS_DELETED` carry
+  `sheet`, `at_row` or `at_col` (in B's coordinates for an insertion, A's for
+  a deletion) and `count`, the number of contiguous occupied rows or columns
+  in that block. `summary.rows_inserted`, `rows_deleted`, `cols_inserted` and
+  `cols_deleted` count rows and columns, not events.
+- A binding that lay entirely in deleted rows or columns is reported as
+  `BINDING_REMOVED` with `"with_axis_deletion": true`, and appears in
+  `binding_map` as `removed`.
+- A binding that only shifted because of the edit is `unchanged` in
+  `binding_map`, with `"shifted": true`. Its `address_a` and `address_b`
+  differ by the shift; the axis event explains it. Every `binding_map` row
+  carries `shifted`, so filtering on `diff_state` still yields only what was
+  edited, and filtering on `shifted` lists what the edit pushed along. A
+  binding that moved on its own is `moved`, not `shifted`.
+- Formulas are compared as Excel rewrites them: a relative reference that
+  spans the inserted or deleted rows or columns is adjusted before
+  comparison, and so are defined names whose range shifted. What remains is
+  the edit's real consequences, such as a formula that read a deleted column
+  and now holds `#REF!`.
+
+Alignment uses each row's or column's full contents first. Where that leaves a
+stretch unmatched, it retries with reference offsets ignored, then with only
+the header labels and constants. A row or column whose contents and label both
+changed can still be paired with whatever sits at the same position inside the
+unmatched stretch.
 
 ## Reference shift vs. logic change
 

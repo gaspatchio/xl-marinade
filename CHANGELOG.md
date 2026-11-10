@@ -7,6 +7,44 @@ schema is a versioned public contract.
 
 ## [Unreleased]
 
+### Changed
+- `summary.rows_inserted`, `rows_deleted`, `cols_inserted` and `cols_deleted`
+  in a `marinade diff` changelist now count rows and columns, not
+  `ROWS_*`/`COLS_*` events (#53). Deleting seven columns in three blocks used
+  to read `cols_deleted: 3`. Each event's `at_row`/`at_col` and `count` now
+  also describe one contiguous block: a run of deleted occupied columns
+  separated by empty ones used to be one event whose `count` overstated the
+  block at `at_col`.
+
+### Fixed
+- `marinade diff` placed interior row and column deletions at the sheet's
+  tail (#53). Deleting columns from the middle of a formula block changes
+  the relative references of every column to their right (`RC[-5]` becomes
+  `RC[-3]`), so none of those columns matched themselves, and a fallback
+  paired each with whatever now sat at its old address. On a lifelib
+  CashValue_SE workbook with four `Projection` columns deleted, the diff
+  reported the deletions at the wrong columns, 19 label changes that never
+  happened, 21,698 formula changes and no removed bindings: 154,521 changes
+  in all. It now reports the deletions at AD, AP:AQ and AU, the four deleted
+  columns' bindings as removed, no label changes, and formula changes only
+  for the four columns whose formulas became `#REF!`: 7,007 changes. In
+  detail:
+  - rows and columns that no longer match on their full contents are
+    re-aligned with reference offsets ignored, then by their labels and
+    constants, and the position-based fallback can no longer pair across
+    other matches;
+  - relative references that span an inserted or deleted row or column, and
+    defined names whose ranges shifted, are compared as Excel rewrites them;
+  - a binding that lay entirely in deleted rows or columns is reported
+    `BINDING_REMOVED` (with `with_axis_deletion: true`) instead of vanishing,
+    and one that lost only its first row or column is still compared;
+  - every `binding_map` row gains `shifted`: true when a binding's address
+    changed only because rows or columns were inserted or deleted before it.
+    Such a binding stays `unchanged`, so filtering on `diff_state` still
+    yields only what was edited;
+  - `RC[-1]`, `R[-1]C` and `RC5` are recognised as references when formulas
+    are canonicalized; only references with a number on both parts were.
+
 ## [0.5.0] - 2026-11-09
 
 A VBA release. `marinade diff` now reports macro changes (#47); before this, a

@@ -5,6 +5,11 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping
+
+from openpyxl.utils import column_index_from_string, get_column_letter
+
+from xl_marinade.core.ir_diff.formula_rewrite import AxisIndex
 
 
 def rewrite_json_blob(
@@ -37,6 +42,35 @@ def rewrite_json_blob(
 
     rewritten = _rewrite_value(data, sheet_map, row_map, col_map)
     return json.dumps(rewritten, sort_keys=True, separators=(",", ":"))
+
+
+_A1_CELL = re.compile(r"(\$?)([A-Z]+)(\$?)(\d+)")
+
+
+def _move_address_cells(s: str, axis_index: Mapping[str, tuple[AxisIndex, AxisIndex]]) -> str:
+    """Move the cells of sheet-qualified A1 addresses through axis maps."""
+
+    def _move(m: re.Match[str]) -> str:
+        sheet = m.group(1) or m.group(2)
+        indices = axis_index.get(sheet)
+        if indices is None:
+            return m.group(0)
+        rows, cols = indices
+        moved = []
+        for cell in (m.group(3), m.group(4)):
+            if cell is None:
+                continue
+            c = _A1_CELL.fullmatch(cell)
+            if c is None:
+                return m.group(0)
+            new_row = rows.map(int(c.group(4)))
+            new_col = cols.map(column_index_from_string(c.group(2)))
+            if new_row is None or new_col is None:
+                return m.group(0)  # An endpoint was deleted: the range changed
+            moved.append(f"{c.group(1)}{get_column_letter(new_col)}{c.group(3)}{new_row}")
+        return m.group(0)[: m.start(3) - m.start(0)] + ":".join(moved)
+
+    return _A1_PATTERN.sub(_move, s)
 
 
 def _rewrite_value(value, sheet_map, row_map, col_map):
@@ -97,16 +131,21 @@ def _rewrite_address_string(
 def canonicalize_destinations_json(
     destinations_json: str,
     sheet_map: dict[str, str],
+    axis_index: Mapping[str, tuple[AxisIndex, AxisIndex]] | None = None,
 ) -> str:
     """Canonicalize a defined_names.destinations JSON list.
 
-    Rewrites sheet names in destination addresses.
-    Does not transform row/col (destinations use A1 notation which
-    would require a full A1 -> row/col parser for transformation).
+    Rewrites sheet names in destination addresses and, when ``axis_index``
+    (A sheet name -> (row index, col index)) is given, moves each cell of a
+    destination through that sheet's row/column maps -- so a name whose
+    range Excel shifted left when columns were deleted reads as unchanged
+    (#53). A destination with an endpoint in a deleted row/column is left
+    as it was: its range really did change.
 
     Args:
         destinations_json: JSON list of A1 ref strings.
         sheet_map: A sheet name -> B sheet name.
+        axis_index: Per-sheet row/column index maps, A sheet name keyed.
 
     Returns:
         Canonicalized JSON string.
@@ -122,6 +161,8 @@ def canonicalize_destinations_json(
     rewritten = []
     for d in dests:
         if isinstance(d, str):
+            if axis_index:
+                d = _move_address_cells(d, axis_index)
             rewritten.append(_rewrite_address_string(d, sheet_map, {}, {}))
         else:
             rewritten.append(d)

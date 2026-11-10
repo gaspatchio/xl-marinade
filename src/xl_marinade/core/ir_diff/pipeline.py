@@ -66,7 +66,12 @@ from xl_marinade.core.ir_diff.verify import verify_diff
 # v9 = issue #47 — VBA module, declaration and procedure changes are emitted
 # (VBA_* types, tier 12) and summary gains vba_* counts; before this a VBA
 # edit produced no change at all.
-IR_DIFF_CACHE_VERSION = 9
+# v10 = issue #53 — interior row/column insertions and deletions are aligned
+# (loose and label passes, gap-confined identity fallback), relative refs that
+# span them and name destinations are canonicalized, bindings in deleted
+# rows/columns are reported removed, axis runs are contiguous, and
+# summary.{rows,cols}_{inserted,deleted} count rows/columns, not events.
+IR_DIFF_CACHE_VERSION = 10
 
 
 def diff_ir(db_a: str, db_b: str) -> dict:
@@ -243,6 +248,13 @@ _MODIFIED_CHANGE_TYPES = frozenset(
 )
 
 
+def _top_left(address: str | None) -> str | None:
+    """The first cell of an A1 address, without its sheet: "Proj!D2:D13" -> "D2"."""
+    if not address:
+        return None
+    return address.rsplit("!", 1)[-1].split(":", 1)[0].replace("$", "")
+
+
 def _build_binding_map(
     binding_match: BindingMatch,
     a_norm: IRModel,
@@ -296,6 +308,12 @@ def _build_binding_map(
                 "address_b": bd.address_a1,
                 "label_a": ad.label,
                 "label_b": bd.label,
+                # Its address changed only because rows/columns were inserted
+                # or deleted before it (#53). Not a move: diff_state stays as
+                # the binding's own changes say, so a filter on diff_state
+                # still yields only what was edited.
+                "shifted": diff_state != "moved"
+                and _top_left(ad.address_a1) != _top_left(bd.address_a1),
             }
         )
 
@@ -313,6 +331,23 @@ def _build_binding_map(
                 "address_b": None,
                 "label_a": ad.label,
                 "label_b": None,
+                "shifted": False,
+            }
+        )
+
+    # Removed with a deleted row/column (in A only, keyed by A address)
+    for ak in sorted(a_norm.axis_removed_bindings):
+        ad = a_norm.axis_removed_bindings[ak]
+        entries.append(
+            {
+                "binding_id_a": ad.original_binding_id,
+                "binding_id_b": None,
+                "diff_state": "removed",
+                "address_a": ad.address_a1,
+                "address_b": None,
+                "label_a": ad.label,
+                "label_b": None,
+                "shifted": False,
             }
         )
 
@@ -330,6 +365,7 @@ def _build_binding_map(
                 "address_b": bd.address_a1,
                 "label_a": None,
                 "label_b": bd.label,
+                "shifted": False,
             }
         )
 
@@ -433,6 +469,8 @@ def _build_summary(changes: list[Change]) -> dict:
         CT.VBA_DECLARATIONS_COSMETIC_CHANGED: "vba_cosmetic_changes",
     }
 
+    axis_types = {CT.ROWS_INSERTED, CT.ROWS_DELETED, CT.COLS_INSERTED, CT.COLS_DELETED}
+
     edge_types = {
         CT.CELL_EDGE_ADDED,
         CT.CELL_EDGE_REMOVED,
@@ -472,7 +510,10 @@ def _build_summary(changes: list[Change]) -> dict:
     }
 
     for c in changes:
-        if c.type in type_to_key:
+        if c.type in axis_types:
+            # Rows/columns, not events: one event covers a contiguous run (#53).
+            s[type_to_key[c.type]] += c.details["count"]
+        elif c.type in type_to_key:
             s[type_to_key[c.type]] += 1
         elif c.type in edge_types:
             s["edges_changed"] += 1

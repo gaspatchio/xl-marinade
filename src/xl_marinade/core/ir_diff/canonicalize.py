@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from xl_marinade.core.ir_diff.formula_rewrite import rewrite_formula_r1c1
+from xl_marinade.core.ir_diff.formula_rewrite import AxisIndex, rewrite_formula_r1c1
 from xl_marinade.core.ir_diff.json_rewrite import (
     canonicalize_destinations_json,
     rewrite_json_blob,
@@ -76,14 +76,36 @@ def canonicalize_model(
             global_row_map.update(axis.row_map)
             global_col_map.update(axis.col_map)
 
-    # rewrite_formula_r1c1 is a pure function of (formula, sheet_map,
-    # row_map, col_map), and formulas repeat massively across cells (one
-    # R1C1 pattern per column/block). Memoize per (sheet, formula) — the
-    # axis maps are fixed per sheet for the duration of this call.
-    _rewrite_cache: dict[tuple[str, str], str | None] = {}
+    # Full per-sheet index maps, used to re-derive relative offsets that span
+    # an inserted or deleted row/column (#53). Only an axis that actually
+    # moved needs them: elsewhere relative offsets cannot change.
+    axis_index: dict[str, tuple[AxisIndex | None, AxisIndex | None]] = {}
+    full_axis_index: dict[str, tuple[AxisIndex, AxisIndex]] = {}
+    for sa, axis in axis_maps.items():
+        rows = AxisIndex(
+            {k: v for k, v in axis.row_map.items() if v is not None},
+            axis.deleted_row_keys,
+        )
+        cols = AxisIndex(
+            {k: v for k, v in axis.col_map.items() if v is not None},
+            axis.deleted_col_keys,
+        )
+        axis_index[sa] = (rows if rows.edited else None, cols if cols.edited else None)
+        full_axis_index[sa] = (rows, cols)
 
-    def _rewrite_cached(formula: str, sheet: str, sheet_axis) -> str | None:
-        key = (sheet, formula)
+    # rewrite_formula_r1c1 is a pure function of (formula, sheet_map,
+    # row_map, col_map) plus, on a sheet whose rows or columns moved, the
+    # cell's position along the moved axis. Formulas repeat massively across
+    # cells (one R1C1 pattern per column/block), so memoize per (sheet,
+    # formula, row-if-rows-moved, col-if-cols-moved): on an unedited sheet
+    # that is still one entry per formula.
+    _rewrite_cache: dict[tuple[str, str, int, int], str | None] = {}
+
+    def _rewrite_cached(
+        formula: str, sheet: str, sheet_axis: AxisMap, row: int, col: int
+    ) -> str | None:
+        row_idx, col_idx = axis_index.get(sheet, (None, None))
+        key = (sheet, formula, row if row_idx else 0, col if col_idx else 0)
         if key in _rewrite_cache:
             return _rewrite_cache[key]
         result = rewrite_formula_r1c1(
@@ -91,6 +113,10 @@ def canonicalize_model(
             global_sheet_map,
             sheet_axis.row_map,
             sheet_axis.col_map,
+            position=(row, col) if (row_idx or col_idx) else None,
+            own_sheet=sheet,
+            row_index=row_idx,
+            col_index=col_idx,
         )
         _rewrite_cache[key] = result
         return result
@@ -128,7 +154,9 @@ def canonicalize_model(
         if not is_identity and csig.formula_r1c1:
             sheet_axis = axis_maps.get(ck.sheet)
             if sheet_axis:
-                new_formula = _rewrite_cached(csig.formula_r1c1, ck.sheet, sheet_axis)
+                new_formula = _rewrite_cached(
+                    csig.formula_r1c1, ck.sheet, sheet_axis, ck.row, ck.col
+                )
 
         # Rewrite spill origin
         new_spill = csig.spill_origin
@@ -153,14 +181,24 @@ def canonicalize_model(
     for bk, bdesc in model.bindings.items():
         new_bk = _transform_binding_key(bk, global_sheet_map, axis_maps, is_identity)
         if new_bk is None:
+            if bk.sheet in global_sheet_map and bk.sheet in axis_maps:
+                # Matched sheet, but every row or every column the binding
+                # spans was deleted: it went with them. Keep it to report.
+                out.axis_removed_bindings[bk] = bdesc
             continue
         binding_key_map[bk] = new_bk
+        # A binding whose first row/col was deleted is re-anchored at its
+        # first surviving one (see _transform_binding_key); its formula is
+        # read at that cell.
+        anchor_row, anchor_col = _first_surviving(bk, axis_maps.get(bk.sheet))
 
         new_formula = bdesc.formula_r1c1
         if not is_identity and bdesc.formula_r1c1:
             sheet_axis = axis_maps.get(bk.sheet)
             if sheet_axis:
-                new_formula = _rewrite_cached(bdesc.formula_r1c1, bk.sheet, sheet_axis)
+                new_formula = _rewrite_cached(
+                    bdesc.formula_r1c1, bk.sheet, sheet_axis, anchor_row, anchor_col
+                )
 
         # Rebuild members_by_offset with lite sigs (offsets stay the same)
         new_members = {}
@@ -169,7 +207,13 @@ def canonicalize_model(
             if not is_identity and lite.formula_r1c1:
                 sheet_axis = axis_maps.get(bk.sheet)
                 if sheet_axis:
-                    new_lite_formula = _rewrite_cached(lite.formula_r1c1, bk.sheet, sheet_axis)
+                    new_lite_formula = _rewrite_cached(
+                        lite.formula_r1c1,
+                        bk.sheet,
+                        sheet_axis,
+                        bk.top_left_row + dr,
+                        bk.top_left_col + dc,
+                    )
             new_members[(dr, dc)] = CellSigLite(
                 formula_r1c1=new_lite_formula,
                 data_type=lite.data_type,
@@ -253,7 +297,7 @@ def canonicalize_model(
         if not is_identity and nd.scope != "workbook":
             new_scope = global_sheet_map.get(nd.scope, nd.scope)
         new_dests = (
-            canonicalize_destinations_json(nd.destinations, global_sheet_map)
+            canonicalize_destinations_json(nd.destinations, global_sheet_map, full_axis_index)
             if not is_identity
             else nd.destinations
         )
@@ -398,10 +442,40 @@ def _transform_binding_key(
     if axis is None:
         return BindingKey(new_sheet, bk.top_left_row, bk.top_left_col, bk.shape_rows, bk.shape_cols)
 
-    new_row = axis.row_map.get(bk.top_left_row)
-    new_col = axis.col_map.get(bk.top_left_col)
+    anchor_row, anchor_col = _first_surviving(bk, axis)
+    new_row = axis.row_map.get(anchor_row)
+    new_col = axis.col_map.get(anchor_col)
 
     if new_row is None or new_col is None:
-        return None
+        return None  # Every row, or every column, of the binding was deleted
 
     return BindingKey(new_sheet, new_row, new_col, bk.shape_rows, bk.shape_cols)
+
+
+def _first_surviving(bk: BindingKey, axis: AxisMap | None) -> tuple[int, int]:
+    """The binding's first row and column that survive into B.
+
+    A binding whose top-left row or column was deleted used to be dropped
+    whole, so a block that only lost its first column vanished from the
+    diff. It is anchored at its first surviving row/column instead; when
+    none survives, the top-left is returned and maps to nothing.
+    """
+    if axis is None:
+        return bk.top_left_row, bk.top_left_col
+    row = next(
+        (
+            r
+            for r in range(bk.top_left_row, bk.top_left_row + bk.shape_rows)
+            if axis.row_map.get(r) is not None
+        ),
+        bk.top_left_row,
+    )
+    col = next(
+        (
+            c
+            for c in range(bk.top_left_col, bk.top_left_col + bk.shape_cols)
+            if axis.col_map.get(c) is not None
+        ),
+        bk.top_left_col,
+    )
+    return row, col

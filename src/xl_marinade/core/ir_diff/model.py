@@ -327,6 +327,11 @@ class IRModel:
     # Resolution metrics: (function_name, status) -> count
     resolution_metrics: dict[tuple[str, str], int] = field(default_factory=dict)
 
+    # Canonicalized A only: bindings that lay entirely in deleted rows or
+    # columns, keyed by their A-side key. They have no B-side coordinates, so
+    # they take no part in matching, but they are reported removed (#53).
+    axis_removed_bindings: dict[BindingKey, BindingDesc] = field(default_factory=dict)
+
 
 # ---------------------------------------------------------------------------
 # Matching results
@@ -359,6 +364,10 @@ class AxisMap:
     rows_deleted: list[tuple[int, int]] = field(default_factory=list)
     cols_inserted: list[tuple[int, int]] = field(default_factory=list)
     cols_deleted: list[tuple[int, int]] = field(default_factory=list)
+    # Exactly which occupied A rows/cols have no B counterpart. The *_deleted
+    # runs count occupied keys, which need not be contiguous indices.
+    deleted_row_keys: frozenset[int] = frozenset()
+    deleted_col_keys: frozenset[int] = frozenset()
 
 
 @dataclass
