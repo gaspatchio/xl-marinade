@@ -121,12 +121,28 @@ def test_interior_column_deletion(tmp_path: Path) -> None:
     by_label = {m["label_a"]: m for m in result["binding_map"] if m["label_a"]}
     assert by_label["v3"]["diff_state"] == "removed"
     assert by_label["v4"]["diff_state"] == "removed"
+    assert not by_label["v3"]["shifted"]
+    # Bindings left of the gap kept their address. (The extractor groups v1
+    # with the t column, as A2:B13 labelled "t".)
+    for label in ("t", "v2"):
+        assert (by_label[label]["diff_state"], by_label[label]["shifted"]) == (
+            "unchanged",
+            False,
+        )
+    # Columns right of the gap are unchanged, but flagged as shifted.
     for k in range(5, 11):
         entry = by_label[f"v{k}"]
         assert entry["diff_state"] == "unchanged"
+        assert entry["shifted"] is True
         assert entry["label_b"] == f"v{k}"
         assert entry["address_a"] == f"{col_letter(k + 1)}2:{col_letter(k + 1)}13"
         assert entry["address_b"] == f"{col_letter(k - 1)}2:{col_letter(k - 1)}13"
+    # The header row only shrank: same top-left, so not shifted.
+    header = next(m for m in result["binding_map"] if m["diff_state"] == "modified")
+    assert header["address_a"].endswith("A1:K1")
+    assert header["shifted"] is False
+    # Every row carries the flag.
+    assert all("shifted" in m for m in result["binding_map"])
 
 
 def test_column_that_read_a_deleted_column_still_aligns_by_its_label(tmp_path: Path) -> None:

@@ -248,6 +248,13 @@ _MODIFIED_CHANGE_TYPES = frozenset(
 )
 
 
+def _top_left(address: str | None) -> str | None:
+    """The first cell of an A1 address, without its sheet: "Proj!D2:D13" -> "D2"."""
+    if not address:
+        return None
+    return address.rsplit("!", 1)[-1].split(":", 1)[0].replace("$", "")
+
+
 def _build_binding_map(
     binding_match: BindingMatch,
     a_norm: IRModel,
@@ -301,6 +308,12 @@ def _build_binding_map(
                 "address_b": bd.address_a1,
                 "label_a": ad.label,
                 "label_b": bd.label,
+                # Its address changed only because rows/columns were inserted
+                # or deleted before it (#53). Not a move: diff_state stays as
+                # the binding's own changes say, so a filter on diff_state
+                # still yields only what was edited.
+                "shifted": diff_state != "moved"
+                and _top_left(ad.address_a1) != _top_left(bd.address_a1),
             }
         )
 
@@ -318,6 +331,7 @@ def _build_binding_map(
                 "address_b": None,
                 "label_a": ad.label,
                 "label_b": None,
+                "shifted": False,
             }
         )
 
@@ -333,6 +347,7 @@ def _build_binding_map(
                 "address_b": None,
                 "label_a": ad.label,
                 "label_b": None,
+                "shifted": False,
             }
         )
 
@@ -350,6 +365,7 @@ def _build_binding_map(
                 "address_b": bd.address_a1,
                 "label_a": None,
                 "label_b": bd.label,
+                "shifted": False,
             }
         )
 

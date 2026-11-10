@@ -141,7 +141,8 @@ One JSON document, three layers to read in order:
   (`unchanged` | `modified` | `added` | `removed` | `moved`), `address_a/b`,
   `label_a/b`. This labeled map is the agent-consumable changelist. A
   binding that only shifted because rows/columns were inserted or deleted is
-  `unchanged` with differing `address_a/b`; one deleted with its rows/columns
+  `unchanged` with `shifted: true` and differing `address_a/b` — not an
+  edit; filter on `diff_state`, not on address. One deleted with its rows/columns
   is `removed` (`BINDING_REMOVED` carries `with_axis_deletion: true`).
   `summary.{rows,cols}_{inserted,deleted}` count rows/columns, not events.
 - **`changes`** — the per-event detail. Each carries `seq`, `type`, and a

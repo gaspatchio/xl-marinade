@@ -33,7 +33,7 @@ The output is a JSON object with these top-level keys:
 | `workbook_sha256_a` / `workbook_sha256_b` | The provenance hash of each source workbook, carried over from extraction. |
 | `root_a` / `root_b` | The extraction root (sheet + range), if either database was a rooted extraction; `null` for a full-workbook extraction. |
 | `summary` | Counts of changes by category — bindings added/removed/moved/resized/formula-changed, cell value/format/dtype changes, sheet and row/column edits, VBA modules and procedures, and more (see below). |
-| `binding_map` | A flat list mapping every binding in A to its match in B (or `null` if added/removed), each with a `diff_state` of `unchanged`, `modified`, `moved`, `removed`, or `added`. |
+| `binding_map` | A flat list mapping every binding in A to its match in B (or `null` if added/removed), each with a `diff_state` of `unchanged`, `modified`, `moved`, `removed`, or `added`, and `shifted` (true when only an inserted or deleted row/column changed its address). |
 | `changes` | The ordered list of individual changes that make up the diff. |
 
 Each entry in `changes` is `{"seq": <position>, "type": <change type>, ...}`,
@@ -110,8 +110,11 @@ edits to everything after it:
   `BINDING_REMOVED` with `"with_axis_deletion": true`, and appears in
   `binding_map` as `removed`.
 - A binding that only shifted because of the edit is `unchanged` in
-  `binding_map`. Its `address_a` and `address_b` differ by the shift; the
-  axis event explains it.
+  `binding_map`, with `"shifted": true`. Its `address_a` and `address_b`
+  differ by the shift; the axis event explains it. Every `binding_map` row
+  carries `shifted`, so filtering on `diff_state` still yields only what was
+  edited, and filtering on `shifted` lists what the edit pushed along. A
+  binding that moved on its own is `moved`, not `shifted`.
 - Formulas are compared as Excel rewrites them: a relative reference that
   spans the inserted or deleted rows or columns is adjusted before
   comparison, and so are defined names whose range shifted. What remains is

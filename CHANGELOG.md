@@ -38,6 +38,10 @@ schema is a versioned public contract.
   - a binding that lay entirely in deleted rows or columns is reported
     `BINDING_REMOVED` (with `with_axis_deletion: true`) instead of vanishing,
     and one that lost only its first row or column is still compared;
+  - every `binding_map` row gains `shifted`: true when a binding's address
+    changed only because rows or columns were inserted or deleted before it.
+    Such a binding stays `unchanged`, so filtering on `diff_state` still
+    yields only what was edited;
   - `RC[-1]`, `R[-1]C` and `RC5` are recognised as references when formulas
     are canonicalized; only references with a number on both parts were.
 
