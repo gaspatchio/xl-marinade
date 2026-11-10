@@ -139,7 +139,11 @@ One JSON document, three layers to read in order:
   Read this FIRST; it's the changelist overview.
 - **`binding_map`** — one row per binding with `diff_state`
   (`unchanged` | `modified` | `added` | `removed` | `moved`), `address_a/b`,
-  `label_a/b`. This labeled map is the agent-consumable changelist.
+  `label_a/b`. This labeled map is the agent-consumable changelist. A
+  binding that only shifted because rows/columns were inserted or deleted is
+  `unchanged` with differing `address_a/b`; one deleted with its rows/columns
+  is `removed` (`BINDING_REMOVED` carries `with_axis_deletion: true`).
+  `summary.{rows,cols}_{inserted,deleted}` count rows/columns, not events.
 - **`changes`** — the per-event detail. Each carries `seq`, `type`, and a
   **`layer`** (always present — filter on it, never on its absence):
   - `layer = "workbook"` — real workbook edits (`FORMULA_CHANGED`,
