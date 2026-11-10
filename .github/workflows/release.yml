@@ -3,21 +3,71 @@ name: Release
 # Staged under publish/workflows/ until make-public relocates this file to
 # .github/workflows/ in the public tree — it does not run on the private repo.
 
+# Two ways in, one release path:
+#   - push a tag (as before): that tag is released;
+#   - merge a release PR to main: when pyproject.toml's version has no
+#     v<version> tag yet, this workflow creates the tag on the merge commit
+#     and releases it. Any other push to main finds the tag already there and
+#     stops after the version check -- nothing is built or published.
+# A tag pushed by this workflow (GITHUB_TOKEN) does not start another run, so
+# a release is never published twice.
+
 on:
   push:
     tags: ["*"]
+    branches: [main]
 
 permissions:
   id-token: write   # PyPI Trusted Publishing (OIDC) + PEP 740 attestation signing
-  contents: write    # create/publish the GitHub Release
+  contents: write    # create/publish the GitHub Release, and push the release tag
+
+concurrency:
+  group: release
+  cancel-in-progress: false   # never interrupt a publish half-way
 
 jobs:
   release:
     name: Release
     runs-on: ubuntu-latest
+    # A fork's main never auto-releases; an explicit tag push behaves as before.
+    if: github.ref_type == 'tag' || github.repository == 'gaspatchio/xl-marinade'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4.4.0 — so syft can read pyproject at the tag
+
+      - name: Decide what to release
+        id: plan
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [ "$REF_TYPE" = "tag" ]; then
+            echo "tag=$REF_NAME" >> "$GITHUB_OUTPUT"
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          tag="v$version"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" > /dev/null; then
+            echo "$tag already exists: not a release commit, nothing to do."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "$tag does not exist: releasing $GITHUB_SHA as $tag."
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create the release tag on this commit
+        if: steps.plan.outputs.release == 'true' && github.ref_type == 'branch'
+        env:
+          TAG: ${{ steps.plan.outputs.tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "$TAG" "$GITHUB_SHA"
+          git push origin "refs/tags/$TAG"
+
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e   # v6 — provides `uvx` for `twine check`
+        if: steps.plan.outputs.release == 'true'
         with:
           # PINNED, and this is the job where it matters most: uv decides the
           # core metadata version written into the wheel. Tracking `latest`
@@ -28,12 +78,15 @@ jobs:
           version: "0.12.5"
 
       - name: Build sdist + universal wheel
+        if: steps.plan.outputs.release == 'true'
         run: uv build
 
       - name: List distributions
+        if: steps.plan.outputs.release == 'true'
         run: ls -l dist
 
       - name: Generate CycloneDX SBOM
+        if: steps.plan.outputs.release == 'true'
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610   # v0
         with:
           path: .                       # captures pyproject and the wheel now in dist/
@@ -47,10 +100,11 @@ jobs:
       # on `Metadata-Version: 2.5`. When this step passes and publishing still
       # rejects the metadata, the action's twine is the stale one, not this.
       - name: Check distribution metadata
+        if: steps.plan.outputs.release == 'true'
         run: uvx twine check --strict dist/*
 
       - name: Publish to PyPI (Trusted Publishing)
-        if: github.repository == 'gaspatchio/xl-marinade'
+        if: steps.plan.outputs.release == 'true' && github.repository == 'gaspatchio/xl-marinade'
         # v1.14.2 is the first release bundling twine 7, which accepts core
         # metadata 2.5. `setup-uv` tracks `latest`, so uv started emitting 2.5
         # and the v1.14.0 pin rejected every wheel we built — a stale pin here
@@ -66,14 +120,16 @@ jobs:
       # uploading afterwards 422s ("Cannot upload assets to an immutable release")
       # and burns the tag.
       - name: Create draft release with distributions + SBOM
+        if: steps.plan.outputs.release == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "${{ github.ref_name }}" \
+          gh release create "${{ steps.plan.outputs.tag }}" \
             --repo "${{ github.repository }}" \
             --draft --verify-tag --generate-notes \
             dist/* sbom.cdx.json
       - name: Publish the release
+        if: steps.plan.outputs.release == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release edit "${{ github.ref_name }}" --repo "${{ github.repository }}" --draft=false
+        run: gh release edit "${{ steps.plan.outputs.tag }}" --repo "${{ github.repository }}" --draft=false

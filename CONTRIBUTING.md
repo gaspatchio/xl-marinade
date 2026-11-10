@@ -116,6 +116,21 @@ Reviewers, and anyone commenting on someone else's PR:
 - **Separate blockers from risks from nits, and say which is which.** A nit presented at
   the same volume as a blocker costs the author time.
 
+## Releasing
+
+A release is a pull request that bumps the version in `pyproject.toml`,
+`src/xl_marinade/__init__.py` and `uv.lock` together and dates the CHANGELOG
+section (see #46, #51, #55). **Merging it publishes the release**: the release
+workflow sees that `pyproject.toml`'s version has no `v<version>` tag yet,
+creates the tag on the merge commit, and publishes the wheel, sdist, SBOM and
+attestations to PyPI and a GitHub Release. Every other merge finds the tag
+already present and publishes nothing.
+
+Pushing a `v<version>` tag by hand still releases that tag, so a maintainer
+can release a specific commit. Don't do both for one version. PyPI accepts a
+version number once, ever, so a release cannot be redone under the same
+number.
+
 ## Code of conduct
 
 Participation is governed by [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).
