@@ -7,6 +7,17 @@ schema is a versioned public contract.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-10
+
+A diff-correctness release for structural edits. Inserting or deleting a row
+or column inside a sheet is now reported where it happened, with only its real
+consequences (#53). Before, an interior column deletion was placed at the
+sheet's tail, every column after it read as renamed or edited, and the deleted
+columns' bindings were never reported. Diff output changes for any pair with
+such an edit: `summary.{rows,cols}_{inserted,deleted}` now count rows and
+columns, removed bindings are reported, and every `binding_map` row gains
+`shifted`. Extraction output and the schema (3.0) are unchanged.
+
 ### Changed
 - `summary.rows_inserted`, `rows_deleted`, `cols_inserted` and `cols_deleted`
   in a `marinade diff` changelist now count rows and columns, not
