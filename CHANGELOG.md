@@ -7,6 +7,15 @@ schema is a versioned public contract.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-11
+
+VBA macros are read by every install. A plain `pip install xl-marinade` now
+parses them, with `olefile` (BSD-2-Clause) as the only new dependency; the
+`[vba]` extra and its `oletools` dependency -- which pulled in the GPLv3
+`pcodedmp` -- are no longer needed. Extraction output is unchanged apart from
+`vba_modules.security_findings_json`, which now comes from a new keyword
+scan. The output schema is unchanged at 3.0.
+
 ### Changed
 - **VBA macros are read by every install; the `[vba]` extra is no longer
   needed.** A plain `pip install xl-marinade` now parses VBA: module source
