@@ -6,7 +6,8 @@
 Phase 2 VBA extractor.
 
 Architecture:
-  1. Read xl/vbaProject.bin from the .xlsm ZIP via olevba
+  1. Read each module's source from xl/vbaProject.bin (in the .xlsm ZIP) with
+     xl_marinade.core.vba.ovba, which needs only olefile
   2. For each module, parse with antlr4-vba's vba_ccParser for correct tokenization
      (handles line continuations, conditional compilation, string escaping)
   3. Walk the source text to detect procedure boundaries:
@@ -29,7 +30,15 @@ import re
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal
+
+from xl_marinade.core.vba.ovba import (
+    VBAModuleSource,
+    VBAProjectError,
+    is_ole,
+    read_vba_modules,
+    scan_security,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +108,8 @@ class VBAParseError:
 # tell "this workbook has no macros" from "its macros were not read" (#48).
 VBA_STATUS_EXTRACTED = "extracted"
 VBA_STATUS_NO_VBA_PROJECT = "no_vba_project"
+# No longer produced: VBA no longer needs oletools (0.7.0). Kept so readers of
+# databases extracted by 0.5.0-0.6.x without the [vba] extra can name it.
 VBA_STATUS_SKIPPED_NO_OLETOOLS = "skipped_no_oletools"
 VBA_STATUS_FAILED = "failed"
 
@@ -563,11 +574,11 @@ def _extract_procedures_from_source(
 
 
 def _has_vba_part(path: Path) -> bool | None:
-    """Whether the workbook carries a VBA project, without needing oletools.
+    """Whether the workbook carries a VBA project, from its container alone.
 
     True/False for an OOXML (zip) container, by the presence of
-    xl/vbaProject.bin. None when that cannot be told without oletools: a
-    legacy OLE .xls/.xla, or a file that cannot be read as a zip at all.
+    xl/vbaProject.bin. None for anything that is not a zip -- a legacy OLE
+    .xls/.xla, whose VBA storage is found by reading the file itself.
     """
     try:
         with zipfile.ZipFile(path) as zf:
@@ -576,58 +587,34 @@ def _has_vba_part(path: Path) -> bool | None:
         return None
 
 
-def _open_vba_parser(path: Path) -> tuple[Any, bytes | None, str]:
-    """Open a VBA_Parser for either an OOXML container or a legacy CDF file.
+def _read_modules(path: Path) -> list[VBAModuleSource]:
+    """The workbook's VBA modules: from xl/vbaProject.bin, or a legacy OLE file.
 
-    Modern .xlsm/.xlam are ZIP-wrapped OOXML; we read xl/vbaProject.bin
-    directly because that path is fast and avoids olevba touching the disk
-    twice. Legacy .xla/.xls files are stored in the OLE Compound Document
-    File format and don't have a ZIP container, so for those we hand the file
-    path to olevba and let it open via olefile. Returns ``(parser, vba_data)``
-    where ``vba_data`` is None for the legacy path, plus the VBA_STATUS_*
-    to record when no parser could be opened.
+    Raises:
+        VBAProjectError: the VBA project cannot be read.
     """
-    from oletools.olevba import VBA_Parser
-
     try:
         with zipfile.ZipFile(path) as zf:
-            if "xl/vbaProject.bin" not in zf.namelist():
-                # OOXML container with no VBA project
-                return None, None, VBA_STATUS_NO_VBA_PROJECT
             vba_data = zf.read("xl/vbaProject.bin")
-        parser = VBA_Parser(filename="vbaProject.bin", data=vba_data)
-        # vbaProject.bin is always an OLE compound file. olevba falls back to
-        # parsing anything else as plain-text VBA, which finds no modules and
-        # would make a damaged project read as an empty one.
-        if parser.type != "OLE":
-            logger.warning(
-                "xl/vbaProject.bin in %s is not an OLE compound file (olevba read it as %s)",
-                path,
-                parser.type,
-            )
-            parser.close()
-            return None, None, VBA_STATUS_FAILED
-        return parser, vba_data, VBA_STATUS_EXTRACTED
     except zipfile.BadZipFile:
-        # Not a ZIP — likely a legacy CDF .xla/.xls. Let olevba open it.
-        try:
-            return VBA_Parser(filename=str(path)), None, VBA_STATUS_EXTRACTED
-        except Exception:
-            logger.exception("Legacy CDF VBA_Parser construction failed for %s", path)
-            return None, None, VBA_STATUS_FAILED
-    except (KeyError, OSError):
-        logger.exception("Failed to read xl/vbaProject.bin from %s", path)
-        return None, None, VBA_STATUS_FAILED
+        return read_vba_modules(path)  # legacy OLE .xls/.xla
+    except (KeyError, OSError) as exc:
+        raise VBAProjectError(f"cannot read xl/vbaProject.bin: {exc}") from exc
+    if not is_ole(vba_data):
+        raise VBAProjectError("xl/vbaProject.bin is not an OLE compound file")
+    return read_vba_modules(vba_data)
 
 
 def extract_vba(xlsm_path: Path | str) -> VBAExtraction:
     """
     Extract all VBA content from a macro-enabled Excel file.
 
-    Supports both modern OOXML containers (.xlsm/.xlam) — read by unzipping
-    xl/vbaProject.bin directly — and legacy OLE Compound Document files
-    (.xla/.xls) which olevba opens via olefile. Per-module classification,
-    procedure parsing, and declaration extraction is identical for both.
+    Supports both modern OOXML containers (.xlsm/.xlam) -- xl/vbaProject.bin
+    read straight from the zip -- and legacy OLE compound files (.xla/.xls).
+    Module source is read by ``xl_marinade.core.vba.ovba`` (olefile only, no
+    oletools), so VBA is always read: there is no optional dependency to be
+    missing. Per-module classification, procedure parsing, and declaration
+    extraction is identical for both containers.
 
     Args:
         xlsm_path: Path to .xlsm/.xlam/.xla/.xls file
@@ -638,37 +625,28 @@ def extract_vba(xlsm_path: Path | str) -> VBAExtraction:
     """
     path = Path(xlsm_path)
 
-    # Look for a VBA project before needing oletools: a workbook without one
-    # has no macros to read, whether or not the [vba] extra is installed.
-    # Checking oletools first reported every plain .xlsx as
-    # "skipped_no_oletools" -- the same status as a macro workbook that was
-    # never read, which agents took to mean "no macros" either way.
     if _has_vba_part(path) is False:
         return VBAExtraction(status=VBA_STATUS_NO_VBA_PROJECT)
 
-    try:
-        from oletools.olevba import VBA_Parser  # noqa: F401
-    except ImportError:
-        logger.warning(
-            "%s has a VBA project, but oletools is not installed: its macros were NOT "
-            "read (pip install 'xl-marinade[vba]' and re-extract)",
-            path.name,
-        )
-        return VBAExtraction(status=VBA_STATUS_SKIPPED_NO_OLETOOLS)
-
     extraction = VBAExtraction()
-
-    vba_parser, vba_data, open_status = _open_vba_parser(path)
-    if vba_parser is None:
-        extraction.status = open_status
+    try:
+        sources = _read_modules(path)
+    except VBAProjectError as exc:
+        logger.warning("VBA project of %s could not be read: %s", path.name, exc)
+        extraction.status = VBA_STATUS_FAILED
+        return extraction
+    if not sources:
+        # A legacy OLE file with no VBA storage.
+        extraction.status = VBA_STATUS_NO_VBA_PROJECT
         return extraction
 
     try:
-        for _fname, _stream, vba_name, vba_code in vba_parser.extract_all_macros():
+        for source in sources:
+            vba_code = source.code
             if not vba_code or not vba_code.strip():
                 continue
 
-            module_name = vba_name or "UnknownModule"
+            module_name = source.filename
             module_kind = _classify_module_kind(module_name, vba_code)
 
             extraction.modules.append(
@@ -691,33 +669,6 @@ def extract_vba(xlsm_path: Path | str) -> VBAExtraction:
     except Exception:
         logger.exception("Module extraction failed for %s", path)
         extraction.status = VBA_STATUS_FAILED
-    finally:
-        try:
-            vba_parser.close()
-        except Exception:
-            pass
 
-    # Security findings via olevba — open a fresh parser using the same path
-    # selection as the main extraction (OOXML in-memory vs legacy CDF on disk).
-    try:
-        from oletools.olevba import VBA_Parser
-
-        if vba_data is not None:
-            vba_parser2 = VBA_Parser(filename="vbaProject.bin", data=vba_data)
-        else:
-            vba_parser2 = VBA_Parser(filename=str(path))
-        if vba_parser2.detect_vba_macros():
-            results = vba_parser2.analyze_macros()
-            for kw_type, keyword, description in results:
-                extraction.security_findings.append(
-                    {
-                        "type": kw_type,
-                        "keyword": keyword,
-                        "description": description,
-                    }
-                )
-        vba_parser2.close()
-    except Exception:
-        logger.exception("Security analysis failed for %s", path)
-
+    extraction.security_findings.extend(scan_security([s.code for s in sources]))
     return extraction

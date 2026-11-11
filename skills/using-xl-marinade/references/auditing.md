@@ -85,9 +85,9 @@ finds coincident second drivers.
   `VBA_DECLARATIONS_CHANGED` body against intent. Before reading them, check
   `SELECT value FROM ir_metadata WHERE key = 'vba_extraction'` in BOTH dbs:
   only `extracted` / `no_vba_project` are trustworthy. `skipped_no_oletools`
-  (extracted without the `[vba]` extra) makes every module look added or
-  removed, and `failed` may be partial — re-extract that version with
-  `xl-marinade[vba]` installed instead of adjudicating its VBA changes.
+  (an old db extracted by 0.5.0–0.6.x without the `[vba]` extra) makes every
+  module look added or removed, and `failed` may be partial — re-extract that
+  version with 0.7.0+ instead of adjudicating its VBA changes.
 - Diff only adjacent versions of one lineage; diverged workbooks produce
   noise at the scale of the whole book — use targeted SQL instead.
 - **Subagent fan-out contract**: marinade never needs Excel, so IR

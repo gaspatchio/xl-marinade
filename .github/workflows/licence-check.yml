@@ -67,7 +67,7 @@ jobs:
           jq -r '.[] | .License' /tmp/wheel-licences.json | sort | uniq -c | sort -rn
       - name: Fail on forbidden licences
         run: |
-          FORBIDDEN=$(jq -r '.[] | select(.License | test("AGPL|GPL-[23]|^GPL[^a-z]|SSPL|BUSL|EUPL|^RPL"; "i")) | "\(.Name) \(.Version) :: \(.License)"' /tmp/wheel-licences.json)
+          FORBIDDEN=$(jq -r '.[] | select(.License | test("AGPL|GPL-[23]|^GPL([^a-z]|$)|GPLv[23]|SSPL|BUSL|EUPL|^RPL"; "i")) | "\(.Name) \(.Version) :: \(.License)"' /tmp/wheel-licences.json)
           if [ -n "$FORBIDDEN" ]; then
             echo "::error::Forbidden Python licences in runtime closure:"
             echo "$FORBIDDEN"

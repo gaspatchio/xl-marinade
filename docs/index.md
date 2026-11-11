@@ -38,7 +38,7 @@ deterministic output if no key is configured. See [LLM add-on](llm.md).
 
 ## Where to go next
 
-- [Install](install.md) — `pip install xl-marinade`, plus the `[llm]`/`[vba]` extras.
+- [Install](install.md) — `pip install xl-marinade`, plus the optional `[llm]` extra.
 - [Quickstart](quickstart.md) — the extract → document → diff walkthrough.
 - [CLI reference](reference/cli.md) — every command, argument, and flag.
 - [API reference](reference/api.md) — the public Python API.

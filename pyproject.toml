@@ -21,6 +21,7 @@ dependencies = [
     "rich>=13",
     "jinja2>=3.0",      # deterministic markdown documentation (marinade document)
     "jsonschema>=4.0",  # model_spec.json schema validation (marinade document)
+    "olefile>=0.46",    # reads vbaProject.bin (OLE); BSD-2-Clause, pure Python, no deps
     # NOTE: networkx is deliberately kept OUT of the runtime dependencies. The
     # labelling pipeline uses a guarded `import networkx` with a dict-graph
     # fallback (HAS_NETWORKX); the dict fallback is the shipped default, so the
@@ -30,7 +31,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-vba = ["oletools>=0.60"]      # VBA parsing (deterministic)
+# VBA is read by xl_marinade.core.vba.ovba on olefile, a base dependency. The
+# extra is kept, empty, so `pip install 'xl-marinade[vba]'` keeps working.
+# It used to pull in oletools, whose required pcodedmp is GPLv3.
+vba = []
 llm = ["openai>=1.0"]         # Tier-1 BYOK add-on (Plan 2)
 
 [project.scripts]
@@ -94,7 +98,7 @@ ignore = [
 
 [tool.mypy]
 python_version = "3.11"
-# Third-party libs ship without type stubs (openpyxl, oletools, jsonschema, ...);
+# Third-party libs ship without type stubs (openpyxl, olefile, jsonschema, ...);
 # don't report their missing annotations.
 ignore_missing_imports = true
 # In-package test modules are not part of the typed public contract.

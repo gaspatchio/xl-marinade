@@ -562,11 +562,6 @@ def _vba_progress_line(s: dict[str, int | str]) -> str:
     counts: agents read "0 procs" as "no macros" (#57).
     """
     status = s.get("status", "failed")
-    if status == "skipped_no_oletools":
-        return (
-            "  VBA: present, NOT READ -- oletools is not installed "
-            "(pip install 'xl-marinade[vba]' and re-extract) (skipped_no_oletools)"
-        )
     if status == "no_vba_project":
         return "  VBA: none (no_vba_project)"
     if status == "failed":
@@ -691,7 +686,7 @@ def _store_vba_phase3_tables(conn: sqlite3.Connection, extraction) -> None:
             mod_security = [
                 f
                 for f in extraction.security_findings
-                # Security findings from olevba are workbook-wide, not per-module.
+                # Security findings (ovba.scan_security) are workbook-wide, not per-module.
                 # Store the full set on each module for now; Phase 3+ can refine.
             ]
             cursor = conn.execute(

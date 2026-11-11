@@ -10,11 +10,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-try:
-    from oletools.olevba import VBA_Parser
-except ImportError:  # pragma: no cover - optional dependency
-    VBA_Parser = None
 from openpyxl import Workbook
+
+from xl_marinade.core.vba.ovba import read_vba_modules
 
 logger = logging.getLogger(__name__)
 
@@ -217,45 +215,21 @@ def extract_udfs_from_workbook(workbook: Workbook) -> list[UDFMetadata]:
         List of UDFMetadata objects for all UDFs in all modules
 
     Implementation:
-        Uses oletools.olevba to parse vbaProject.bin from the workbook's VBA archive.
-        Extracts all public Function definitions from all modules.
+        Reads vbaProject.bin from the workbook's VBA archive with
+        xl_marinade.core.vba.ovba and extracts all public Function definitions
+        from all modules.
     """
-    if VBA_Parser is None:
-        return []
-
     # Check if workbook has VBA (vba_archive attribute)
     if not hasattr(workbook, "vba_archive") or workbook.vba_archive is None:
         return []
 
     try:
-        # Extract vbaProject.bin from the workbook's VBA archive
-        # The vba_archive is a ZipFile-like object containing xl/vbaProject.bin
         vba_data = workbook.vba_archive.read("xl/vbaProject.bin")
-
-        # Parse VBA using oletools
-        # VBA_Parser can accept filename or data parameter
-        vba_parser = VBA_Parser(filename="vbaProject.bin", data=vba_data)
-
         all_udfs: list[UDFMetadata] = []
-
-        # Extract all VBA modules
-        # vba_parser.extract_all_macros() returns (filename, stream_path, vba_filename, vba_code)
-        for filename, stream_path, vba_filename, vba_code in vba_parser.extract_all_macros():
-            if vba_code:
-                # Parse this module to extract UDFs
-                # Use stream_path or vba_filename as module name
-                # Prefer vba_filename as it's more meaningful (e.g., "Module1", "ThisWorkbook")
-                module_name = vba_filename if vba_filename else stream_path
-
-                # Parse the VBA code to extract UDF metadata
-                udfs = parse_vba_module(module_name, vba_code)
-                all_udfs.extend(udfs)
-
-        # Clean up
-        vba_parser.close()
-
+        for module in read_vba_modules(vba_data):
+            if module.code:
+                all_udfs.extend(parse_vba_module(module.filename, module.code))
         return all_udfs
-
     except KeyError:
         # vbaProject.bin not found in archive
         return []
@@ -277,12 +251,9 @@ def extract_udfs_from_path(xlsm_path: Path | str) -> list[UDFMetadata]:
 
     Returns:
         List of UDFMetadata objects extracted from the workbook's VBA project.
-        Returns an empty list on: missing VBA project, corrupt ZIP, parse errors,
-        or if the oletools dependency is unavailable.
+        Returns an empty list on: missing VBA project, corrupt ZIP, or parse
+        errors.
     """
-    if VBA_Parser is None:
-        return []
-
     path = Path(xlsm_path)
     try:
         with zipfile.ZipFile(path) as zf:
@@ -295,26 +266,14 @@ def extract_udfs_from_path(xlsm_path: Path | str) -> list[UDFMetadata]:
         return []
 
     try:
-        vba_parser = VBA_Parser(filename="vbaProject.bin", data=vba_data)
-    except Exception:
-        logger.exception("VBA_Parser construction failed for %s", path)
-        return []
-
-    try:
         all_udfs: list[UDFMetadata] = []
-        for _filename, _stream_path, vba_filename, vba_code in vba_parser.extract_all_macros():
-            if vba_code:
-                module_name = vba_filename or _stream_path or "UnknownModule"
-                all_udfs.extend(parse_vba_module(module_name, vba_code))
+        for module in read_vba_modules(vba_data):
+            if module.code:
+                all_udfs.extend(parse_vba_module(module.filename or "UnknownModule", module.code))
         return all_udfs
     except Exception:
-        logger.exception("extract_all_macros failed for %s", path)
+        logger.exception("Reading the VBA project failed for %s", path)
         return []
-    finally:
-        try:
-            vba_parser.close()
-        except Exception:
-            pass
 
 
 def build_udf_map(udfs: list[UDFMetadata]) -> dict[str, UDFMetadata]:

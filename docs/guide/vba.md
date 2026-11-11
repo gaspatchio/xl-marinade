@@ -1,15 +1,15 @@
 # VBA extraction
 
-Deterministic parsing of VBA macros is an opt-in extra:
+VBA macros are parsed by every install of XL Marinade: a plain
+`pip install xl-marinade` reads them. Parsing is static -- nothing executes
+the macro. The VBA project (`xl/vbaProject.bin` in an `.xlsm`) is read with
+[`olefile`](https://github.com/decalage2/olefile), and its module source is
+decoded by XL Marinade itself, following Microsoft's published
+[MS-OVBA](https://learn.microsoft.com/openspecs/office_file_formats/ms-ovba/)
+format.
 
-```bash
-pip install 'xl-marinade[vba]'
-```
-
-It's backed by [`oletools`](https://github.com/decalage2/oletools), a
-static-analysis library for Office file formats — nothing in the `[vba]` path
-executes the macro. Without the extra installed, `extract` still runs normally;
-it simply produces no VBA nodes or edges.
+Before 0.7.0 this needed the `[vba]` extra, which installed `oletools`. That
+extra still exists, empty, so existing install commands keep working.
 
 Every database records whether its VBA was read, in `ir_metadata`:
 
@@ -20,14 +20,13 @@ SELECT value FROM ir_metadata WHERE key = 'vba_extraction';
 | Value | Meaning |
 |---|---|
 | `extracted` | The VBA tables hold the workbook's VBA. |
-| `no_vba_project` | The workbook has no VBA project, e.g. any `.xlsx`. This is known with or without the `[vba]` extra. |
-| `skipped_no_oletools` | The workbook **has** a VBA project, but the `[vba]` extra is not installed, so it was not read. The VBA tables are empty although the workbook has macros. |
-| `failed` | Reading or storing the VBA raised (see the extraction log). The tables may be empty or partial. |
+| `no_vba_project` | The workbook has no VBA project, e.g. any `.xlsx`. |
+| `failed` | The VBA project could not be read, or storing it raised (see the extraction log). The tables may be empty or partial. |
+| `skipped_no_oletools` | Only in databases extracted by 0.5.0–0.6.x without the `[vba]` extra: the workbook **has** a VBA project that was not read. Re-extract with 0.7.0 or later. |
 
 Empty VBA tables mean "no macros" only when the value is `no_vba_project`.
 The extraction progress line says the same: `VBA: none (no_vba_project)` for a
-workbook without macros, and `VBA: present, NOT READ …` for one whose macros
-were skipped.
+workbook without macros, `VBA: <n> procs, … (extracted)` when it was read.
 Databases from before this key existed have no row for it.
 
 ## What gets captured
@@ -46,6 +45,17 @@ For every VBA project embedded in the workbook, extraction captures:
   indirectly through the object model (reading or writing a property).
 - **Cell references** — which ranges, named ranges, and tables each procedure
   reads from or writes to.
+- **Security findings** — a keyword scan of the project, stored on each module
+  in `vba_modules.security_findings_json` as `{"type", "keyword",
+  "description"}` entries. `AutoExec` marks procedures Office runs on its own
+  (`Workbook_Open`, `Auto_Open`, `Document_Open`, …). `Suspicious` marks calls
+  that reach outside the workbook: running programs (`Shell`, `WScript.Shell`,
+  PowerShell), network access (`XMLHTTP`, `URLDownloadToFile`), writing or
+  deleting files, DLL `Declare`s, the registry, `CreateObject`/`GetObject`,
+  environment variables, keystrokes sent to other programs (`SendKeys`), Excel 4
+  macros, calls by computed name (`CallByName`), and reading or editing the VBA
+  project itself. A finding flags code to review; it
+  is not a verdict. A model that only reads and writes its own cells has none.
 
 These become nodes and edges in the same graph that cells and bindings live in
 (see [Bindings & the graph](bindings.md)), so a procedure that writes to a range
@@ -76,8 +86,9 @@ procedure that wrote it.
 procedure by procedure, including code outside procedures. It reports added,
 removed, renamed and edited procedures, and separates comment-only edits from
 logic changes. See [VBA changes](diffing.md#vba-changes) for the change types.
-Check `vba_extraction` on both databases first: a side extracted without the
-`[vba]` extra makes every module look added or removed.
+Check `vba_extraction` on both databases first: a side extracted by an older
+version without the `[vba]` extra (`skipped_no_oletools`) makes every module
+look added or removed.
 
 ## Where LLM enrichment fits
 
@@ -91,5 +102,5 @@ for it. See [LLM add-on](../llm.md).
 ## Next
 
 - [Bindings & the graph](bindings.md) — the graph VBA nodes and edges join.
-- [Install](../install.md) — the `[vba]` extra alongside `[llm]`.
+- [Install](../install.md) — the `[llm]` extra.
 - [LLM add-on](../llm.md) — opt-in enrichment for dynamic VBA references.

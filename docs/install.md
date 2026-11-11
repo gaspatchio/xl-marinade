@@ -36,20 +36,14 @@ your own project instead, `uv add xl-marinade` and run it with `uv run marinade`
 
 ## Optional extras
 
-XL Marinade's core (`extract`, `diff`, deterministic `document`) has no optional
-dependencies. Two add-ons are opt-in:
+XL Marinade's core (`extract`, `diff`, deterministic `document`), including VBA
+macro parsing, needs no optional dependencies. One add-on is opt-in:
 
 === "uv"
 
     ```bash
     # Optional LLM-enriched documentation (bring your own API key)
     uv tool install 'xl-marinade[llm]'
-
-    # Optional deterministic VBA macro parsing
-    uv tool install 'xl-marinade[vba]'
-
-    # Both
-    uv tool install 'xl-marinade[llm,vba]'
     ```
 
 === "pip"
@@ -57,23 +51,17 @@ dependencies. Two add-ons are opt-in:
     ```bash
     # Optional LLM-enriched documentation (bring your own API key)
     pip install 'xl-marinade[llm]'
-
-    # Optional deterministic VBA macro parsing
-    pip install 'xl-marinade[vba]'
-
-    # Both
-    pip install 'xl-marinade[llm,vba]'
     ```
 
 - **`[llm]`** — adds the bring-your-own-key LLM documentation tier (`--enrich`,
   `xl_marinade.llm`). See [LLM add-on](llm.md) for setup and configuration.
-- **`[vba]`** — adds deterministic parsing of VBA macros, so macro-driven mutations
-  show up as edges in the formula graph (see [What it does](index.md#what-it-does))
-  and `marinade diff` reports macro changes. Without it, a macro workbook's VBA is
-  not read, and the database records `vba_extraction = skipped_no_oletools` so it
-  can't be mistaken for one with no macros (see [VBA extraction](guide/vba.md)).
+- **`[vba]`** — no longer needed, and kept empty so existing install commands
+  keep working. Since 0.7.0 every install parses VBA macros: macro-driven
+  mutations show up as edges in the formula graph and `marinade diff` reports
+  macro changes (see [VBA extraction](guide/vba.md)). Before 0.7.0 this extra
+  installed `oletools`.
 
-Neither extra changes the deterministic behavior of `extract`, `diff`, or plain
+The extra doesn't change the deterministic behavior of `extract`, `diff`, or plain
 `document` — they only add capability on top.
 
 ## Set up the plugin (recommended)
