@@ -1,0 +1,24 @@
+# XL Marinade
+
+> Deterministic Excel formula-graph extraction to SQLite.
+
+XL Marinade is a deterministic Excel formula-graph extractor that turns .xlsx/.xlsm workbooks into a queryable SQLite database, with an optional bring-your-own-key LLM documentation tier.
+
+## AI agents
+
+- [Plugins](https://marinade.gaspatchio.dev/ai/setup/index.md)
+- [Skills](https://marinade.gaspatchio.dev/ai/skills/index.md)
+
+## Guide
+
+- [Bindings & the graph](https://marinade.gaspatchio.dev/guide/bindings/index.md)
+- [Diffing workbooks](https://marinade.gaspatchio.dev/guide/diffing/index.md)
+- [How extraction works](https://marinade.gaspatchio.dev/guide/how-extraction-works/index.md)
+- [VBA extraction](https://marinade.gaspatchio.dev/guide/vba/index.md)
+
+## Reference
+
+- [API](https://marinade.gaspatchio.dev/reference/api/index.md)
+- [CLI](https://marinade.gaspatchio.dev/reference/cli/index.md)
+- [SQLite schema](https://marinade.gaspatchio.dev/reference/schema/index.md)
+
