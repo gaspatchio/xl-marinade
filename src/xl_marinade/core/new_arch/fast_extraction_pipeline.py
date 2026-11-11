@@ -1009,6 +1009,7 @@ class TraversalContext:
         # Sheet-level caches (lazily populated)
         self.sheet_caches: dict[int, dict[tuple[int, int], tuple]] = {}
         self.sheet_shared_bases: dict[int, dict[int, tuple[str, int, int]]] = {}
+        self.sheet_array_formula_cells: dict[int, set[tuple[int, int]]] = {}
         self.sheet_row_index: dict[int, dict[int, list[int]]] = {}
         self.sheet_rows_sorted: dict[int, list[int]] = {}
         self.sheet_cache_counts: dict[int, int] = {}
@@ -1081,8 +1082,9 @@ class TraversalContext:
         cache: dict[tuple[int, int], tuple] = {}
         shared_bases: dict[int, tuple[str, int, int]] = {}
         row_index: dict[int, list[int]] = {}
+        array_cells: set[tuple[int, int]] = set()
         for r, c, f, v, dt, shared_idx, shared_master, si in stream_worksheet_cells(
-            self.workbook_path, sheet_name
+            self.workbook_path, sheet_name, array_cells
         ):
             cache[(r, c)] = (f, None, v, dt, shared_idx, shared_master, si)
             if shared_idx is not None and shared_master and f:
@@ -1091,6 +1093,7 @@ class TraversalContext:
 
         self.sheet_caches[sheet_id] = cache
         self.sheet_shared_bases[sheet_id] = shared_bases
+        self.sheet_array_formula_cells[sheet_id] = array_cells
         for cols in row_index.values():
             cols.sort()
         self.sheet_row_index[sheet_id] = row_index
@@ -1608,7 +1611,7 @@ class TraversalContext:
                 value_sha256,
                 format_sha256,
                 data_type,
-                0,
+                1 if (row, col) in self.sheet_array_formula_cells.get(sheet_id, ()) else 0,
                 0,
                 None,
             )
@@ -1991,6 +1994,7 @@ def _execute_full_workbook_extraction(
         del ctx.sheet_caches[sheet_id]
         if sheet_id in ctx.sheet_shared_bases:
             del ctx.sheet_shared_bases[sheet_id]
+        ctx.sheet_array_formula_cells.pop(sheet_id, None)
         if sheet_id in ctx.sheet_row_index:
             del ctx.sheet_row_index[sheet_id]
         if sheet_id in ctx.sheet_rows_sorted:

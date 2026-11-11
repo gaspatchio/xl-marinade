@@ -7,6 +7,17 @@ schema is a versioned public contract.
 
 ## [Unreleased]
 
+### Fixed
+- **`is_array_formula` is set for array formulas.** The extractor wrote 0
+  for every cell, so an array formula (`{=G1:G3*2}` over H1:H3, stored as
+  `<f t="array" ref="H1:H3">`) looked like an ordinary one in `agent_cells`.
+  The cell that holds the formula -- the top-left of its range -- now has
+  `is_array_formula = 1`; this includes Excel 365 dynamic-array formulas,
+  which Excel stores the same way. `marinade diff` between a database
+  extracted before this fix and one extracted after reports
+  `ARRAY_FORMULA_FLAG_CHANGED` on those cells; re-extract both sides to
+  compare like with like.
+
 ## [0.7.0] - 2026-11-11
 
 VBA macros are read by every install. A plain `pip install xl-marinade` now

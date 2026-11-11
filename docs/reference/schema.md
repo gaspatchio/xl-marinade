@@ -83,6 +83,13 @@ blobs — cheaper to scan and lighter to transfer.
 Key columns: `cell_address`, `sheet`, `row`, `col`, `formula`, `formula_r1c1`,
 `data_type`, `is_array_formula`, `is_spilled`, `cell_id`.
 
+`is_array_formula` is 1 on the cell that holds an array formula -- the
+top-left cell of its range, where the sheet XML has `<f t="array">`. That
+covers legacy CSE (`{=...}`) formulas and Excel 365 dynamic-array formulas,
+which Excel stores the same way. The other cells of the range hold only
+values and stay 0. Databases extracted before 0.7.1 have 0 everywhere.
+`is_spilled` is not populated yet and is always 0.
+
 **`agent_cells_full`** — alias for `agent_cells`. Use this name when you want
 to be explicit in a query that you're intentionally pulling the heavy JSON
 payloads.

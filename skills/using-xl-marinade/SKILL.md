@@ -112,7 +112,9 @@ Schema notes — when a query errors, list the view's columns with
 
 - `agent_cells_light` (cheap default) / `agent_cells` (adds `value`/`format`
   JSON) — key columns `cell_address` (`Sheet!A1`), `sheet`, `row`, `col`,
-  `formula` (A1), `formula_r1c1`, `data_type`, `is_array_formula`.
+  `formula` (A1), `formula_r1c1`, `data_type`, `is_array_formula` (1 on
+  the top-left cell of an array formula; always 0 in databases extracted
+  before 0.7.1, and `is_spilled` is always 0).
 - `agent_bindings` — `sheet`, `address` (`Sheet!A1:A10`), `formula_pattern`
   (R1C1; NULL for constant/heterogeneous blocks), `label`, `binding_type`,
   `classification`, `confidence`.
