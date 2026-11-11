@@ -7,6 +7,13 @@ schema is a versioned public contract.
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-11-11
+
+Two fixes to the agent-facing views, both found by agents tracing models.
+`agent_dependencies` now lists reads of empty cells, and `is_array_formula`
+is set for array formulas. Re-extract a workbook to pick up both. The output
+schema is unchanged at 3.0.
+
 ### Fixed
 - **`agent_dependencies` lists reads of empty cells.** A formula that reads a
   cell holding nothing -- `=B20` on an untouched cell, a formatted-but-empty
