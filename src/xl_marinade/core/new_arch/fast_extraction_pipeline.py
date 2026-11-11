@@ -555,6 +555,32 @@ def _compute_vba_sheet_affinity(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def _vba_progress_line(s: dict[str, int | str]) -> str:
+    """The extraction progress line for the VBA stage.
+
+    A workbook whose macros were not read must not print a row of zero
+    counts: agents read "0 procs" as "no macros" (#57).
+    """
+    status = s.get("status", "failed")
+    if status == "skipped_no_oletools":
+        return (
+            "  VBA: present, NOT READ -- oletools is not installed "
+            "(pip install 'xl-marinade[vba]' and re-extract) (skipped_no_oletools)"
+        )
+    if status == "no_vba_project":
+        return "  VBA: none (no_vba_project)"
+    if status == "failed":
+        return "  VBA: extraction FAILED; tables may be empty or partial (failed)"
+    return (
+        f"  VBA: {s.get('procedures', 0)} procs, "
+        f"{s.get('events', 0)} events, "
+        f"{s.get('declarations', 0)} decls, "
+        f"{s.get('udfs_inserted', 0)} UDFs stored, "
+        f"{s.get('security_findings', 0)} security, "
+        f"{s.get('parse_errors', 0)} errors ({status})"
+    )
+
+
 def _extract_and_store_vba(workbook_path: Path, conn: sqlite3.Connection) -> dict[str, int | str]:
     """
     Phase 2 VBA extraction stage: full grammar-based extraction of all procedures,
@@ -2421,17 +2447,7 @@ def run_fast_extraction(
 
             def _run_vba_extraction() -> None:
                 vba_stats[0] = _extract_and_store_vba(workbook_path, loader.conn)
-                s = vba_stats[0]
-                print(
-                    f"  VBA: {s.get('procedures', 0)} procs, "
-                    f"{s.get('events', 0)} events, "
-                    f"{s.get('declarations', 0)} decls, "
-                    f"{s.get('udfs_inserted', 0)} UDFs stored, "
-                    f"{s.get('security_findings', 0)} security, "
-                    f"{s.get('parse_errors', 0)} errors "
-                    f"({s.get('status', 'failed')})",
-                    file=sys.stderr,
-                )
+                print(_vba_progress_line(vba_stats[0]), file=sys.stderr)
 
             record_stage("extract_vba", _run_vba_extraction)
 
@@ -2991,17 +3007,7 @@ def run_full_workbook_extraction(
 
             def _run_vba_extraction() -> None:
                 vba_stats[0] = _extract_and_store_vba(workbook_path, loader.conn)
-                s = vba_stats[0]
-                print(
-                    f"  VBA: {s.get('procedures', 0)} procs, "
-                    f"{s.get('events', 0)} events, "
-                    f"{s.get('declarations', 0)} decls, "
-                    f"{s.get('udfs_inserted', 0)} UDFs stored, "
-                    f"{s.get('security_findings', 0)} security, "
-                    f"{s.get('parse_errors', 0)} errors "
-                    f"({s.get('status', 'failed')})",
-                    file=sys.stderr,
-                )
+                print(_vba_progress_line(vba_stats[0]), file=sys.stderr)
 
             record_stage("extract_vba", _run_vba_extraction)
 

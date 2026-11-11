@@ -20,11 +20,14 @@ SELECT value FROM ir_metadata WHERE key = 'vba_extraction';
 | Value | Meaning |
 |---|---|
 | `extracted` | The VBA tables hold the workbook's VBA. |
-| `no_vba_project` | The workbook has no VBA project, e.g. any `.xlsx`. |
-| `skipped_no_oletools` | The `[vba]` extra is not installed, so the VBA was not read. The tables are empty whether or not the workbook has macros. |
+| `no_vba_project` | The workbook has no VBA project, e.g. any `.xlsx`. This is known with or without the `[vba]` extra. |
+| `skipped_no_oletools` | The workbook **has** a VBA project, but the `[vba]` extra is not installed, so it was not read. The VBA tables are empty although the workbook has macros. |
 | `failed` | Reading or storing the VBA raised (see the extraction log). The tables may be empty or partial. |
 
 Empty VBA tables mean "no macros" only when the value is `no_vba_project`.
+The extraction progress line says the same: `VBA: none (no_vba_project)` for a
+workbook without macros, and `VBA: present, NOT READ …` for one whose macros
+were skipped.
 Databases from before this key existed have no row for it.
 
 ## What gets captured
