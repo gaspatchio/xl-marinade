@@ -686,7 +686,7 @@ def _store_vba_phase3_tables(conn: sqlite3.Connection, extraction) -> None:
             mod_security = [
                 f
                 for f in extraction.security_findings
-                # Security findings from olevba are workbook-wide, not per-module.
+                # Security findings (ovba.scan_security) are workbook-wide, not per-module.
                 # Store the full set on each module for now; Phase 3+ can refine.
             ]
             cursor = conn.execute(

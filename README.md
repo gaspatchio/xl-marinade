@@ -43,7 +43,8 @@ query, diff, and document like any other data asset.
 pip install xl-marinade
 ```
 
-For optional LLM-enriched documentation (bring your own API key):
+VBA macros in `.xlsm` workbooks are parsed by this base install; no extra is
+needed. For optional LLM-enriched documentation (bring your own API key):
 
 ```bash
 pip install 'xl-marinade[llm]'

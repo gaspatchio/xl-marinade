@@ -45,6 +45,17 @@ For every VBA project embedded in the workbook, extraction captures:
   indirectly through the object model (reading or writing a property).
 - **Cell references** — which ranges, named ranges, and tables each procedure
   reads from or writes to.
+- **Security findings** — a keyword scan of the project, stored on each module
+  in `vba_modules.security_findings_json` as `{"type", "keyword",
+  "description"}` entries. `AutoExec` marks procedures Office runs on its own
+  (`Workbook_Open`, `Auto_Open`, `Document_Open`, …). `Suspicious` marks calls
+  that reach outside the workbook: running programs (`Shell`, `WScript.Shell`,
+  PowerShell), network access (`XMLHTTP`, `URLDownloadToFile`), writing or
+  deleting files, DLL `Declare`s, the registry, `CreateObject`/`GetObject`,
+  environment variables, keystrokes sent to other programs (`SendKeys`), Excel 4
+  macros, calls by computed name (`CallByName`), and reading or editing the VBA
+  project itself. A finding flags code to review; it
+  is not a verdict. A model that only reads and writes its own cells has none.
 
 These become nodes and edges in the same graph that cells and bindings live in
 (see [Bindings & the graph](bindings.md)), so a procedure that writes to a range

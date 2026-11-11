@@ -17,7 +17,9 @@ Copyright Opio Inc. (see REUSE.toml for the blanket assertion).
 
 This product depends at runtime on other open-source software. The base
 install's runtime dependencies (openpyxl — MIT; typer — MIT; rich — MIT;
-psutil — BSD-3-Clause) are under permissive MIT/BSD terms. The optional
+psutil — BSD-3-Clause; olefile — BSD-2-Clause, which reads VBA projects) are
+under permissive MIT/BSD terms. VBA source is decoded by xl-marinade's own
+code; it does not use oletools, whose dependency pcodedmp is GPLv3. The optional
 ``xl-marinade[llm]`` extra adds ``openai`` (Apache-2.0), whose transitive
 closure includes ``certifi`` (Mozilla Public License 2.0):
 

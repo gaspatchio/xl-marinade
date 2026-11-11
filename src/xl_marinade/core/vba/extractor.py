@@ -6,7 +6,8 @@
 Phase 2 VBA extractor.
 
 Architecture:
-  1. Read xl/vbaProject.bin from the .xlsm ZIP via olevba
+  1. Read each module's source from xl/vbaProject.bin (in the .xlsm ZIP) with
+     xl_marinade.core.vba.ovba, which needs only olefile
   2. For each module, parse with antlr4-vba's vba_ccParser for correct tokenization
      (handles line continuations, conditional compilation, string escaping)
   3. Walk the source text to detect procedure boundaries:
