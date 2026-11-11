@@ -129,6 +129,12 @@ Key columns: `from_cell`, `to_cell`, `dependency_type` (`'cell'` | `'range'`
 `to_c1`, `to_r2`, `to_c2` (range bounds; whole-row/column refs appear
 pre-expanded, e.g. `A1:A1048576`).
 
+A `'cell'` edge is listed even when its target holds nothing and so has no
+row in `agent_cells` -- an empty input, a formatted-but-empty cell, a cell on
+an empty sheet. Before 0.7.1 the view dropped those edges (the base table
+`cell_edges_internal` always held them); re-extract an older database to see
+them.
+
 **`agent_binding_dependencies`** — the same dependency graph, but at the
 binding level (block-to-block) instead of the cell level, with labels and
 addresses resolved for both endpoints.

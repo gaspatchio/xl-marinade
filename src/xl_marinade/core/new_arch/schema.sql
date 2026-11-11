@@ -385,11 +385,28 @@ JOIN sheets s ON blc.sheet_id = s.sheet_id;
 -- - dependency_type: 'cell' | 'range' | 'external'
 -- - Range edges include: cell_count, to_r1, to_c1, to_r2, to_c2
 -- - Whole-column/row refs appear as expanded bounds (e.g., A1:A1048576)
+-- - A cell edge whose target has no row in `cells` (an empty input, a
+--   formatted-but-empty cell, a cell on an empty sheet) is still listed: the
+--   target address is decoded from the packed to_cell_id
+--   ((sheet_id << 44) | (row << 20) | col, see cell_identity.py).
 CREATE VIEW agent_dependencies AS
 -- Internal Cell Dependencies
 SELECT 
     s_from.sheet_name || '!' || c_from.a1 AS from_cell,
-    s_to.sheet_name || '!' || c_to.a1 AS to_cell,
+    s_to.sheet_name || '!' || COALESCE(
+        c_to.a1,
+        -- Column letters for col 1..16384 (A..XFD), then the row.
+        CASE
+            WHEN (e.to_cell_id & 1048575) <= 26
+                THEN char(64 + (e.to_cell_id & 1048575))
+            WHEN (e.to_cell_id & 1048575) <= 702
+                THEN char(65 + ((e.to_cell_id & 1048575) - 27) / 26)
+                  || char(65 + ((e.to_cell_id & 1048575) - 27) % 26)
+            ELSE char(65 + ((e.to_cell_id & 1048575) - 703) / 676)
+              || char(65 + (((e.to_cell_id & 1048575) - 703) % 676) / 26)
+              || char(65 + ((e.to_cell_id & 1048575) - 703) % 26)
+        END || ((e.to_cell_id >> 20) & 16777215)
+    ) AS to_cell,
     'cell' AS dependency_type,
     NULL AS cell_count,
     NULL AS to_sheet_id,
@@ -400,8 +417,8 @@ SELECT
 FROM cell_edges_internal e
 JOIN cells c_from ON e.from_cell_id = c_from.cell_id
 JOIN sheets s_from ON c_from.sheet_id = s_from.sheet_id
-JOIN cells c_to ON e.to_cell_id = c_to.cell_id
-JOIN sheets s_to ON c_to.sheet_id = s_to.sheet_id
+LEFT JOIN cells c_to ON e.to_cell_id = c_to.cell_id
+JOIN sheets s_to ON s_to.sheet_id = (e.to_cell_id >> 44)
 UNION ALL
 -- Range Dependencies
 SELECT 

@@ -120,6 +120,9 @@ Schema notes — when a query errors, list the view's columns with
   `classification`, `confidence`.
 - `agent_dependencies` — `from_cell`, `to_cell`, `dependency_type`
   (`cell` | `range` | `external`), `cell_count` (ranges), `to_r1/c1/r2/c2`.
+  A `to_cell` can be an empty cell with no row in `agent_cells_light`: the
+  read is real (a blank input, a placeholder sheet). Databases extracted
+  before 0.7.1 omit those cell edges; re-extract if a read seems missing.
 - `agent_binding_dependencies` — binding-level graph with `from_label`,
   `from_address`, `to_label`, `to_address`, `edge_count`, `kind`
   (`formula` | `via_vba_paste`).
