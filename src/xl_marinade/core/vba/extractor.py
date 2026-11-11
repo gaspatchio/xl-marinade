@@ -562,6 +562,20 @@ def _extract_procedures_from_source(
     return procedures, declarations, errors
 
 
+def _has_vba_part(path: Path) -> bool | None:
+    """Whether the workbook carries a VBA project, without needing oletools.
+
+    True/False for an OOXML (zip) container, by the presence of
+    xl/vbaProject.bin. None when that cannot be told without oletools: a
+    legacy OLE .xls/.xla, or a file that cannot be read as a zip at all.
+    """
+    try:
+        with zipfile.ZipFile(path) as zf:
+            return "xl/vbaProject.bin" in zf.namelist()
+    except (zipfile.BadZipFile, OSError):
+        return None
+
+
 def _open_vba_parser(path: Path) -> tuple[Any, bytes | None, str]:
     """Open a VBA_Parser for either an OOXML container or a legacy CDF file.
 
@@ -622,16 +636,26 @@ def extract_vba(xlsm_path: Path | str) -> VBAExtraction:
         VBAExtraction with modules, procedures, declarations, errors,
         and security findings.
     """
+    path = Path(xlsm_path)
+
+    # Look for a VBA project before needing oletools: a workbook without one
+    # has no macros to read, whether or not the [vba] extra is installed.
+    # Checking oletools first reported every plain .xlsx as
+    # "skipped_no_oletools" -- the same status as a macro workbook that was
+    # never read, which agents took to mean "no macros" either way.
+    if _has_vba_part(path) is False:
+        return VBAExtraction(status=VBA_STATUS_NO_VBA_PROJECT)
+
     try:
         from oletools.olevba import VBA_Parser  # noqa: F401
     except ImportError:
         logger.warning(
-            "oletools not installed — VBA extraction skipped "
-            "(pip install xl-marinade[vba] to enable)"
+            "%s has a VBA project, but oletools is not installed: its macros were NOT "
+            "read (pip install 'xl-marinade[vba]' and re-extract)",
+            path.name,
         )
         return VBAExtraction(status=VBA_STATUS_SKIPPED_NO_OLETOOLS)
 
-    path = Path(xlsm_path)
     extraction = VBAExtraction()
 
     vba_parser, vba_data, open_status = _open_vba_parser(path)

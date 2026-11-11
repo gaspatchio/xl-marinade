@@ -7,6 +7,19 @@ schema is a versioned public contract.
 
 ## [Unreleased]
 
+### Fixed
+- Without the `[vba]` extra, a workbook with no macros no longer reports its
+  macros as unread (#57). The oletools check ran before the workbook was
+  opened, so every plain `.xlsx` recorded `vba_extraction =
+  skipped_no_oletools` and printed `VBA: 0 procs, … (skipped_no_oletools)` --
+  exactly what an `.xlsm` whose macros were never read produced, so the two
+  could not be told apart, and AI agents read both as "no macros". Now a
+  workbook without a VBA project records `no_vba_project` whether or not
+  oletools is installed, and only one that has a VBA project, extracted
+  without oletools, records `skipped_no_oletools`. Its progress line reads
+  `VBA: present, NOT READ -- … install 'xl-marinade[vba]' …` instead of a row
+  of zero counts, and the warning names the workbook.
+
 ## [0.6.0] - 2026-11-10
 
 A diff-correctness release for structural edits. Inserting or deleting a row
