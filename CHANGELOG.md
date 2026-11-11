@@ -7,6 +7,29 @@ schema is a versioned public contract.
 
 ## [Unreleased]
 
+### Changed
+- **VBA macros are read by every install; the `[vba]` extra is no longer
+  needed.** A plain `pip install xl-marinade` now parses VBA: module source
+  is read from `xl/vbaProject.bin` with `olefile` (BSD-2-Clause, pure Python)
+  and decoded by XL Marinade itself, following Microsoft's published MS-OVBA
+  format. `oletools` is no longer used. Its required dependency `pcodedmp` is
+  GPLv3, which an Apache-2.0 package should not pull in, and it brought eight
+  more packages (among them `cryptography`, `msoffcrypto-tool` and the GUI
+  toolkit `easygui`). The `[vba]` extra is kept, empty, so existing install
+  commands keep working. On the five lifelib example workbooks, the
+  extracted databases are identical to 0.6.1's (31 tables, 1,893,947 rows,
+  80 VBA modules byte for byte), except for:
+- **`vba_modules.security_findings_json` comes from a new keyword scan.**
+  olevba's scan flagged every lifelib model -- `Base64 Strings` and `Hex
+  Strings` heuristics, the word "run" in a comment, a column named
+  `pv_av_change` as an auto-run macro. The new scan reports `AutoExec` for
+  procedures Office runs on its own (`Workbook_Open`, `Auto_Open`, ...) and
+  `Suspicious` for calls that reach outside the workbook: shell, network,
+  file writes, DLL declarations, the registry, `CreateObject`, editing the
+  VBA project. It reports nothing on the lifelib models.
+- `vba_extraction = skipped_no_oletools` is no longer produced. A database
+  stamped with it came from 0.5.0-0.6.x without the extra: re-extract it.
+
 ## [0.6.1] - 2026-11-11
 
 A fix to the VBA status reported without the `[vba]` extra (#57): a workbook

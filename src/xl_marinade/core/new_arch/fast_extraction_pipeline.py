@@ -562,11 +562,6 @@ def _vba_progress_line(s: dict[str, int | str]) -> str:
     counts: agents read "0 procs" as "no macros" (#57).
     """
     status = s.get("status", "failed")
-    if status == "skipped_no_oletools":
-        return (
-            "  VBA: present, NOT READ -- oletools is not installed "
-            "(pip install 'xl-marinade[vba]' and re-extract) (skipped_no_oletools)"
-        )
     if status == "no_vba_project":
         return "  VBA: none (no_vba_project)"
     if status == "failed":

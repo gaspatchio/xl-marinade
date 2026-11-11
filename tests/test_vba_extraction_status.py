@@ -1,18 +1,14 @@
 """The database records whether VBA was read (issues #48, #57).
 
-Without `oletools` every VBA table was left empty and nothing in the database
-said so, so a macro workbook extracted that way was indistinguishable from one
-with no macros. `ir_metadata.vba_extraction` now records one of:
+`ir_metadata.vba_extraction` records one of:
 
 - `extracted` -- the VBA tables hold the workbook's VBA;
-- `no_vba_project` -- the workbook has no VBA project (e.g. any `.xlsx`),
-  whether or not oletools is installed;
-- `skipped_no_oletools` -- the workbook has a VBA project, but the `[vba]`
-  extra is not installed, so it was not read;
+- `no_vba_project` -- the workbook has no VBA project (e.g. any `.xlsx`);
 - `failed` -- reading or storing the VBA raised; the tables may be partial.
 
-The extraction progress line says the same thing: agents read it, not the
-database, and read "0 procs" as "no macros" (#57).
+Since 0.7.0 VBA is read with olefile alone, so `skipped_no_oletools` -- the
+`[vba]` extra not installed -- is no longer produced. The extraction progress
+line says the same thing as the status: agents read it, not the database.
 """
 
 import importlib
@@ -59,7 +55,7 @@ def _xlsm(path: Path, vba_project: bytes = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1") 
     return path
 
 
-def _no_oletools(monkeypatch: pytest.MonkeyPatch) -> None:
+def _hide_oletools(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(sys.modules, "oletools", None)
     monkeypatch.setitem(sys.modules, "oletools.olevba", None)
 
@@ -69,87 +65,61 @@ def _vba_line(err: str) -> str:
 
 
 def test_workbook_without_vba_project(tmp_path: Path, capfd: pytest.CaptureFixture[str]) -> None:
-    pytest.importorskip("oletools.olevba")
+    """The #57 reproduction: a plain .xlsx is "no macros", never "not read"."""
     db = xl_marinade.extract(_xlsx(tmp_path / "book.xlsx"), tmp_path / "book.db")
     assert _status(db) == "no_vba_project"
     assert _vba_line(capfd.readouterr().err) == "VBA: none (no_vba_project)"
 
 
-def test_workbook_without_vba_project_needs_no_oletools(
+def test_vba_project_is_read_without_oletools(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
 ) -> None:
-    """The #57 reproduction: a plain .xlsx read as "macros not read" without oletools.
+    """A VBA project is read with oletools unimportable: the [vba] extra is gone.
 
-    Its status matched a macro workbook that was never read, so neither could
-    be told from the other; an agent took both to mean "no macros".
+    The repo ships no macro workbook, so the module list is stood in for at
+    the reader's boundary (the reader itself is tested in test_ovba.py); the
+    rest of the extraction -- procedure parsing, storage, status -- is real.
     """
-    _no_oletools(monkeypatch)
-    db = xl_marinade.extract(_xlsx(tmp_path / "book.xlsx"), tmp_path / "book.db")
-    assert _status(db) == "no_vba_project"
-    err = capfd.readouterr().err
-    assert _vba_line(err) == "VBA: none (no_vba_project)"
-    assert "oletools" not in err  # nothing to warn about
-
-
-def test_vba_project_without_oletools_says_not_read(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
-) -> None:
-    """The #48 case: a macro workbook on a plain install must not read as "no macros"."""
-    _no_oletools(monkeypatch)
-    db = xl_marinade.extract(_xlsm(tmp_path / "book.xlsm"), tmp_path / "book.db")
-    assert _status(db) == "skipped_no_oletools"
-    line = _vba_line(capfd.readouterr().err)
-    assert line.startswith("VBA: present, NOT READ")
-    assert "xl-marinade[vba]" in line
-    assert "0 procs" not in line
-
-
-def test_vba_project_with_oletools_is_extracted(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
-) -> None:
-    """With oletools importable, the VBA project is read (oletools stubbed)."""
-
-    class StubParser:
-        type = "OLE"
-
-        def __init__(self, filename: str, data: bytes | None = None) -> None:
-            pass
-
-        def extract_all_macros(self) -> list[tuple[str, str, str, str]]:
-            code = 'Attribute VB_Name = "Module1"\nSub Hello()\n    x = 1\nEnd Sub\n'
-            return [("vbaProject.bin", "VBA/Module1", "Module1.bas", code)]
-
-        def detect_vba_macros(self) -> bool:
-            return False
-
-        def close(self) -> None:
-            pass
-
-    olevba = ModuleType("oletools.olevba")
-    olevba.VBA_Parser = StubParser  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "oletools", ModuleType("oletools"))
-    monkeypatch.setitem(sys.modules, "oletools.olevba", olevba)
+    _hide_oletools(monkeypatch)
+    extractor = _module("xl_marinade.core.vba.extractor")
+    ovba = _module("xl_marinade.core.vba.ovba")
+    code = 'Attribute VB_Name = "Module1"\r\nSub Hello()\r\n    x = 1\r\nEnd Sub\r\n'
+    monkeypatch.setattr(extractor, "is_ole", lambda _data: True)
+    monkeypatch.setattr(
+        extractor,
+        "read_vba_modules",
+        lambda _src: [ovba.VBAModuleSource("Module1", "Module1.bas", "VBA/Module1", code)],
+    )
 
     db = xl_marinade.extract(_xlsm(tmp_path / "book.xlsm"), tmp_path / "book.db")
     assert _status(db) == "extracted"
     with sqlite3.connect(db) as conn:
         assert conn.execute("SELECT name FROM vba_modules").fetchall() == [("Module1.bas",)]
+        assert conn.execute("SELECT name FROM vba_procedures").fetchall() == [("Hello",)]
     line = _vba_line(capfd.readouterr().err)
     assert line.startswith("VBA: 1 procs")
     assert line.endswith("(extracted)")
+    assert "oletools" not in sys.modules or sys.modules["oletools"] is None
 
 
-def test_extracted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # No macro workbook ships with the tests; stand in for a successful read.
-    extractor = _module("xl_marinade.core.vba.extractor")
-    monkeypatch.setattr(extractor, "extract_vba", lambda _path: extractor.VBAExtraction())
-    db = xl_marinade.extract(_xlsx(tmp_path / "book.xlsx"), tmp_path / "book.db")
-    assert _status(db) == "extracted"
+def test_damaged_vba_project_is_failed(tmp_path: Path, capfd: pytest.CaptureFixture[str]) -> None:
+    """An OLE header with nothing behind it: present but unreadable."""
+    db = xl_marinade.extract(_xlsm(tmp_path / "book.xlsm"), tmp_path / "book.db")
+    assert _status(db) == "failed"
+    assert _vba_line(capfd.readouterr().err).startswith("VBA: extraction FAILED")
+
+
+def test_skipped_no_oletools_is_never_recorded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _hide_oletools(monkeypatch)
+    for name, build in (("a.xlsx", _xlsx), ("b.xlsm", _xlsm)):
+        db = xl_marinade.extract(build(tmp_path / name), tmp_path / f"{name}.db")
+        assert _status(db) != "skipped_no_oletools"
 
 
 def test_unreadable_vba_project_is_failed(tmp_path: Path) -> None:
-    """A vbaProject.bin olevba cannot parse is a failure, not an absence."""
-    pytest.importorskip("oletools.olevba")
+    """A vbaProject.bin that is not OLE at all is a failure, not an absence."""
     xlsm = _xlsm(tmp_path / "book.xlsm", b"not an OLE compound file")
     db = xl_marinade.extract(xlsm, tmp_path / "book.db")
     assert _status(db) == "failed"

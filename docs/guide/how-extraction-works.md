@@ -38,7 +38,7 @@ deterministic ID, instead of being stored as thousands of unrelated formulas.
 Every reference a formula makes to another cell becomes an edge: same-sheet
 references, cross-sheet references, references to external workbooks, and range
 references (`SUM(A1:A100)`) are all resolved into the same graph rather than left
-as opaque strings. If `[vba]` is installed, macro-driven mutations (paste-special,
+as opaque strings. Macro-driven mutations (paste-special,
 `.Value = .Value` overwrites) are captured as edges too, so a value that "changes
 by magic" via a macro is still traceable — see [VBA extraction](vba.md).
 
@@ -82,5 +82,5 @@ full set of views and their columns is covered in the schema reference.
 
 - [Bindings & the graph](bindings.md) — what a binding is and how bindings relate.
 - [Diffing workbooks](diffing.md) — comparing two extracted databases.
-- [VBA extraction](vba.md) — the optional `[vba]` extra.
+- [VBA extraction](vba.md) — how macros are parsed and what is captured.
 - [Quickstart](../quickstart.md) — the extract → document → diff walkthrough.

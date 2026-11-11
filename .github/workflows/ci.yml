@@ -43,7 +43,7 @@ jobs:
             uv.lock
             pyproject.toml
       - name: Install dependencies
-        # --all-extras installs the [llm] (openai) + [vba] (oletools) extras the
+        # --all-extras installs the [llm] (openai) extra (and the now-empty [vba]) the
         # suite exercises; the dev group brings networkx (DiGraph backend) + tools.
         run: uv sync --frozen --group dev --all-extras
       # The tier-boundary + import-cleanliness gates run inside this pytest
