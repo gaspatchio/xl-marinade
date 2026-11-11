@@ -7,6 +7,15 @@ schema is a versioned public contract.
 
 ## [Unreleased]
 
+### Fixed
+- **`agent_dependencies` lists reads of empty cells.** A formula that reads a
+  cell holding nothing -- `=B20` on an untouched cell, a formatted-but-empty
+  cell, `=Empty!A1` on a sheet with no cells -- had its edge in
+  `cell_edges_internal`, but the view dropped it because the target has no
+  row in `cells`. The view now decodes the target's address from its cell ID,
+  so every internal edge is listed. Range edges were not affected. Databases
+  extracted earlier keep the old view; re-extract to see the edges.
+
 ## [0.7.0] - 2026-11-11
 
 VBA macros are read by every install. A plain `pip install xl-marinade` now
