@@ -147,7 +147,9 @@ def parse_cell_reference(cell_ref: str) -> tuple[int, int]:
 
 
 def stream_worksheet_cells(
-    workbook_path: str, sheet_name: str
+    workbook_path: str,
+    sheet_name: str,
+    array_formula_cells: set[tuple[int, int]] | None = None,
 ) -> Iterator[tuple[int, int, str | None, str | None, str | None, int | None, bool, int | None]]:
     """
     Stream cells from a worksheet using iterparse.
@@ -165,6 +167,9 @@ def stream_worksheet_cells(
     Args:
         workbook_path: Path to .xlsx/.xlsm file
         sheet_name: Name of worksheet to stream
+        array_formula_cells: If given, the (row, col) of every cell whose
+            formula is an array (CSE) formula -- ``<f t="array" ref="...">``,
+            written on the range's top-left cell -- is added to it.
 
     Yields:
         (row, col, formula, value, cell_type, shared_index, shared_master, style_index) tuples
@@ -226,6 +231,8 @@ def stream_worksheet_cells(
                         # Remove leading '=' if present
                         if formula.startswith("="):
                             formula = formula[1:]
+                        if array_formula_cells is not None and formula_elem.get("t") == "array":
+                            array_formula_cells.add((row, col))
                         if formula_elem.get("t") == "shared":
                             shared_index_str = formula_elem.get("si")
                             if shared_index_str is not None:
