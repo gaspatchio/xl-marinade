@@ -7,6 +7,13 @@ schema is a versioned public contract.
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-11-11
+
+A fix to the VBA status reported without the `[vba]` extra (#57): a workbook
+with no macros no longer reads as one whose macros were skipped. Only
+`ir_metadata.vba_extraction` and the extraction progress line change; the
+output schema is unchanged at 3.0.
+
 ### Fixed
 - Without the `[vba]` extra, a workbook with no macros no longer reports its
   macros as unread (#57). The oletools check ran before the workbook was
