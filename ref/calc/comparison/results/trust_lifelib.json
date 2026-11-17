@@ -1,0 +1,385 @@
+[
+ {
+  "engine": "formulas",
+  "workbook": "BasicTerm_S.xlsm",
+  "formula_cells": 4605,
+  "stripped": 4605,
+  "calc_seconds": 37.56,
+  "reproduced": 4605,
+  "share": 1.0,
+  "reasons": {},
+  "functions_in_failing_cells": {},
+  "examples": {},
+  "total_seconds": 41.36
+ },
+ {
+  "engine": "ironcalc",
+  "workbook": "BasicTerm_S.xlsm",
+  "formula_cells": 4605,
+  "stripped": 4605,
+  "calc_seconds": 0.16,
+  "reproduced": 4605,
+  "share": 1.0,
+  "reasons": {},
+  "functions_in_failing_cells": {},
+  "examples": {},
+  "total_seconds": 3.61
+ },
+ {
+  "engine": "formulas",
+  "workbook": "BasicTerm_SE.xlsm",
+  "formula_cells": 6679,
+  "stripped": 6679,
+  "calc_seconds": 43.53,
+  "reproduced": 6679,
+  "share": 1.0,
+  "reasons": {},
+  "functions_in_failing_cells": {},
+  "examples": {},
+  "total_seconds": 47.27
+ },
+ {
+  "engine": "ironcalc",
+  "workbook": "BasicTerm_SE.xlsm",
+  "formula_cells": 6679,
+  "stripped": 6679,
+  "calc_seconds": 0.17,
+  "reproduced": 6679,
+  "share": 1.0,
+  "reasons": {},
+  "functions_in_failing_cells": {},
+  "examples": {},
+  "total_seconds": 3.86
+ },
+ {
+  "engine": "formulas",
+  "workbook": "CashValue_SE.xlsm",
+  "formula_cells": 64094,
+  "stripped": 64094,
+  "calc_seconds": 386.13,
+  "reproduced": 64094,
+  "share": 1.0,
+  "reasons": {},
+  "functions_in_failing_cells": {},
+  "examples": {},
+  "total_seconds": 388.1
+ },
+ {
+  "engine": "ironcalc",
+  "workbook": "CashValue_SE.xlsm",
+  "formula_cells": 64094,
+  "stripped": 64094,
+  "calc_seconds": 0.51,
+  "reproduced": 64094,
+  "share": 1.0,
+  "reasons": {},
+  "functions_in_failing_cells": {},
+  "examples": {},
+  "total_seconds": 2.26
+ },
+ {
+  "engine": "formulas",
+  "workbook": "SmithWilson.xlsm",
+  "formula_cells": 2209,
+  "stripped": 2209,
+  "calc_seconds": 14.51,
+  "reproduced": 2049,
+  "share": 0.927569,
+  "reasons": {
+   "engine error #VALUE!": 92,
+   "engine error #VALUE! (array formula)": 67,
+   "engine error #MISSING (array formula)": 1
+  },
+  "functions_in_failing_cells": {
+   "INDEX": 90,
+   "MMULT": 66,
+   "ABS": 2,
+   "SUMPRODUCT": 2,
+   "MINVERSE": 1,
+   "MIN": 1,
+   "AND": 1
+  },
+  "examples": {
+   "engine error #MISSING (array formula)": [
+    {
+     "cell": "Calibration!G4",
+     "functions": [
+      "MINVERSE",
+      "MMULT"
+     ]
+    }
+   ],
+   "engine error #VALUE! (array formula)": [
+    {
+     "cell": "Extrapolation!C4",
+     "functions": [
+      "INDEX",
+      "MMULT"
+     ]
+    },
+    {
+     "cell": "Extrapolation!C5",
+     "functions": [
+      "INDEX",
+      "MMULT"
+     ]
+    },
+    {
+     "cell": "Extrapolation!C6",
+     "functions": [
+      "INDEX",
+      "MMULT"
+     ]
+    },
+    {
+     "cell": "Extrapolation!C7",
+     "functions": [
+      "INDEX",
+      "MMULT"
+     ]
+    },
+    {
+     "cell": "Extrapolation!C8",
+     "functions": [
+      "INDEX",
+      "MMULT"
+     ]
+    }
+   ],
+   "engine error #VALUE!": [
+    {
+     "cell": "Extrapolation!D4",
+     "functions": []
+    },
+    {
+     "cell": "Extrapolation!D5",
+     "functions": []
+    },
+    {
+     "cell": "Extrapolation!D6",
+     "functions": []
+    },
+    {
+     "cell": "Extrapolation!D7",
+     "functions": []
+    },
+    {
+     "cell": "Extrapolation!D8",
+     "functions": []
+    }
+   ]
+  },
+  "total_seconds": 14.63
+ },
+ {
+  "engine": "ironcalc",
+  "workbook": "SmithWilson.xlsm",
+  "formula_cells": 2209,
+  "stripped": 2209,
+  "calc_seconds": 0.03,
+  "reproduced": 2209,
+  "share": 1.0,
+  "reasons": {},
+  "functions_in_failing_cells": {},
+  "examples": {},
+  "total_seconds": 0.15
+ },
+ {
+  "engine": "formulas",
+  "workbook": "SmithWilson_novba.xlsm",
+  "formula_cells": 2209,
+  "stripped": 2209,
+  "calc_seconds": 13.72,
+  "reproduced": 2049,
+  "share": 0.927569,
+  "reasons": {
+   "engine error #VALUE!": 92,
+   "engine error #VALUE! (array formula)": 67,
+   "engine error #MISSING (array formula)": 1
+  },
+  "functions_in_failing_cells": {
+   "INDEX": 90,
+   "MMULT": 66,
+   "ABS": 2,
+   "SUMPRODUCT": 2,
+   "MINVERSE": 1,
+   "MIN": 1,
+   "AND": 1
+  },
+  "examples": {
+   "engine error #MISSING (array formula)": [
+    {
+     "cell": "Calibration!G4",
+     "functions": [
+      "MINVERSE",
+      "MMULT"
+     ]
+    }
+   ],
+   "engine error #VALUE! (array formula)": [
+    {
+     "cell": "Extrapolation!C4",
+     "functions": [
+      "INDEX",
+      "MMULT"
+     ]
+    },
+    {
+     "cell": "Extrapolation!C5",
+     "functions": [
+      "INDEX",
+      "MMULT"
+     ]
+    },
+    {
+     "cell": "Extrapolation!C6",
+     "functions": [
+      "INDEX",
+      "MMULT"
+     ]
+    },
+    {
+     "cell": "Extrapolation!C7",
+     "functions": [
+      "INDEX",
+      "MMULT"
+     ]
+    },
+    {
+     "cell": "Extrapolation!C8",
+     "functions": [
+      "INDEX",
+      "MMULT"
+     ]
+    }
+   ],
+   "engine error #VALUE!": [
+    {
+     "cell": "Extrapolation!D4",
+     "functions": []
+    },
+    {
+     "cell": "Extrapolation!D5",
+     "functions": []
+    },
+    {
+     "cell": "Extrapolation!D6",
+     "functions": []
+    },
+    {
+     "cell": "Extrapolation!D7",
+     "functions": []
+    },
+    {
+     "cell": "Extrapolation!D8",
+     "functions": []
+    }
+   ]
+  },
+  "total_seconds": 13.86
+ },
+ {
+  "engine": "ironcalc",
+  "workbook": "SmithWilson_novba.xlsm",
+  "formula_cells": 2209,
+  "stripped": 2209,
+  "calc_seconds": 0.03,
+  "reproduced": 2209,
+  "share": 1.0,
+  "reasons": {},
+  "functions_in_failing_cells": {},
+  "examples": {},
+  "total_seconds": 0.15
+ },
+ {
+  "engine": "formulas",
+  "workbook": "Solvency2.xlsm",
+  "formula_cells": 22123,
+  "stripped": 22123,
+  "calc_seconds": 73.25,
+  "reproduced": 4364,
+  "share": 0.197261,
+  "reasons": {
+   "engine error #N/A": 17758,
+   "engine error #N/A (array formula)": 1
+  },
+  "functions_in_failing_cells": {
+   "IF": 11121,
+   "AND": 1457,
+   "MIN": 1049,
+   "MAX": 950,
+   "INDEX": 578,
+   "OR": 104,
+   "ABS": 11,
+   "SUM": 6,
+   "MATCH": 1,
+   "SQRT": 1,
+   "SUMPRODUCT": 1,
+   "TRANSPOSE": 1
+  },
+  "examples": {
+   "engine error #N/A": [
+    {
+     "cell": "Policy_Basis!C47",
+     "functions": [
+      "INDEX",
+      "MATCH"
+     ]
+    },
+    {
+     "cell": "Policy_Basis!C48",
+     "functions": [
+      "MIN"
+     ]
+    },
+    {
+     "cell": "Policy_Sched!C7",
+     "functions": [
+      "IF",
+      "INDEX"
+     ]
+    },
+    {
+     "cell": "Policy_Sched!D7",
+     "functions": [
+      "IF",
+      "INDEX",
+      "MIN"
+     ]
+    },
+    {
+     "cell": "Policy_Sched!E7",
+     "functions": [
+      "IF",
+      "INDEX",
+      "MIN"
+     ]
+    }
+   ],
+   "engine error #N/A (array formula)": [
+    {
+     "cell": "Checks!C24",
+     "functions": [
+      "ABS",
+      "SUMPRODUCT",
+      "TRANSPOSE"
+     ]
+    }
+   ]
+  },
+  "total_seconds": 74.04
+ },
+ {
+  "engine": "ironcalc",
+  "workbook": "Solvency2.xlsm",
+  "formula_cells": 22123,
+  "stripped": 22123,
+  "calc_seconds": 0.44,
+  "reproduced": 22123,
+  "share": 1.0,
+  "reasons": {},
+  "functions_in_failing_cells": {},
+  "examples": {},
+  "total_seconds": 1.17
+ }
+]

@@ -1,0 +1,1042 @@
+[
+ {
+  "label": "IF",
+  "formula": "=IF(Data!A1>5,\"y\",\"n\")",
+  "expected": "y",
+  "ironcalc": "y",
+  "ironcalc_ok": true,
+  "formulas": "y",
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "IFS",
+  "formula": "=IFS(Data!A1>50,1,Data!A1>5,2)",
+  "expected": 2,
+  "ironcalc": 2.0,
+  "ironcalc_ok": true,
+  "formulas": 2,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "IFERROR",
+  "formula": "=IFERROR(1/0,-1)",
+  "expected": -1,
+  "ironcalc": -1.0,
+  "ironcalc_ok": true,
+  "formulas": -1.0,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "AND/OR/NOT",
+  "formula": "=AND(TRUE,OR(FALSE,NOT(FALSE)))",
+  "expected": true,
+  "ironcalc": true,
+  "ironcalc_ok": true,
+  "formulas": true,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "CHOOSE",
+  "formula": "=CHOOSE(2,10,20,30)",
+  "expected": 20,
+  "ironcalc": 20.0,
+  "ironcalc_ok": true,
+  "formulas": 20,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "VLOOKUP exact",
+  "formula": "=VLOOKUP(30,Data!A1:C5,3,FALSE)",
+  "expected": "c",
+  "ironcalc": "c",
+  "ironcalc_ok": true,
+  "formulas": "c",
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "VLOOKUP approx",
+  "formula": "=VLOOKUP(35,Data!A1:B5,2,TRUE)",
+  "expected": 45,
+  "ironcalc": 45.0,
+  "ironcalc_ok": true,
+  "formulas": 45,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "HLOOKUP",
+  "formula": "=HLOOKUP(10,Data!A1:B5,3,FALSE)",
+  "expected": 30,
+  "ironcalc": 30.0,
+  "ironcalc_ok": true,
+  "formulas": 30,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "INDEX/MATCH",
+  "formula": "=INDEX(Data!B1:B5,MATCH(40,Data!A1:A5,0))",
+  "expected": 60,
+  "ironcalc": 60.0,
+  "ironcalc_ok": true,
+  "formulas": 60,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "MATCH approx",
+  "formula": "=MATCH(35,Data!A1:A5,1)",
+  "expected": 3,
+  "ironcalc": 3.0,
+  "ironcalc_ok": true,
+  "formulas": 3,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "LOOKUP",
+  "formula": "=LOOKUP(35,Data!A1:A5,Data!B1:B5)",
+  "expected": 45,
+  "ironcalc": 45.0,
+  "ironcalc_ok": true,
+  "formulas": 45,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "XLOOKUP",
+  "formula": "=XLOOKUP(20,Data!A1:A5,Data!B1:B5)",
+  "expected": 30,
+  "ironcalc": 30.0,
+  "ironcalc_ok": true,
+  "formulas": 30,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "OFFSET",
+  "formula": "=SUM(OFFSET(Data!A1,1,0,3,1))",
+  "expected": 90,
+  "ironcalc": 90.0,
+  "ironcalc_ok": true,
+  "formulas": "#NAME?",
+  "formulas_ok": false,
+  "engines_agree": false
+ },
+ {
+  "label": "INDIRECT",
+  "formula": "=INDIRECT(\"Data!A\"&3)",
+  "expected": 30,
+  "ironcalc": 30.0,
+  "ironcalc_ok": true,
+  "formulas": "#NAME?",
+  "formulas_ok": false,
+  "engines_agree": false
+ },
+ {
+  "label": "SUM",
+  "formula": "=SUM(Data!A1:A5)",
+  "expected": 150,
+  "ironcalc": 150.0,
+  "ironcalc_ok": true,
+  "formulas": 150.0,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "SUMPRODUCT",
+  "formula": "=SUMPRODUCT(Data!A1:A5,Data!B1:B5)",
+  "expected": 8250,
+  "ironcalc": 8250.0,
+  "ironcalc_ok": true,
+  "formulas": 8250.0,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "SUMPRODUCT cond",
+  "formula": "=SUMPRODUCT((Data!A1:A5>20)*Data!B1:B5)",
+  "expected": 180,
+  "ironcalc": 180.0,
+  "ironcalc_ok": true,
+  "formulas": 180.0,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "SUMIF",
+  "formula": "=SUMIF(Data!A1:A5,\">20\",Data!B1:B5)",
+  "expected": 180,
+  "ironcalc": 180.0,
+  "ironcalc_ok": true,
+  "formulas": 180.0,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "SUMIFS",
+  "formula": "=SUMIFS(Data!B1:B5,Data!A1:A5,\">10\",Data!A1:A5,\"<50\")",
+  "expected": 135,
+  "ironcalc": 135.0,
+  "ironcalc_ok": true,
+  "formulas": 135.0,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "COUNT",
+  "formula": "=COUNT(Data!A1:C5)",
+  "expected": 10,
+  "ironcalc": 10.0,
+  "ironcalc_ok": true,
+  "formulas": 10,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "COUNTA",
+  "formula": "=COUNTA(Data!A1:C5)",
+  "expected": 15,
+  "ironcalc": 15.0,
+  "ironcalc_ok": true,
+  "formulas": 15,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "COUNTIF",
+  "formula": "=COUNTIF(Data!A1:A5,\">=30\")",
+  "expected": 3,
+  "ironcalc": 3.0,
+  "ironcalc_ok": true,
+  "formulas": 3,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "COUNTIFS",
+  "formula": "=COUNTIFS(Data!A1:A5,\">10\",Data!B1:B5,\"<70\")",
+  "expected": 3,
+  "ironcalc": 3.0,
+  "ironcalc_ok": true,
+  "formulas": 3,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "AVERAGE",
+  "formula": "=AVERAGE(Data!A1:A5)",
+  "expected": 30,
+  "ironcalc": 30.0,
+  "ironcalc_ok": true,
+  "formulas": 30.0,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "AVERAGEIF",
+  "formula": "=AVERAGEIF(Data!A1:A5,\">20\")",
+  "expected": 40,
+  "ironcalc": 40.0,
+  "ironcalc_ok": true,
+  "formulas": 40.0,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "MIN/MAX",
+  "formula": "=MAX(Data!A1:A5)-MIN(Data!A1:A5)",
+  "expected": 40,
+  "ironcalc": 40.0,
+  "ironcalc_ok": true,
+  "formulas": 40.0,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "ROUNDUP",
+  "formula": "=ROUNDUP(2.341,2)",
+  "expected": 2.35,
+  "ironcalc": 2.35,
+  "ironcalc_ok": true,
+  "formulas": 2.35,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "ROUNDDOWN",
+  "formula": "=ROUNDDOWN(-2.349,2)",
+  "expected": -2.34,
+  "ironcalc": -2.34,
+  "ironcalc_ok": true,
+  "formulas": -2.34,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "INT neg",
+  "formula": "=INT(-2.5)",
+  "expected": -3,
+  "ironcalc": -3.0,
+  "ironcalc_ok": true,
+  "formulas": -3,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "TRUNC",
+  "formula": "=TRUNC(-2.5)",
+  "expected": -2,
+  "ironcalc": -2.0,
+  "ironcalc_ok": true,
+  "formulas": -2.0,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "MOD neg",
+  "formula": "=MOD(-7,3)",
+  "expected": 2,
+  "ironcalc": 2.0,
+  "ironcalc_ok": true,
+  "formulas": 2.0,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "CEILING",
+  "formula": "=CEILING(2.31,0.05)",
+  "expected": 2.35,
+  "ironcalc": 2.35,
+  "ironcalc_ok": true,
+  "formulas": 2.35,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "FLOOR",
+  "formula": "=FLOOR(2.34,0.05)",
+  "expected": 2.3,
+  "ironcalc": 2.3000000000000003,
+  "ironcalc_ok": true,
+  "formulas": 2.3000000000000003,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "MROUND",
+  "formula": "=MROUND(17,5)",
+  "expected": 15,
+  "ironcalc": 15.0,
+  "ironcalc_ok": true,
+  "formulas": 15.0,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "POWER/EXP/LN",
+  "formula": "=LN(EXP(POWER(2,3)))",
+  "expected": 8,
+  "ironcalc": 8.0,
+  "ironcalc_ok": true,
+  "formulas": 8.0,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "SQRT/ABS",
+  "formula": "=SQRT(ABS(-16))",
+  "expected": 4,
+  "ironcalc": 4.0,
+  "ironcalc_ok": true,
+  "formulas": 4.0,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "LOG10",
+  "formula": "=LOG10(1000)",
+  "expected": 3,
+  "ironcalc": 3.0,
+  "ironcalc_ok": true,
+  "formulas": 3.0,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "NPV",
+  "formula": "=NPV(Data!G1,Data!E2:E5)",
+  "expected": 1190.4773039399167,
+  "ironcalc": 1190.4773039399167,
+  "ironcalc_ok": true,
+  "formulas": 1190.4773039399167,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "IRR",
+  "formula": "=IRR(Data!E1:E5)",
+  "expected": 0.15322137877181508,
+  "ironcalc": 0.15322137877181527,
+  "ironcalc_ok": true,
+  "formulas": 0.15322137877181508,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "PMT",
+  "formula": "=PMT(0.05/12,360,200000)",
+  "expected": -1073.6432460242797,
+  "ironcalc": -1073.6432460242795,
+  "ironcalc_ok": true,
+  "formulas": -1073.6432460242797,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "PV",
+  "formula": "=PV(0.05,10,-100)",
+  "expected": 772.1734929184817,
+  "ironcalc": 772.1734929184817,
+  "ironcalc_ok": true,
+  "formulas": 772.1734929184817,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "FV",
+  "formula": "=FV(0.05,10,-100)",
+  "expected": 1257.789253554884,
+  "ironcalc": 1257.789253554884,
+  "ironcalc_ok": true,
+  "formulas": 1257.789253554884,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "NPER",
+  "formula": "=NPER(0.05,-100,1000)",
+  "expected": 14.206699082890463,
+  "ironcalc": 14.206699082890461,
+  "ironcalc_ok": true,
+  "formulas": 14.206699082890463,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "RATE",
+  "formula": "=RATE(10,-100,800)",
+  "expected": 0.042774978035111474,
+  "ironcalc": 0.04277497803511165,
+  "ironcalc_ok": true,
+  "formulas": 0.04277497803511113,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "XNPV",
+  "formula": "=XNPV(0.07,Data!E1:E2,Data!H1:H2)",
+  "expected": -719.6781352283058,
+  "ironcalc": -719.6781352283058,
+  "ironcalc_ok": true,
+  "formulas": -719.6781352283058,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "NORM.DIST",
+  "formula": "=NORM.DIST(1.2,0.5,2,TRUE)",
+  "expected": 0.6368306511756191,
+  "ironcalc": 0.636830651175619,
+  "ironcalc_ok": true,
+  "formulas": 0.636830651175619,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "NORMDIST pdf",
+  "formula": "=NORMDIST(1.2,0.5,2,FALSE)",
+  "expected": 0.18762017345846896,
+  "ironcalc": 0.18762017345846893,
+  "ironcalc_ok": true,
+  "formulas": 0.18762017345846896,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "NORM.S.DIST",
+  "formula": "=NORM.S.DIST(0.3,TRUE)",
+  "expected": 0.6179114221889526,
+  "ironcalc": 0.6179114221889526,
+  "ironcalc_ok": true,
+  "formulas": 0.6179114221889526,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "NORMSDIST",
+  "formula": "=NORMSDIST(-1.1)",
+  "expected": 0.13566606094638267,
+  "ironcalc": 0.135666060953062,
+  "ironcalc_ok": true,
+  "formulas": 0.13566606094638267,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "NORM.S.INV",
+  "formula": "=NORM.S.INV(0.975)",
+  "expected": 1.959963984540054,
+  "ironcalc": 1.9599639845400538,
+  "ironcalc_ok": true,
+  "formulas": 1.9599639845400536,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "NORMSINV",
+  "formula": "=NORMSINV(0.1)",
+  "expected": -1.2815515655446004,
+  "ironcalc": -1.2815515655446006,
+  "ironcalc_ok": true,
+  "formulas": -1.2815515655446008,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "NORM.INV",
+  "formula": "=NORM.INV(0.9,5,2)",
+  "expected": 7.563103131089201,
+  "ironcalc": 7.563103131089202,
+  "ironcalc_ok": true,
+  "formulas": 7.563103131089202,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "STDEV",
+  "formula": "=STDEV(Data!A1:A5)",
+  "expected": 15.811388300841896,
+  "ironcalc": 15.811388300841896,
+  "ironcalc_ok": true,
+  "formulas": 15.811388300841896,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "VAR.P",
+  "formula": "=VAR.P(Data!A1:A5)",
+  "expected": 200,
+  "ironcalc": 200.0,
+  "ironcalc_ok": true,
+  "formulas": 200.0,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "MEDIAN",
+  "formula": "=MEDIAN(Data!A1:A5)",
+  "expected": 30,
+  "ironcalc": 30.0,
+  "ironcalc_ok": true,
+  "formulas": 30.0,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "PERCENTILE",
+  "formula": "=PERCENTILE(Data!A1:A5,0.9)",
+  "expected": 46,
+  "ironcalc": 46.0,
+  "ironcalc_ok": true,
+  "formulas": 46.0,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "LARGE/SMALL",
+  "formula": "=LARGE(Data!A1:A5,2)+SMALL(Data!A1:A5,2)",
+  "expected": 60,
+  "ironcalc": 60.0,
+  "ironcalc_ok": true,
+  "formulas": 60.0,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "RANK",
+  "formula": "=RANK(40,Data!A1:A5)",
+  "expected": 2,
+  "ironcalc": 2.0,
+  "ironcalc_ok": true,
+  "formulas": 2.0,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "DATE/YEAR",
+  "formula": "=YEAR(DATE(2024,2,29))",
+  "expected": 2024,
+  "ironcalc": 2024.0,
+  "ironcalc_ok": true,
+  "formulas": 2024,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "EDATE",
+  "formula": "=EDATE(DATE(2024,1,31),1)-DATE(2024,1,1)",
+  "expected": 59,
+  "ironcalc": 59.0,
+  "ironcalc_ok": true,
+  "formulas": 59.0,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "EOMONTH",
+  "formula": "=DAY(EOMONTH(DATE(2023,2,10),0))",
+  "expected": 28,
+  "ironcalc": 28.0,
+  "ironcalc_ok": true,
+  "formulas": 28,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "YEARFRAC",
+  "formula": "=YEARFRAC(DATE(2020,1,1),DATE(2021,7,1),1)",
+  "expected": null,
+  "ironcalc": 1.4965800273597811,
+  "ironcalc_ok": null,
+  "formulas": 1.4965800273597811,
+  "formulas_ok": null,
+  "engines_agree": true
+ },
+ {
+  "label": "DATEDIF",
+  "formula": "=DATEDIF(DATE(2000,3,15),DATE(2024,3,14),\"y\")",
+  "expected": 23,
+  "ironcalc": 23.0,
+  "ironcalc_ok": true,
+  "formulas": 23,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "DAYS360",
+  "formula": "=DAYS360(DATE(2024,1,31),DATE(2024,3,31))",
+  "expected": 60,
+  "ironcalc": 60.0,
+  "ironcalc_ok": true,
+  "formulas": 60,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "date serial",
+  "formula": "=DATE(2024,1,1)",
+  "expected": 45292,
+  "ironcalc": 45292.0,
+  "ironcalc_ok": true,
+  "formulas": 45292,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "TEXT",
+  "formula": "=TEXT(1234.5,\"0.00\")",
+  "expected": "1234.50",
+  "ironcalc": "1234.50",
+  "ironcalc_ok": true,
+  "formulas": "1234.50",
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "CONCAT &",
+  "formula": "=LEFT(\"abcdef\",2)&MID(\"abcdef\",3,2)&RIGHT(\"abcdef\",1)",
+  "expected": "abcdf",
+  "ironcalc": "abcdf",
+  "ironcalc_ok": true,
+  "formulas": "abcdf",
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "LEN/TRIM/UPPER",
+  "formula": "=LEN(TRIM(UPPER(\" ab \")))",
+  "expected": 2,
+  "ironcalc": 2.0,
+  "ironcalc_ok": true,
+  "formulas": 2,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "VALUE",
+  "formula": "=VALUE(\"12.5\")*2",
+  "expected": 25,
+  "ironcalc": 25.0,
+  "ironcalc_ok": true,
+  "formulas": 25.0,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "ISNUMBER/ISBLANK",
+  "formula": "=AND(ISNUMBER(Data!A1),ISBLANK(Data!Z9))",
+  "expected": true,
+  "ironcalc": true,
+  "ironcalc_ok": true,
+  "formulas": true,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "NA/ISNA",
+  "formula": "=ISNA(MATCH(99,Data!A1:A5,0))",
+  "expected": true,
+  "ironcalc": true,
+  "ironcalc_ok": true,
+  "formulas": true,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "text+num coercion",
+  "formula": "=\"3\"+4",
+  "expected": 7,
+  "ironcalc": 7.0,
+  "ironcalc_ok": true,
+  "formulas": 7.0,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "bool arithmetic",
+  "formula": "=TRUE+TRUE",
+  "expected": 2,
+  "ironcalc": 2.0,
+  "ironcalc_ok": true,
+  "formulas": 2.0,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "blank as zero",
+  "formula": "=Data!Z9+5",
+  "expected": 5,
+  "ironcalc": 5.0,
+  "ironcalc_ok": true,
+  "formulas": 5.0,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "div0 error",
+  "formula": "=1/0",
+  "expected": "#DIV/0!",
+  "ironcalc": "#DIV/0!",
+  "ironcalc_ok": true,
+  "formulas": "#DIV/0!",
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "pct operator",
+  "formula": "=50%*200",
+  "expected": 100,
+  "ironcalc": 100.0,
+  "ironcalc_ok": true,
+  "formulas": 100.0,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "precedence -2^2",
+  "formula": "=-2^2",
+  "expected": 4,
+  "ironcalc": 4.0,
+  "ironcalc_ok": true,
+  "formulas": 4.0,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "string compare ci",
+  "formula": "=\"ABC\"=\"abc\"",
+  "expected": true,
+  "ironcalc": true,
+  "ironcalc_ok": true,
+  "formulas": true,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "SUM ignores text",
+  "formula": "=SUM(Data!A1:C5)",
+  "expected": 375,
+  "ironcalc": 375.0,
+  "ironcalc_ok": true,
+  "formulas": 375.0,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "SUBTOTAL",
+  "formula": "=SUBTOTAL(9,Data!A1:A5)",
+  "expected": 150,
+  "ironcalc": 150.0,
+  "ironcalc_ok": true,
+  "formulas": "#NAME?",
+  "formulas_ok": false,
+  "engines_agree": false
+ },
+ {
+  "label": "AGGREGATE",
+  "formula": "=AGGREGATE(9,6,Data!A1:A5)",
+  "expected": 150,
+  "ironcalc": "#NAME?",
+  "ironcalc_ok": false,
+  "formulas": "#NAME?",
+  "formulas_ok": false,
+  "engines_agree": true
+ },
+ {
+  "label": "MMULT via SUMPRODUCT",
+  "formula": "=SUMPRODUCT(MMULT(Data!A1:B2,Data!A1:B2))",
+  "expected": 3000,
+  "ironcalc": 3000.0,
+  "ironcalc_ok": true,
+  "formulas": 3000.0,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "TRANSPOSE in SUMPRODUCT",
+  "formula": "=SUMPRODUCT(TRANSPOSE(Data!A1:A5))",
+  "expected": 150,
+  "ironcalc": 150.0,
+  "ironcalc_ok": true,
+  "formulas": 150.0,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "RAND range",
+  "formula": "=AND(RAND()>=0,RAND()<1)",
+  "expected": true,
+  "ironcalc": true,
+  "ironcalc_ok": true,
+  "formulas": true,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "TODAY is number",
+  "formula": "=ISNUMBER(TODAY())",
+  "expected": true,
+  "ironcalc": true,
+  "ironcalc_ok": true,
+  "formulas": true,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "unknown UDF",
+  "formula": "=MyUdf(3)",
+  "expected": "#NAME?",
+  "ironcalc": "#NAME?",
+  "ironcalc_ok": true,
+  "formulas": "#NAME?",
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "ROUND 2.675,2",
+  "formula": "=ROUND(2.675,2)",
+  "expected": 2.68,
+  "ironcalc": 2.68,
+  "ironcalc_ok": true,
+  "formulas": 2.68,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "ROUND 1.005,2",
+  "formula": "=ROUND(1.005,2)",
+  "expected": 1.01,
+  "ironcalc": 1.01,
+  "ironcalc_ok": true,
+  "formulas": 1.0,
+  "formulas_ok": false,
+  "engines_agree": false
+ },
+ {
+  "label": "ROUND 0.285,2",
+  "formula": "=ROUND(0.285,2)",
+  "expected": 0.29,
+  "ironcalc": 0.29,
+  "ironcalc_ok": true,
+  "formulas": 0.28,
+  "formulas_ok": false,
+  "engines_agree": false
+ },
+ {
+  "label": "ROUND 1.45,1",
+  "formula": "=ROUND(1.45,1)",
+  "expected": 1.5,
+  "ironcalc": 1.5,
+  "ironcalc_ok": true,
+  "formulas": 1.5,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "ROUND 8.345,2",
+  "formula": "=ROUND(8.345,2)",
+  "expected": 8.35,
+  "ironcalc": 8.35,
+  "ironcalc_ok": true,
+  "formulas": 8.35,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "ROUND -2.675,2",
+  "formula": "=ROUND(-2.675,2)",
+  "expected": -2.68,
+  "ironcalc": -2.68,
+  "ironcalc_ok": true,
+  "formulas": -2.68,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "ROUND 2.5,0",
+  "formula": "=ROUND(2.5,0)",
+  "expected": 3,
+  "ironcalc": 3.0,
+  "ironcalc_ok": true,
+  "formulas": 3.0,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "ROUND -0.5,0",
+  "formula": "=ROUND(-0.5,0)",
+  "expected": -1,
+  "ironcalc": -1.0,
+  "ironcalc_ok": true,
+  "formulas": -1.0,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "ROUND 1234.5,-1",
+  "formula": "=ROUND(1235,-1)",
+  "expected": 1240,
+  "ironcalc": 1240.0,
+  "ironcalc_ok": true,
+  "formulas": 1240.0,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "ROUND cell 2.675",
+  "formula": "=ROUND(Data!G2,2)",
+  "expected": 2.68,
+  "ironcalc": 2.68,
+  "ironcalc_ok": true,
+  "formulas": 2.68,
+  "formulas_ok": true,
+  "engines_agree": true
+ },
+ {
+  "label": "ROUND cell 1.005",
+  "formula": "=ROUND(Data!G3,2)",
+  "expected": 1.01,
+  "ironcalc": 1.01,
+  "ironcalc_ok": true,
+  "formulas": 1.0,
+  "formulas_ok": false,
+  "engines_agree": false
+ },
+ {
+  "label": "ROUND (0.1+0.2)*5,1 [computed]",
+  "formula": "=ROUND((Data!G4+Data!G5)*0.5,2)",
+  "expected": null,
+  "ironcalc": 0.15,
+  "ironcalc_ok": null,
+  "formulas": 0.15,
+  "formulas_ok": null,
+  "engines_agree": true
+ },
+ {
+  "label": "ROUND 1.15*3,2 [computed]",
+  "formula": "=ROUND(1.15*3,2)",
+  "expected": null,
+  "ironcalc": 3.45,
+  "ironcalc_ok": null,
+  "formulas": 3.45,
+  "formulas_ok": null,
+  "engines_agree": true
+ },
+ {
+  "label": "ROUND 0.615*100,0 [computed]",
+  "formula": "=ROUND(0.615*100,0)",
+  "expected": null,
+  "ironcalc": 62.0,
+  "ironcalc_ok": null,
+  "formulas": 62.0,
+  "formulas_ok": null,
+  "engines_agree": true
+ },
+ {
+  "label": "ROUND 4.35*100,0 [computed]",
+  "formula": "=ROUND(4.35*100,0)",
+  "expected": null,
+  "ironcalc": 435.0,
+  "ironcalc_ok": null,
+  "formulas": 435.0,
+  "formulas_ok": null,
+  "engines_agree": true
+ },
+ {
+  "label": "ROUND 1.1*1.1*100,0... [computed]",
+  "formula": "=ROUND(1.255*100,0)",
+  "expected": null,
+  "ironcalc": 126.0,
+  "ironcalc_ok": null,
+  "formulas": 125.0,
+  "formulas_ok": null,
+  "engines_agree": false
+ },
+ {
+  "label": "0.1+0.2=0.3",
+  "formula": "=(0.1+0.2)=0.3",
+  "expected": null,
+  "ironcalc": true,
+  "ironcalc_ok": null,
+  "formulas": false,
+  "formulas_ok": null,
+  "engines_agree": false
+ },
+ {
+  "label": "1-0.9-0.1",
+  "formula": "=1-0.9-0.1",
+  "expected": null,
+  "ironcalc": -2.7755575615628914e-17,
+  "ironcalc_ok": null,
+  "formulas": -2.7755575615628914e-17,
+  "formulas_ok": null,
+  "engines_agree": true
+ }
+]
