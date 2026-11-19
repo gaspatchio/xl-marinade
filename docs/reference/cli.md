@@ -145,7 +145,7 @@ clearing those names from `--out`.
 | 0 | Success. |
 | 1 | Error (bad input, unknown sheet, IR from another workbook). |
 | 5 | `xl-marinade[calc]` is not installed. |
-| 6 | The workbook is refused outright (1904 dates, precision as displayed). |
+| 6 | The workbook is refused outright (1904 dates, precision as displayed, Strict Open XML). |
 
 **Example**
 

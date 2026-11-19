@@ -23,7 +23,7 @@
 - `ironcalc` missing: `CalcUnavailable`, exit code 5, message names `pip install 'xl-marinade[calc]'`.
 - CSV: UTF-8, `\n` line endings, read with `utf-8-sig`. Floats written with `repr()`.
 - Python standards from `AGENTS.md`: full type hints, `@dataclass(slots=True)`, no `print` outside CLI, `loguru` for logging, `pathlib`, typed errors from `errors.py`, early returns.
-- Tests use synthetic workbooks only. Never a teaching or client workbook.
+- Tests use synthetic workbooks only.
 - Commits: signed, conventional, no AI signature or `Co-Authored-By` trailer.
 
 ## Review Focus

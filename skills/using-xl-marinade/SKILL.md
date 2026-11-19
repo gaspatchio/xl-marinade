@@ -210,19 +210,26 @@ marinade values book.xlsx --variables vars.json [--map map.json] -o stored/
   `trust_report.json`, `run.json`. Known outputs are cleared at the start of a run.
 - **Read `trust_report.json` first** (`share` reproduced, `failures`,
   `refused_patterns`, `settings`), then filter on `status`:
-  `refused` (depends on a failing/refused root cell — do not use),
-  `uncertain` (rounding flip or near-equal comparison), `unverified_path` (a
-  branch or lookup row the trust run never took), `ok`. Only `ok` can be used as
-  is; the `reasons` column names the root cell. `values` rows are `stored`.
+  `refused` (depends on a failing/refused root cell, or the engine returned an
+  error code Excel does not have — do not use), `uncertain` (rounding flip or
+  near-but-not-equal comparison; an unplaced rounding/comparison probe),
+  `unverified_path` (a branch or lookup row the trust run never took; an unplaced
+  branch/lookup probe), `ok`. Only `ok` can be used as is; the `reasons` column
+  names the root cell. `values` rows are `stored`.
+- Only reproduced cells vouch for their formula family's branches; branches inside
+  an arm not evaluated count for nothing. Probes go upstream of the requested
+  outputs only, so fewer outputs can mean a more conservative status.
 - **Refused even when they reproduce:** approximate lookups on unsorted, mixed,
   whole-column or non-plain-text keys (and `XLOOKUP`/`XMATCH` binary search);
   implicit intersection on a multi-cell name or on a range outside a function
   argument; names holding a formula or constant; `RAND`/`RANDBETWEEN`/`RANDARRAY`;
   `TODAY`/`NOW` without `--as-of`; circular refs; data tables; unparseable
   formulas (an error literal such as `#N/A` typed into a formula is a known
-  cause); external references that cannot be held (ranges, no cached value).
+  cause); external references that cannot be held (ranges, no cached value,
+  names pointing into another workbook); approximate lookups on input-dependent
+  keys. Per policy: `lookup value type differs from keys` (text against numbers).
 - **Exit codes:** 0 ok, 1 error, 5 `[calc]` missing, 6 workbook refused outright
-  (1904 dates, precision as displayed).
+  (1904 dates, precision as displayed, Strict Open XML).
 - A pass on the stored inputs proves only the paths those inputs take; never
   call a value verified because the share is 100%.
 

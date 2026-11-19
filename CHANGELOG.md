@@ -16,9 +16,13 @@ schema is a versioned public contract.
   writes the stored values in the same variable/period row shape and needs no extra.
   Formulas that match Excel only by luck are refused (approximate lookups on unsorted,
   mixed, whole-column or non-plain-text keys, implicit intersection, names holding a
-  formula or constant, `RAND*`, unheld external references, and others). Exit code 5 means the extra
+  formula or constant, `RAND*`, unheld external references and names pointing into
+  another workbook, approximate lookups on input-dependent keys, and others); an
+  engine-only error code (`#N/IMPL!` and the like) or an approximate lookup matching a
+  key of another type refuses that policy's outputs. Only cells that reproduced vouch
+  for their formula family's branches and lookup edges. Exit code 5 means the extra
   is missing, 6 that the workbook is refused outright (1904 dates, precision as
-  displayed). Experimental: outside the SemVer contract until it settles. See
+  displayed, Strict Open XML). Experimental: outside the SemVer contract until it settles. See
   `docs/guide/calc.md`; synthetic reproductions of the IronCalc 0.9.1 gaps are in
   `ref/calc/upstream/`.
 

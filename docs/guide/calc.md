@@ -30,7 +30,7 @@ pip install 'xl-marinade[calc]'
 | Option | File | What it holds |
 |---|---|---|
 | `WORKBOOK` | `.xlsx` / `.xlsm` | The model, saved by Excel so it carries stored values. |
-| `--policies` | `policies.csv` | One row per input set. An id column plus one column per mapped field. Ids stay text; a blank value or a duplicate id is an error. |
+| `--policies` | `policies.csv` | One row per input set. An id column plus one column per mapped field. UTF-8 (save from Excel as "CSV UTF-8"). Ids stay text; a blank value, a duplicate id or a duplicate column name is an error. |
 | `--map` | `map.json` | Which cell or defined name each field sets. |
 | `--outputs` | repeatable | Output cells, ranges or defined names (`'Results!B5:B64'`). Ranges expand to cells. |
 | `--variables` | `vars.json` | Optional. Named output variables for `rows.csv`. |
@@ -92,8 +92,8 @@ exercised paths.
 
 ## How a run works
 
-1. Read the workbook's calculation settings. 1904 dates or precision as displayed refuse
-   the whole workbook (exit code 6).
+1. Read the workbook's calculation settings. 1904 dates, precision as displayed or a
+   Strict Open XML file refuse the whole workbook (exit code 6).
 2. Extract the formula graph into a temporary database, or reuse `--ir` if it matches the
    workbook.
 3. Scan the formulas for [refused patterns](#refused-patterns).
@@ -102,7 +102,8 @@ exercised paths.
    `--tolerance` (default `1e-9`, relative or absolute), on the stored inputs and on every
    `--check-against` input set.
 5. Add probe cells on a hidden sheet that report which branch, lookup row, rounding
-   input and dynamic reference each input set reaches.
+   input and dynamic reference each input set reaches. Probes go only into cells upstream
+   of the requested outputs, and never into a cell that is already refused.
 6. For each policy: reset, set the inputs, recalculate, read outputs and probes.
 7. Walk the graph from each output back to its roots and assign a status.
 
@@ -138,8 +139,8 @@ serious.
 | Status | Meaning |
 |---|---|
 | `refused` | The output depends, through the graph, on a cell that failed the trust run or matches a refused pattern. The value is returned for inspection but must not be used. The reason names the root cell. |
-| `uncertain` | The value rests on something implementation-dependent: a rounding function whose input sits within about 1e-12 relative of the point where the result flips, or a comparison or sorted lookup whose two sides are that close. Probes that could not be placed also land here ("not checked"). |
-| `unverified_path` | The policy took a branch or lookup position the trust run never exercised, so those formulas were never checked against Excel. |
+| `uncertain` | The value rests on something implementation-dependent: a rounding function whose input sits within about 1e-12 relative of the point where the result flips, or a comparison or sorted lookup whose two sides are that close (but not equal). A rounding or comparison probe that could not be placed also lands here (`not_checked_value`). |
+| `unverified_path` | The policy took a branch or lookup position the trust run never exercised, so those formulas were never checked against Excel. A branch or lookup probe that could not be placed also lands here (`not_checked_path`). |
 | `ok` | None of the above. |
 | `stored` | `marinade values` only: the workbook's own stored value. |
 
@@ -148,13 +149,32 @@ Details worth knowing:
 - Exact whole-number inputs to `INT`, `TRUNC`, `ROUNDUP`, `ROUNDDOWN`, `CEILING` and
   `FLOOR` are not uncertain (nothing can flip). Exact halves into `ROUND` and `MROUND`
   are.
+- A comparison whose two sides are exactly equal is decided, not near: `IF(t=0, ...)`
+  with `t` exactly `0` stays `ok`. Only sides that differ by more than nothing and at
+  most about 1e-12 relative are `near_comparison`. The same holds for an approximate
+  lookup whose value equals its matched key.
 - Branches are `IF`, `IFS`, `SWITCH`, `CHOOSE`, `IFERROR` and `IFNA`. A branch counts as
   exercised if any cell in the same canonical formula family took it in the trust run.
   Lookups count per family too, but the table's first row, last row and "beyond the end"
   must each have been hit.
-- `OFFSET` and `INDIRECT` are followed to where they point for each input set; if the
-  probe cannot be placed (cap hit, or inside `LET`/`LAMBDA`/an array context), the
-  outputs behind it are never `ok`.
+- Only evidence that was checked counts. A cell that failed the trust run, or is a
+  refused pattern, exercises nothing for its family. A branch or lookup inside an arm
+  the formula did not evaluate (the `FALSE` arm of an `IF` that went `TRUE`) is not
+  exercised by the trust run and is not a path a policy took. A `--check-against` input
+  set exercises only the branches and lookups upstream of the outputs it was compared on.
+- Because probes are placed only upstream of the requested outputs, asking for fewer
+  outputs can make a status more conservative: a family member that is not upstream of
+  any requested output is not probed, so it cannot vouch for the branches it took.
+- A probe that cannot be placed (cap hit, or inside `LET`/`LAMBDA`/an array context)
+  never yields `ok`: a branch or lookup probe gives `unverified_path`, a rounding or
+  comparison probe `uncertain`, and a dynamic-reference probe `refused`.
+- `OFFSET` and `INDIRECT` are followed to where they point for each input set; if that
+  cannot be read, the outputs behind it are refused (`dynamic reference not checked`).
+- An error code Excel does not have (IronCalc's `#N/IMPL!`, `#ERROR!`, `#CIRC!` and the
+  like) in an output or in a probe is an `engine_error` for that policy, so the output is
+  `refused`, even when an `IFERROR` around it would have turned it into a plausible
+  value. Excel's own error codes (`#N/A`, `#DIV/0!`, `#VALUE!` and the rest) are values
+  like any other.
 - A passing trust run proves only the paths the stored inputs take. That is what
   `unverified_path` and `--check-against` are for.
 
@@ -186,7 +206,12 @@ the next. They are refused even when the trust run reproduces them. The `detail`
 | `circular reference` | Always (iterative calculation is noted in the report, not honoured). |
 | `data table` | What-If data tables are removed before loading and their cells refused. |
 | `unparseable formula` | The formula could not be parsed. Error literals typed into a formula, such as `#N/A`, are a known source of these. |
-| `external reference not held` | The formula reads an external reference the engine copy cannot hold: a range, or one with no cached value (IronCalc returns `#ERROR!` or `#REF!` for those). |
+| `external reference not held` | The formula reads an external reference the engine copy cannot hold: a range, one with no cached value (IronCalc returns `#ERROR!` or `#REF!` for those), or a defined name that points into another workbook. |
+| `approximate lookup on input-dependent keys` | An approximate lookup whose key cells change with a mapped input (an input cell, or a formula that depends on one). The keys may be sorted for the stored inputs and not for the next policy. |
+
+One more refusal is per policy, read from the probes: `lookup value type differs from
+keys`, when an approximate lookup matches a key of a different type than its lookup value
+(text against numbers). Excel finds nothing there (`#N/A`); IronCalc 0.9.1 returns a row.
 
 ## Fixed points
 
@@ -196,6 +221,7 @@ the next. They are refused even when the trust run reproduces them. The `detail`
 | External link that cannot be held | Refused, see above. |
 | 1904 date system | Whole workbook refused. |
 | Precision as displayed | Whole workbook refused. |
+| Strict Open XML (`.xlsx` saved as "Strict Open XML Spreadsheet") | Whole workbook refused (`strict OOXML`). |
 | Iterative calculation | Circular cells refused as usual; the report records the setting. |
 | Manual calculation mode | Recorded, not refused; stale stored values show as mismatches. |
 | `TODAY`, `NOW` | Refused unless `--as-of`. |
@@ -210,7 +236,7 @@ it, are listed in `ref/calc/upstream/` in the repository.
 | 0 | Success. |
 | 1 | Error: bad input file, unknown sheet, mapping onto a formula, IR from another workbook. |
 | 5 | The `[calc]` extra is not installed. |
-| 6 | The workbook is refused outright (1904 dates, precision as displayed). `trust_report.json` and `run.json` are still written. |
+| 6 | The workbook is refused outright (1904 dates, precision as displayed, Strict Open XML). `trust_report.json` and `run.json` are still written. |
 
 ## Example
 
