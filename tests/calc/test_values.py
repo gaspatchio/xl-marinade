@@ -105,12 +105,31 @@ def test_values_needs_no_ironcalc(blocked_ironcalc: None, make_book: Book, tmp_p
     assert values(ValuesRequest(p, vars_, tmp_path / "o")).exists()
 
 
-def test_values_with_map_keeps_stored_id_when_id_unmapped(make_book: Book, tmp_path: Path) -> None:
-    p = make_book("i", {"In": {"A1": "P7"}, "S": {"A1": 5}})
+def _id_run(make_book: Book, tmp_path: Path, cells: dict[str, object], target: str) -> Path:
+    p = make_book("i", {"In": cells, "S": {"A1": 5}})
     vars_ = write_json(tmp_path, {"v": {"cell": "S!A1"}})
     imap = tmp_path / "map.json"
-    imap.write_text(json.dumps({"id_field": "pid", "fields": {"age": "In!A1"}}))
-    out = values(ValuesRequest(p, vars_, tmp_path / "o", input_map=imap))
+    imap.write_text(json.dumps({"id_field": "pid", "fields": {"pid": target}}))
+    return values(ValuesRequest(p, vars_, tmp_path / "o", input_map=imap))
+
+
+def test_values_stored_id_text_cell(make_book: Book, tmp_path: Path) -> None:
+    out = _id_run(make_book, tmp_path, {"A1": "P7"}, "In!A1")
+    assert out.read_text().splitlines()[1] == "P7,v,,5.0,stored,"
+
+
+def test_values_stored_id_numeric_cell(make_book: Book, tmp_path: Path) -> None:
+    out = _id_run(make_book, tmp_path, {"A1": 7}, "In!A1")
+    assert out.read_text().splitlines()[1] == "7,v,,5.0,stored,"
+
+
+def test_values_stored_id_multi_cell_rejected(make_book: Book, tmp_path: Path) -> None:
+    with pytest.raises(CalcInputError, match="single cell"):
+        _id_run(make_book, tmp_path, {"A1": "a", "A2": "b"}, "In!A1:A2")
+
+
+def test_values_stored_id_empty_cell_falls_back(make_book: Book, tmp_path: Path) -> None:
+    out = _id_run(make_book, tmp_path, {"B1": 1}, "In!A1")
     assert out.read_text().splitlines()[1] == "stored,v,,5.0,stored,"
 
 

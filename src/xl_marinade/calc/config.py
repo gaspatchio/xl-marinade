@@ -62,8 +62,6 @@ def load_input_map(path: Path) -> InputMap:
     if id_field is not None:
         if not isinstance(id_field, str) or not id_field:
             raise CalcInputError("id_field must be a non-empty string")
-        if id_field in fields:
-            raise CalcInputError(f"id_field {id_field!r} must not also be in fields")
     return InputMap(fields=fields, id_field=id_field)
 
 

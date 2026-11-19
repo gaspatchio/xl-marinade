@@ -66,10 +66,11 @@ def test_quoted_sheet_targets_survive(tmp_path: Path) -> None:
     assert load_input_map(m).fields["age"] == "'Life Table '!B3"
 
 
-def test_input_map_id_field_in_fields_is_error(tmp_path: Path) -> None:
+def test_input_map_id_field_in_fields_is_accepted(tmp_path: Path) -> None:
     m = _write(tmp_path / "m.json", {"id_field": "a", "fields": {"a": "S!A1"}})
-    with pytest.raises(CalcInputError, match="id_field"):
-        load_input_map(m)
+    loaded = load_input_map(m)
+    assert loaded.id_field == "a"
+    assert loaded.fields == {"a": "S!A1"}
 
 
 def test_input_map_bad_shape(tmp_path: Path) -> None:

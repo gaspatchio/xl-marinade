@@ -56,7 +56,10 @@ def expand_variables(specs: list[VariableSpec], graph: WorkbookGraph) -> list[Va
 
 
 def period_0_cell(var: VariableCells) -> CellRef | None:
-    """The cell ``period_start`` steps before the first cell, or None if off the sheet."""
+    """The cell ``period_start`` steps before the first cell, or None if off the sheet.
+
+    A single-cell range is treated as a column (the step goes up the rows).
+    """
     if var.period_start is None or not var.cells:
         return None
     first = var.cells[0]
