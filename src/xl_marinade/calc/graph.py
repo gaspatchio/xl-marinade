@@ -25,6 +25,12 @@ _RANGE_RE = re.compile(
     r"(?::\$?(?P<c2>[A-Za-z]{1,3})\$?(?P<r2>[0-9]+))?$"
 )
 
+# Whole-column / whole-row references (``S!$A:$B``, ``S!1:3``): references, not formulas.
+_WHOLE_RE = re.compile(
+    r"^(?:(?:'(?:[^']|'')*'|[^'!]+)!)?"
+    r"(?:\$?[A-Za-z]{1,3}:\$?[A-Za-z]{1,3}|\$?[0-9]+:\$?[0-9]+)$"
+)
+
 # (sheet, r1, c1, r2, c2) rectangle
 _Rect = tuple[str, int, int, int, int]
 
@@ -88,6 +94,8 @@ class WorkbookGraph:
         self._ranges: dict[CellRef, list[_Rect]] = defaultdict(list)
         self._range_grid: dict[tuple[str, int], list[tuple[_Rect, CellRef]]] = defaultdict(list)
         self._names: dict[str, tuple[str, list[_Rect]]] = {}
+        self._formula_names: set[str] = set()
+        self._array_cells: set[CellRef] = set()
         self._validations: list[tuple[list[_Rect], list[str] | None, str | None, str]] = []
         self._sheets: set[str] = set()
 
@@ -114,16 +122,18 @@ class WorkbookGraph:
         per_sheet: dict[str, list[tuple[int, int]]] = defaultdict(list)
         query = (
             "SELECT c.cell_id, c.sheet_id, c.row, c.col, c.formula_a1, c.data_type, "
-            "f.formula_r1c1, b.json FROM cells c "
+            "f.formula_r1c1, b.json, c.is_array_formula FROM cells c "
             "LEFT JOIN formulas f ON f.formula_id = c.formula_id "
             "LEFT JOIN json_blobs b ON b.blob_id = c.value_blob_id"
         )
-        for cell_id, sheet_id, r, c, fa1, dtype, r1c1, blob in conn.execute(query):
+        for cell_id, sheet_id, r, c, fa1, dtype, r1c1, blob, is_array in conn.execute(query):
             ref = CellRef(sheet_names[sheet_id], r, c)
             by_id[cell_id] = ref
             per_sheet[ref.sheet].append((r, c))
             if fa1:
                 self._formula[ref] = str(fa1)
+                if is_array:
+                    self._array_cells.add(ref)
                 self._family[ref] = f"{ref.sheet}|{r1c1}"
             if blob is not None and dtype != "blank":
                 raw = json.loads(blob)
@@ -166,7 +176,12 @@ class WorkbookGraph:
         for name, scope, dests, _ext in conn.execute(
             "SELECT name, scope, destinations, is_external FROM defined_names ORDER BY 1, 2"
         ):
-            rects = [r for d in json.loads(dests or "[]") if (r := _parse_rect(str(d))) is not None]
+            raw = [str(d) for d in json.loads(dests or "[]")]
+            rects = [r for d in raw if (r := _parse_rect(d)) is not None]
+            # The IR keeps only reference destinations: a formula name has none, a
+            # constant name keeps its literal text. Either way it is not cells.
+            if not raw or any(_parse_rect(d) is None and not _WHOLE_RE.match(d) for d in raw):
+                self._formula_names.add(str(name))
             if name not in self._names or scope == "workbook":
                 self._names[name] = (str(scope), rects)
 
@@ -208,6 +223,14 @@ class WorkbookGraph:
         """True when the only definition of ``name`` is sheet-scoped."""
         entry = self._names.get(name)
         return entry is not None and entry[0] != "workbook"
+
+    def is_formula_name(self, name: str) -> bool:
+        """True when a definition of ``name`` holds a formula or constant, not cells."""
+        return name in self._formula_names
+
+    def is_array_formula(self, cell: CellRef) -> bool:
+        """True when the cell holds an array (CSE or dynamic-array) formula."""
+        return cell in self._array_cells
 
     def name_cells(self, name: str) -> list[CellRef]:
         """Cells present in the IR that a defined name points at (sorted)."""

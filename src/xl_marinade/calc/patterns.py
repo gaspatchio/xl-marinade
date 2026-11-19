@@ -35,6 +35,8 @@ UNSORTED = "approximate lookup on unsorted column"
 MIXED = "approximate lookup on mixed text and numbers"
 NON_RANGE = "approximate lookup on a non-range table"
 IMPLICIT = "implicit intersection on multi-cell name"
+IMPLICIT_RANGE = "implicit intersection on multi-cell range"
+NAME_FORMULA = "name holds a formula"
 CIRCULAR = "circular reference"
 DATA_TABLE = "data table"
 UNPARSEABLE = "unparseable formula"
@@ -63,6 +65,11 @@ _ERRORS = frozenset(
         "#UNKNOWN!",
     }
 )
+
+# Text keys made only of these characters sort the same in Python and in Excel's
+# collation (which ignores hyphens/apostrophes, puts ``_`` before digits and files
+# accented letters beside their base letter).
+_SAFE_TEXT = re.compile(r"^[a-z0-9 ]*$")
 
 _SHEET = r"(?:'(?:[^']|'')+'|[^'!:\s{}();,\"#\[\]]+)"
 _CELL = r"\$?[A-Za-z]{1,3}\$?[0-9]+"
@@ -216,13 +223,26 @@ class _Scan:
     lookups: dict[tuple[str, str, Axis, frozenset[Order]], str | None] = field(default_factory=dict)
 
 
+def _name_candidates(ref: str) -> list[str]:
+    """``ref`` itself and, for ``Sheet!name``, the bare name."""
+    return list(dict.fromkeys([ref, ref.rpartition("!")[2]]))
+
+
+def _multi_cell(ref: str, default_sheet: str) -> bool:
+    parsed = _ref_rect(ref, default_sheet)
+    if parsed is None:
+        return False
+    _sheet, r1, c1, r2, c2 = parsed[0]
+    return (r1, c1) != (r2, c2)
+
+
 def _named_cells(scan: _Scan, ref: str) -> tuple[list[CellRef], frozenset[CellRef]]:
     """Cells of a defined name written as ``name`` or ``Sheet!name``; empty if not a name."""
     hit = scan.names.get(ref)
     if hit is not None:
         return hit
     result: tuple[list[CellRef], frozenset[CellRef]] = ([], frozenset())
-    for candidate in dict.fromkeys([ref, ref.rpartition("!")[2]]):
+    for candidate in _name_candidates(ref):
         named = scan.graph.name_cells(candidate)
         if named:
             result = (named, frozenset(named))
@@ -337,6 +357,8 @@ def _key_problem(graph: WorkbookGraph, keys: list[CellRef], orders: set[Order]) 
     if len(kinds) > 1:
         return MIXED
     norm: list[float | str | bool] = [v.casefold() if isinstance(v, str) else v for v in values]
+    if any(isinstance(v, str) and not _SAFE_TEXT.match(v) for v in norm):
+        return UNSORTED
     if all(_ordered(norm, order) for order in orders):
         return None
     return UNSORTED
@@ -371,8 +393,15 @@ def _formula_reasons(scan: _Scan, cell: CellRef, text: str) -> set[str]:
         if isinstance(node, RefNode):
             if _refers_to_self(scan, cell, node.ref):
                 found.add(CIRCULAR)
-            if not direct and len(_named_cells(scan, node.ref)[0]) > 1:
+            if any(scan.graph.is_formula_name(n) for n in _name_candidates(node.ref)):
+                found.add(NAME_FORMULA)
+            if direct or scan.graph.is_array_formula(cell):
+                continue
+            named = _named_cells(scan, node.ref)[0]
+            if len(named) > 1:
                 found.add(IMPLICIT)
+            elif not named and _multi_cell(node.ref, cell.sheet):
+                found.add(IMPLICIT_RANGE)
             continue
         if not isinstance(node, FunctionNode):
             continue

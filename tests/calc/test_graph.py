@@ -158,3 +158,18 @@ def test_defined_name_edges(make_book: Book, ir_for: IrFor) -> None:
     assert {A1, A2, CellRef("S", 3, 1)} <= g.precedents(b2)
     assert g.downstream([A1])[b1] == A1
     assert b2 in g.downstream([A2])
+
+
+def test_formula_names_and_array_cells(make_book: Book, ir_for: IrFor) -> None:
+    from openpyxl.worksheet.formula import ArrayFormula
+
+    path = make_book(
+        "n",
+        {"S": {"A1": 1, "B1": F(ArrayFormula("B1", "=A1:A2*2"), 2), "C1": F("=A1", 1)}},
+        names={"f": "TODAY()", "k": "0.05", "r": "S!$A$1:$A$2", "c": "S!$A:$A"},
+    )
+    g = WorkbookGraph.from_ir(ir_for(path))
+    assert g.is_formula_name("f") and g.is_formula_name("k")
+    assert not g.is_formula_name("r") and not g.is_formula_name("c")
+    assert not g.is_formula_name("missing")
+    assert g.is_array_formula(B1) and not g.is_array_formula(C1)

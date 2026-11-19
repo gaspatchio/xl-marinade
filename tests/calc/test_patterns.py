@@ -6,6 +6,8 @@ from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 
+from openpyxl.worksheet.formula import ArrayFormula
+
 from tests.calc.conftest import F
 from xl_marinade.calc.graph import WorkbookGraph
 from xl_marinade.calc.models import CellRef, Reason, ReasonKind
@@ -18,6 +20,8 @@ UNSORTED = "approximate lookup on unsorted column"
 MIXED = "approximate lookup on mixed text and numbers"
 NON_RANGE = "approximate lookup on a non-range table"
 IMPLICIT = "implicit intersection on multi-cell name"
+IMPLICIT_RANGE = "implicit intersection on multi-cell range"
+NAME_FORMULA = "name holds a formula"
 
 
 def _c(a1: str) -> CellRef:
@@ -308,3 +312,81 @@ def test_binary_search_xlookup_and_whole_column_on_unsorted_keys(
 def test_self_reference_through_a_range_is_circular(make_book: Book, ir_for: IrFor) -> None:
     found = _scan(make_book, ir_for, {"A1": 1, "A2": 2, "A3": F("=SUM(A1:A3)", 3)})
     assert _details(found, "A3") == ["circular reference"]
+
+
+def test_text_keys_outside_plain_collation_are_unsorted(make_book: Book, ir_for: IrFor) -> None:
+    # Python orders these, Excel's collation does not (``_`` sorts before digits,
+    # accented letters sit beside their base letter).
+    found = _scan(
+        make_book,
+        ir_for,
+        {
+            "A1": "1",
+            "A2": "_",
+            "C1": "f",
+            "C2": "é",
+            "E1": "apple",
+            "E2": "Banana",
+            "E3": "cherry 2",
+            "D1": F('=MATCH("x",A1:A2)', 2),
+            "D2": F('=MATCH("x",C1:C2)', 2),
+            "D3": F('=MATCH("x",E1:E3)', 3),
+        },
+    )
+    assert _details(found, "D1") == [UNSORTED]
+    assert _details(found, "D2") == [UNSORTED]
+    assert _c("D3") not in found
+
+
+def test_name_holding_a_formula_or_constant(make_book: Book, ir_for: IrFor) -> None:
+    found = _scan(
+        make_book,
+        ir_for,
+        {
+            "A1": 1,
+            "A2": 2,
+            "B1": 10,
+            "B2": 20,
+            "D1": F("=q*2", 20),
+            "D2": F("=SUM(rate)", 0.05),
+            "D3": F("=asof+1", 46001),
+            "D4": F("=SUM(col)", 3),
+            "D5": F("=SUM(r2)", 3),
+        },
+        names={
+            "q": "VLOOKUP(S!$A$1,S!$A$1:$B$2,2,TRUE)",
+            "asof": "TODAY()",
+            "rate": "0.05",
+            "col": "S!$A:$A",
+            "r2": "S!$A$1:$A$2",
+        },
+        as_of=date(2026, 1, 1),
+    )
+    assert _details(found, "D1") == [NAME_FORMULA]
+    assert _details(found, "D2") == [NAME_FORMULA]
+    assert _details(found, "D3") == [NAME_FORMULA]
+    assert _c("D4") not in found and _c("D5") not in found
+
+
+def test_implicit_intersection_on_multi_cell_range(make_book: Book, ir_for: IrFor) -> None:
+    found = _scan(
+        make_book,
+        ir_for,
+        {
+            "A1": 1,
+            "A2": 2,
+            "A3": 3,
+            "D1": F("=A1:A3*2", 2),
+            "D2": F("=A1:A3", 1),
+            "D3": F("=SUM(A1:A3*2)", 2),
+            "D4": F("=SUM(A1:A3)", 6),
+            "D5": F("=A1*2", 2),
+            "D6": F(ArrayFormula("D6", "=A1:A3*2"), 2),
+            "D7": F("=$A$1:$A$1*2", 2),
+        },
+    )
+    assert _details(found, "D1") == [IMPLICIT_RANGE]
+    assert _details(found, "D2") == [IMPLICIT_RANGE]
+    assert _details(found, "D3") == [IMPLICIT_RANGE]
+    for a1 in ("D4", "D5", "D6", "D7"):
+        assert _c(a1) not in found, a1
