@@ -156,6 +156,39 @@ def diff(
         typer.echo(payload)
 
 
+@app.command()
+def values(
+    workbook: Path = typer.Argument(
+        ..., exists=True, dir_okay=False, readable=True, help="Excel workbook (.xlsx/.xlsm)."
+    ),
+    variables: Path = typer.Option(
+        ..., "--variables", exists=True, dir_okay=False, readable=True, help="vars.json file."
+    ),
+    input_map: Path | None = typer.Option(
+        None,
+        "--map",
+        exists=True,
+        dir_okay=False,
+        readable=True,
+        help="map.json (policy id field).",
+    ),
+    ir: Path | None = typer.Option(
+        None, "--ir", exists=True, dir_okay=False, readable=True, help="Reuse this IR database."
+    ),
+    out: Path = typer.Option(..., "--out", "-o", help="Output directory (rows.csv + run.json)."),
+) -> None:
+    """Experimental: write the workbook's stored values as variable/period rows."""
+    from xl_marinade.calc import ValuesRequest
+    from xl_marinade.calc import values as _values
+
+    try:
+        rows_path = _values(ValuesRequest(workbook, variables, out, input_map, ir))
+    except MarinadeError as exc:
+        _err.print(f"[red]error:[/] {escape(str(exc))}")
+        raise typer.Exit(code=1)
+    _err.print(f"[green]wrote[/] {rows_path}")
+
+
 def main() -> None:
     """Console-script entry point (marinade = xl_marinade.cli.main:main)."""
     app()

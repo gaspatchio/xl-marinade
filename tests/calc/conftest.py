@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import builtins
 import re
 import shutil
+import sys
 import zipfile
 from collections.abc import Callable
 from pathlib import Path
@@ -126,3 +128,18 @@ def ir_for(tmp_path: Path) -> Callable[[Path], Path]:
         return xl_marinade.extract(path, out_dir / "ir.db")
 
     return _ir
+
+
+@pytest.fixture
+def blocked_ironcalc(monkeypatch):
+    real_import = builtins.__import__
+
+    def guard(name, *args, **kwargs):
+        if name == "ironcalc" or name.startswith("ironcalc."):
+            raise ModuleNotFoundError(f"blocked in test: {name}")
+        return real_import(name, *args, **kwargs)
+
+    for mod in list(sys.modules):
+        if mod == "ironcalc" or mod.startswith("ironcalc."):
+            monkeypatch.delitem(sys.modules, mod, raising=False)
+    monkeypatch.setattr(builtins, "__import__", guard)

@@ -1,27 +1,11 @@
 """Tier boundary: calc imports without ironcalc; core and docs never import calc."""
 
-import builtins
 import subprocess
 import sys
 
 import pytest
 
 from xl_marinade.calc.models import CellRef
-
-
-@pytest.fixture
-def blocked_ironcalc(monkeypatch):
-    real_import = builtins.__import__
-
-    def guard(name, *args, **kwargs):
-        if name == "ironcalc" or name.startswith("ironcalc."):
-            raise ModuleNotFoundError(f"blocked in test: {name}")
-        return real_import(name, *args, **kwargs)
-
-    for mod in list(sys.modules):
-        if mod == "ironcalc" or mod.startswith("ironcalc."):
-            monkeypatch.delitem(sys.modules, mod, raising=False)
-    monkeypatch.setattr(builtins, "__import__", guard)
 
 
 def test_calc_imports_without_ironcalc():

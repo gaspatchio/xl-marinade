@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sqlite3
@@ -323,3 +324,28 @@ class WorkbookGraph:
                 _text(self._stored[c]) for c in self._cells_in_rect(source) if c in self._stored
             ]
         return None
+
+
+def open_graph(workbook: Path, ir: Path | None, tmp: Path) -> WorkbookGraph:
+    """Load the graph for ``workbook``, reusing ``ir`` when given.
+
+    With ``ir`` the database must have been extracted from this exact workbook
+    (SHA-256 match). Without it, the workbook is extracted into ``tmp``; the caller
+    owns ``tmp`` and deletes it. The extraction database is never written otherwise.
+
+    Raises:
+        CalcInputError: if ``ir`` was extracted from a different workbook.
+    """
+    if ir is not None:
+        graph = WorkbookGraph.from_ir(ir)
+        try:
+            digest = hashlib.sha256(workbook.read_bytes()).hexdigest()
+        except OSError as exc:
+            raise CalcInputError(f"cannot read {workbook}: {exc}") from exc
+        if digest != graph.workbook_sha256:
+            raise CalcInputError(f"IR {ir} does not match workbook {workbook} (sha256 differs)")
+        return graph
+    from xl_marinade.core.api import extract
+
+    tmp.mkdir(parents=True, exist_ok=True)
+    return WorkbookGraph.from_ir(extract(workbook, tmp / "ir.db"))
