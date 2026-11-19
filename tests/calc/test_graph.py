@@ -123,3 +123,38 @@ def test_allowed_values_from_range_source(make_book: Book, ir_for: IrFor) -> Non
     wb.save(path)
     g = WorkbookGraph.from_ir(ir_for(path))
     assert g.allowed_values(CellRef("S", 1, 2)) == ["x", "y", "3"]
+
+
+def test_range_target_includes_empty_cells(make_book: Book, ir_for: IrFor) -> None:
+    path = make_book(
+        "gap",
+        {"S": {"C11": 1, "C13": 3}},
+        names={"col": "S!$C$11:$C$13"},
+    )
+    g = WorkbookGraph.from_ir(ir_for(path))
+    want = [CellRef("S", 11, 3), CellRef("S", 12, 3), CellRef("S", 13, 3)]
+    assert g.resolve_target("S!C11:C13") == want
+    assert g.resolve_target("col") == want
+    assert g.name_cells("col") == want
+
+
+def test_defined_name_edges(make_book: Book, ir_for: IrFor) -> None:
+    path = make_book(
+        "nm",
+        {
+            "S": {
+                "A1": 2,
+                "A2": 3,
+                "A3": 4,
+                "B1": F("=rate*2", 4),
+                "B2": F("=SUM(xs)", 9),
+            }
+        },
+        names={"rate": "S!$A$1", "xs": "S!$A$1:$A$3"},
+    )
+    g = WorkbookGraph.from_ir(ir_for(path))
+    b1, b2 = CellRef("S", 1, 2), CellRef("S", 2, 2)
+    assert A1 in g.precedents(b1)
+    assert {A1, A2, CellRef("S", 3, 1)} <= g.precedents(b2)
+    assert g.downstream([A1])[b1] == A1
+    assert b2 in g.downstream([A2])

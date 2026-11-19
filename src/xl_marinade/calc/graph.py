@@ -213,7 +213,7 @@ class WorkbookGraph:
         entry = self._names.get(name)
         if entry is None:
             return []
-        return self._cells_in(entry[1])
+        return self._full_rects(entry[1])
 
     # -- graph traversal -------------------------------------------------
 
@@ -229,8 +229,19 @@ class WorkbookGraph:
                 out.append(CellRef(sheet, r, c))
         return out
 
-    def _cells_in(self, rects: Iterable[_Rect]) -> list[CellRef]:
-        return sorted({c for rect in rects for c in self._cells_in_rect(rect)})
+    @staticmethod
+    def _full_rects(rects: Iterable[_Rect]) -> list[CellRef]:
+        """Every position in each rectangle, row-major, empty cells included."""
+        seen: set[CellRef] = set()
+        out: list[CellRef] = []
+        for sheet, r1, c1, r2, c2 in rects:
+            for r in range(r1, r2 + 1):
+                for c in range(c1, c2 + 1):
+                    ref = CellRef(sheet, r, c)
+                    if ref not in seen:
+                        seen.add(ref)
+                        out.append(ref)
+        return sorted(out)
 
     def precedents(self, cell: CellRef) -> frozenset[CellRef]:
         """Direct cell edges plus every IR cell inside each range the formula reads."""
@@ -285,7 +296,7 @@ class WorkbookGraph:
         text = target.strip()
         entry = self._names.get(text)
         if entry is not None and entry[0] == "workbook":
-            return self._cells_in(entry[1])
+            return self._full_rects(entry[1])
         rect = _parse_rect(text)
         if rect is None:
             raise CalcInputError(f"unknown target {target!r}: not a cell, range or defined name")
@@ -293,7 +304,7 @@ class WorkbookGraph:
             raise CalcInputError(f"unknown sheet {rect[0]!r} in target {target!r}")
         if rect[1:3] == rect[3:5]:
             return [CellRef(rect[0], rect[1], rect[2])]
-        return self._cells_in_rect(rect)
+        return self._full_rects([rect])
 
     def allowed_values(self, cell: CellRef) -> list[str] | None:
         """List-validation values for the cell, or None when it has no list validation."""
