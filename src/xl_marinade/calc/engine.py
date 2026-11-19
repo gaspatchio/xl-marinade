@@ -128,6 +128,11 @@ class Engine:
         """Recalculate the whole workbook."""
         self._model.evaluate()
 
+    def is_error(self, cell: CellRef) -> bool:
+        """True when the cell holds an error value (not text that starts with ``#``)."""
+        kind = self._model.get_cell_type(self._sheet(cell), cell.row, cell.col)
+        return str(getattr(kind, "name", kind)).endswith("ErrorValue")
+
     def value(self, cell: CellRef) -> EngineValue:
         """The computed value of a cell; errors come back as ``#CODE`` text."""
         got = self._model.get_cell_value(self._sheet(cell), cell.row, cell.col)

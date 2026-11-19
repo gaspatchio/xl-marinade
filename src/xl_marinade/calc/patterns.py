@@ -49,6 +49,8 @@ NAME_FORMULA = "name holds a formula"
 CIRCULAR = "circular reference"
 DATA_TABLE = "data table"
 UNPARSEABLE = "unparseable formula"
+NOT_HELD = "external reference not held"
+INPUT_KEYS = "approximate lookup on input-dependent keys"
 
 _MAX_ROW = 1_048_576
 _MAX_COL = 16_384
@@ -327,7 +329,12 @@ def _formula_reasons(scan: _Scan, cell: CellRef, text: str) -> set[str]:
         if isinstance(node, RefNode):
             if _refers_to_self(scan, cell, node.ref):
                 found.add(CIRCULAR)
-            if any(scan.graph.is_formula_name(n) for n in _name_candidates(node.ref)):
+            candidates = _name_candidates(node.ref)
+            if any(scan.graph.is_external_name(n) for n in candidates):
+                # A name over another workbook's cells: the engine copy holds no cached
+                # value for it, so off the stored inputs it can only be wrong.
+                found.add(NOT_HELD)
+            elif any(scan.graph.is_formula_name(n) for n in candidates):
                 found.add(NAME_FORMULA)
             if exempt or scan.graph.is_array_formula(cell):
                 continue
@@ -387,6 +394,38 @@ def _cycle_cells(graph: WorkbookGraph) -> set[CellRef]:
         logger.warning("cycle scan too deep; refusing all {} cells left after trimming", len(ids))
         return alive
     return {ids[b] for cyc in cycles for b in cyc.bindings}
+
+
+def input_dependent_lookups(
+    graph: WorkbookGraph, inputs: set[CellRef]
+) -> dict[CellRef, list[Reason]]:
+    """Approximate lookups whose key cells change with the mapped inputs.
+
+    The scan checks key order on the stored values only; keys computed from an input
+    can be sorted for one policy and not the next, so such a lookup is refused.
+    Returns ``refused_pattern`` reasons like :func:`scan_patterns`.
+    """
+    moving = set(graph.downstream(inputs))
+    scan = _Scan(graph, None)
+    found: dict[CellRef, list[Reason]] = {}
+    # A lookup over moving keys reads them, so it is downstream of the inputs too.
+    for cell in sorted(c for c in moving if graph.formula(c) is not None):
+        root = parse_formula(graph.formula(cell) or "")
+        if root is None:
+            continue
+        for node, _exempt in _walk(root):
+            if not isinstance(node, FunctionNode):
+                continue
+            spec = _lookup_spec(function_name(node.name), node.args)
+            if spec is None or not isinstance(spec[0], RefNode):
+                continue
+            resolved = _table_cells(scan, cell, spec[0].ref)
+            if resolved is None:
+                continue
+            if any(k in moving for k in _key_cells(resolved[0], resolved[1], spec[1])):
+                found[cell] = [Reason(ReasonKind.refused_pattern, cell, INPUT_KEYS)]
+                break
+    return found
 
 
 def scan_patterns(

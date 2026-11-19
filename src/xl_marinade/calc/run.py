@@ -50,12 +50,13 @@ from xl_marinade.calc.output import (
     write_run,
     write_trust_report,
 )
-from xl_marinade.calc.patterns import scan_patterns
+from xl_marinade.calc.patterns import NOT_HELD, input_dependent_lookups, scan_patterns
 from xl_marinade.calc.prepare import PreparedCopy, count_external_refs, prepare_engine_copy
 from xl_marinade.calc.probes import (
     ProbeKind,
     ProbePlan,
     ProbeReadings,
+    engine_error_code,
     place_probes,
     plan_probes,
     read_probes,
@@ -66,6 +67,7 @@ from xl_marinade.calc.status import (
     Exercised,
     StaticLabels,
     assign,
+    engine_error_detail,
     exercised_from,
     policy_roots,
     propagate_static,
@@ -345,6 +347,8 @@ def _check_against(
             table_cols[s.inputs[name]] = _column(letters, f"table column for {name}")
     selector = _input_cell(graph, check.selector, "selector") if check.selector else None
 
+    # A set vouches only for the paths that fed the outputs it was compared on.
+    compared = graph.upstream(outputs)
     readings: list[ProbeReadings] = []
     roots: dict[CellRef, list[Reason]] = {}
     mismatches: list[dict[str, str]] = []
@@ -376,8 +380,20 @@ def _check_against(
             matched = False
         if matched:
             # Only an input set the engine reproduced vouches for the paths it took.
-            readings.append(reading)
+            readings.append(_restrict(reading, compared))
     return readings, roots, {"input_sets": len(results), "mismatches": mismatches}
+
+
+def _restrict(reading: ProbeReadings, cells: set[CellRef]) -> ProbeReadings:
+    """``reading`` with its branch and lookup readings cut to probes of ``cells``."""
+    return ProbeReadings(
+        branch={k: v for k, v in reading.branch.items() if k[0] in cells},
+        lookup_edge={k: v for k, v in reading.lookup_edge.items() if k[0] in cells},
+        near_rounding=set(),
+        near_comparison=set(),
+        dynamic_refs={},
+        unsure=set(reading.unsure),
+    )
 
 
 def _paths(
@@ -439,13 +455,22 @@ def _policy_loop(
                 continue
         readings = s.recalc()
         roots = policy_roots(s.plan, readings, exercised, include_unplaced=False)
+        values = {cell: s.engine.value(cell) for cell in outputs}
+        for cell, value in values.items():
+            code = engine_error_code(s.engine, cell, value)
+            if code is None:
+                continue
+            reason = Reason(ReasonKind.engine_error, cell, engine_error_detail(code))
+            bucket = roots.setdefault(cell, [])
+            if reason not in bucket:
+                bucket.append(reason)
         assigned = assign(s.graph, outputs, roots, readings.dynamic_refs, static=static)
         computed: dict[CellRef, tuple[EngineValue, Status, list[Reason]]] = {}
         for cell in outputs:
             status, reasons = assigned[cell]
             if outside:
                 status, reasons = Status.REFUSED, sorted([*reasons, *outside], key=reason_key)
-            value = s.engine.value(cell)
+            value = values[cell]
             computed[cell] = (value, status, reasons)
             out.values.append(OutputValue(policy.id, cell, value, status, reasons))
         out.rows.extend(rows_for(policy.id, variables, computed.__getitem__))
@@ -518,14 +543,21 @@ def calc(req: CalcRequest) -> CalcResult:
             for name, target in input_map.fields.items()
         }
         prepared = prepare_engine_copy(req.workbook, work / "engine.xlsx", as_of=req.as_of)
-        patterns = _with_unheld_externals(
-            graph,
-            prepared,
-            scan_patterns(graph, as_of=req.as_of, data_table_cells=prepared.data_table_cells),
+        patterns = _merge_patterns(
+            _with_unheld_externals(
+                graph,
+                prepared,
+                scan_patterns(graph, as_of=req.as_of, data_table_cells=prepared.data_table_cells),
+            ),
+            input_dependent_lookups(graph, set(inputs.values())),
         )
         with quiet_native_output():
             engine = Engine.load(prepared.path)
-        upstream = [c for c in graph.upstream(outputs) if graph.formula(c) is not None]
+        # Refused cells refuse their dependants anyway: probing them would only use up
+        # the cap (and their readings vouch for nothing).
+        upstream = [
+            c for c in graph.upstream(outputs) if graph.formula(c) is not None and c not in patterns
+        ]
         plan = plan_probes(graph, upstream, cap=req.probe_cap)
         place_probes(engine, plan)
         with quiet_native_output():
@@ -548,7 +580,8 @@ def calc(req: CalcRequest) -> CalcResult:
             more, check_roots, check_record = _check_against(session, check)
             trust_readings.extend(more)
 
-        exercised = exercised_from(plan, trust_readings)
+        failing = {f.cell for f in trust.failures}
+        exercised = exercised_from(plan, trust_readings, exclude=failing | set(patterns))
         static = propagate_static(
             graph, _static_roots(trust, patterns, plan, prepared, check_roots)
         )
@@ -592,7 +625,15 @@ def calc(req: CalcRequest) -> CalcResult:
     )
 
 
-NOT_HELD = "external reference not held"
+def _merge_patterns(
+    *sources: dict[CellRef, list[Reason]],
+) -> dict[CellRef, list[Reason]]:
+    out: dict[CellRef, list[Reason]] = {}
+    for source in sources:
+        for cell, reasons in source.items():
+            bucket = out.setdefault(cell, [])
+            bucket.extend(r for r in reasons if r not in bucket)
+    return {cell: sorted(rs, key=reason_key) for cell, rs in sorted(out.items())}
 
 
 def _with_unheld_externals(

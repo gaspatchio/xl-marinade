@@ -10,6 +10,12 @@ that kind, in AST pre-order) so readings can be aggregated per family.
 Lifted text must compute the same on the probe sheet as in its own cell, so every
 reference is sheet-qualified and absolute (:func:`anchor`). Anything that cannot
 be lifted faithfully, and every probe beyond the cap, is reported as unplaced.
+
+A probe computes whether or not the cell's formula ever evaluates the part it was
+lifted from. Each probe therefore records its *guards*: the enclosing branches and
+which of their outcomes evaluate it. A reading whose guard was not met is dropped (it
+says nothing about the value); one whose guarding branch has no reading is kept but
+marked unsure, so it never counts as evidence from the trust run.
 """
 
 from __future__ import annotations
@@ -72,6 +78,8 @@ _ROUNDING: dict[str, str] = {
     "FLOOR.PRECISE": "FLOOR",
 }
 _BRANCHES = frozenset({"IF", "IFS", "SWITCH", "CHOOSE", "IFERROR", "IFNA"})
+_ERROR = "error"
+_NONE = frozenset[str]()
 _LOOKUPS = frozenset({"VLOOKUP", "HLOOKUP", "MATCH", "LOOKUP"})
 _DYNAMIC = frozenset({"OFFSET", "INDIRECT"})
 
@@ -83,6 +91,11 @@ _TEXT_REF = re.compile(
     rf"^(?:(?P<sheet>{SHEET})!)?\$?(?P<c1>[A-Za-z]{{1,3}})\$?(?P<r1>[0-9]+)"
     r"(?::\$?(?P<c2>[A-Za-z]{1,3})\$?(?P<r2>[0-9]+))?$"
 )
+
+
+Guard = tuple[int, frozenset[str], frozenset[str]]
+"""An enclosing branch: its branch ordinal in the same cell, the outcomes that evaluate
+the guarded part, and the outcomes after which it may or may not have been evaluated."""
 
 
 class ProbeKind(StrEnum):
@@ -101,7 +114,8 @@ class Probe:
 
     ``meta`` always holds ``function`` (branch, lookup, rounding, dynamic_ref) or
     ``operator`` (comparison: the operator, or ``lookup`` for an approximate
-    lookup's value against its matched key).
+    lookup's value against its matched key). ``guards`` lists the enclosing
+    branches, outermost first.
     """
 
     kind: ProbeKind
@@ -110,6 +124,7 @@ class Probe:
     ordinal: int
     formulas: tuple[str, ...]
     meta: dict[str, str]
+    guards: tuple[Guard, ...] = ()
 
 
 @dataclass(slots=True)
@@ -131,6 +146,12 @@ class ProbeReadings:
     dynamic_refs: dict[CellRef, list[CellRef]]
     dynamic_unread: set[CellRef] = field(default_factory=set)
     """Cells with a dynamic-ref probe that errored or could not be parsed."""
+    unsure: set[tuple[ProbeKind, CellRef, int]] = field(default_factory=set)
+    """Readings kept although an enclosing branch had no reading: not evidence."""
+    engine_errors: dict[CellRef, str] = field(default_factory=dict)
+    """Cells whose probe computed an error code Excel does not have."""
+    type_mismatch: set[CellRef] = field(default_factory=set)
+    """Cells with an approximate lookup whose value and matched key differ in type."""
 
 
 class NameScopes(Protocol):
@@ -162,7 +183,8 @@ def near_flip(fn: str, x: float, arg: float | None) -> bool:
     """True when a tiny change in ``x`` could flip the result of ``fn``.
 
     ``fn`` is a rounding function (``arg`` its digits / multiple / significance,
-    None when absent) or a comparison operator / ``lookup`` (``arg`` the other side).
+    None when absent) or a comparison operator / ``lookup`` (``arg`` the other side;
+    sides exactly equal are not near).
 
     Raises:
         ValueError: for an unknown ``fn``.
@@ -171,7 +193,10 @@ def near_flip(fn: str, x: float, arg: float | None) -> bool:
     if name.lower() in _NEAR_COMPARE:
         if arg is None or not (math.isfinite(x) and math.isfinite(arg)):
             return False
-        return abs(x - arg) <= NEAR_TOLERANCE * max(1.0, abs(x), abs(arg))
+        # Exactly equal sides are not near: the comparison is decided, not on a knife
+        # edge (``IF(t=0, ...)`` on a whole-number period is the common case).
+        distance = abs(x - arg)
+        return 0 < distance <= NEAR_TOLERANCE * max(1.0, abs(x), abs(arg))
     if name not in _ROUNDING.values():
         raise ValueError(f"near_flip: unknown function {fn!r}")
     if not math.isfinite(x) or (arg is not None and not math.isfinite(arg)):
@@ -328,6 +353,7 @@ class _Planner:
     cell: CellRef = CellRef("", 0, 0)
     family: str = ""
     counters: dict[ProbeKind, int] = field(default_factory=dict)
+    guards: tuple[Guard, ...] = ()
 
     def lift(self, node: ASTNode) -> str:
         return anchor(node, self.cell.sheet, names=self.graph)
@@ -344,7 +370,9 @@ class _Planner:
             logger.debug("probe {} {} unplaced: {}", self.cell.a1(), kind, exc)
             self.unplaced.setdefault(self.cell, []).append(kind)
             return
-        self.probes.append(Probe(kind, self.cell, self.family, ordinal, formulas, meta))
+        self.probes.append(
+            Probe(kind, self.cell, self.family, ordinal, formulas, meta, self.guards)
+        )
 
     def visit(self, node: ASTNode, in_cond: bool, blocked: bool) -> None:
         """Probe ``node`` and its children; ``blocked`` probes go unplaced (under
@@ -362,11 +390,18 @@ class _Planner:
             return
         name = function_name(node.name)
         blocked = blocked or name in _SCOPING
+        branch = self.counters.get(ProbeKind.branch, 0)
         self._probe_function(node, name, blocked)
         inner = blocked or name in ALWAYS_ARRAY
         conds = _condition_args(name, len(node.args))
+        arms = _arm_outcomes(name, len(node.args)) if name in _BRANCHES and node.args else {}
+        outer = self.guards
         for i, arg in enumerate(node.args):
+            arm = arms.get(i)
+            if arm is not None:
+                self.guards = (*outer, (branch, *arm))
             self.visit(arg, in_cond or i in conds, inner)
+            self.guards = outer
 
     def _probe_function(self, node: FunctionNode, name: str, scoped: bool) -> None:
         if name in _BRANCHES and node.args:
@@ -402,8 +437,9 @@ class _Planner:
             return (f'IF({first},"TRUE","FALSE")',), meta
         if name == "CHOOSE":
             return (f"TRUNC({first})",), {**meta, "choices": str(len(args) - 1)}
-        test = "ISERROR" if name == "IFERROR" else "ISNA"
-        return (f"{test}({first})",), meta
+        # The value itself when it errors, so an engine-only error code (which the
+        # cell would swallow) is still seen; FALSE when it does not.
+        return (f"IF(ISERROR({first}),{first},FALSE)",), meta
 
     def _keys(self, node: FunctionNode, name: str) -> tuple[str, str]:
         """Key vector and its length, as formula text."""
@@ -439,9 +475,9 @@ class _Planner:
         key = f"INDEX({keys},{self._match(node, name)})"
         if _lookup_mode(node, name) is None:
             if name in {"VLOOKUP", "HLOOKUP"}:
-                key = f'IF({self.lift(node.args[3])},{key},"exact")'
+                key = f"IF({self.lift(node.args[3])},{key},NA())"
             else:
-                key = f'IF(({self.lift(node.args[2])})=0,"exact",{key})'
+                key = f"IF(({self.lift(node.args[2])})=0,NA(),{key})"
         return (self.lift(node.args[0]), key), {"operator": "lookup"}
 
     def _rounding(self, node: FunctionNode, name: str) -> tuple[tuple[str, ...], dict[str, str]]:
@@ -494,6 +530,41 @@ def _condition_args(name: str, n: int) -> set[int]:
         cases = (n - 1) // 2
         return {0, *range(1, 2 * cases, 2)}
     return set()
+
+
+def _arm_outcomes(name: str, n: int) -> dict[int, tuple[frozenset[str], frozenset[str]]]:
+    """Per guarded argument of a branch: the outcomes that evaluate it, and those after
+    which it may have been evaluated (an error from a condition before or at it).
+
+    Arguments not listed are always evaluated (the first condition, the switch value).
+    """
+    if name == "IF":
+        return {1: (frozenset({"TRUE"}), _NONE), 2: (frozenset({"FALSE"}), _NONE)}
+    if name == "CHOOSE":
+        return {i: (frozenset({str(i)}), _NONE) for i in range(1, n)}
+    if name in {"IFERROR", "IFNA"}:
+        return {1: (frozenset({_ERROR}), _NONE)}
+    arms: dict[int, tuple[frozenset[str], frozenset[str]]] = {}
+    if name == "IFS":
+        pairs = n // 2
+        for k in range(1, pairs + 1):
+            cond, value = 2 * (k - 1), 2 * k - 1
+            if k > 1:
+                later = frozenset({*(str(j) for j in range(k, pairs + 1)), "none"})
+                arms[cond] = (later, frozenset({_ERROR}))
+            arms[value] = (frozenset({str(k)}), _NONE)
+        return arms
+    if name == "SWITCH":
+        cases = (n - 1) // 2
+        for k in range(1, cases + 1):
+            case, result = 2 * k - 1, 2 * k
+            if k > 1:
+                later = frozenset({*(str(j) for j in range(k, cases + 1)), "default"})
+                arms[case] = (later, frozenset({_ERROR}))
+            arms[result] = (frozenset({str(k)}), _NONE)
+        if n % 2 == 0:
+            arms[n - 1] = (frozenset({"default"}), _NONE)
+    return arms
 
 
 def _lookup_mode(node: FunctionNode, name: str) -> str | None:
@@ -569,8 +640,10 @@ def _is_error(value: EngineValue) -> bool:
 def _branch_outcome(probe: Probe, values: list[EngineValue]) -> str:
     value = values[0]
     function = probe.meta["function"]
-    if function in {"IFERROR", "IFNA"}:
-        return "ok" if value is False else "error"
+    if function == "IFERROR":
+        return "ok" if value is False else _ERROR
+    if function == "IFNA":
+        return _ERROR if value == "#N/A" else "ok"
     if function == "CHOOSE":
         n = _number(value)
         if n is None or _is_error(value):
@@ -606,6 +679,24 @@ def _comparison_near(probe: Probe, values: list[EngineValue]) -> bool:
     return near_flip(probe.meta["operator"], a, b)
 
 
+def _value_type(value: EngineValue) -> str | None:
+    """Excel's comparison class of a lookup value; None for empty or an error."""
+    if value is None or _is_error(value):
+        return None
+    if isinstance(value, bool):
+        return "bool"
+    return "number" if isinstance(value, float) else "text"
+
+
+def _types_differ(probe: Probe, values: list[EngineValue]) -> bool:
+    """True when an approximate lookup matched a key of another type than its value
+    (Excel finds nothing there; the engine may return a row)."""
+    if probe.meta.get("operator") != "lookup":
+        return False
+    a, b = _value_type(values[0]), _value_type(values[1])
+    return a is not None and b is not None and a != b
+
+
 def _text_cells(text: EngineValue, sheet: str) -> list[CellRef] | None:
     """Cells of an ``INDIRECT`` text address (A1 style); None when not a plain range."""
     if not isinstance(text, str) or _is_error(text):
@@ -635,15 +726,56 @@ def _dynamic_cells(probe: Probe, values: list[EngineValue]) -> list[CellRef] | N
     return _rect(probe.meta["sheet"], row, col, rows, cols)
 
 
+def _live(probe: Probe, outcomes: dict[tuple[CellRef, int], str]) -> bool | None:
+    """Whether the cell evaluates the probe's part: True, False, or None (unknown)."""
+    live: bool | None = True
+    for ordinal, taken, maybe in probe.guards:
+        outcome = outcomes.get((probe.cell, ordinal))
+        if outcome is None or outcome in maybe:
+            live = None
+        elif outcome not in taken:
+            return False
+    return live
+
+
+def engine_error_code(engine: Engine, cell: CellRef, value: EngineValue) -> str | None:
+    """The error code when ``cell`` holds an error Excel does not have."""
+    if isinstance(value, str) and value.startswith("#") and value not in ERROR_CODES:
+        return value if engine.is_error(cell) else None
+    return None
+
+
 def read_probes(engine: Engine, plan: ProbePlan) -> ProbeReadings:
-    """Read the placed probes after ``engine.evaluate()``."""
+    """Read the placed probes after ``engine.evaluate()``.
+
+    Probes inside a branch arm the cell did not evaluate are skipped; those whose
+    enclosing branch has no reading are kept and listed in ``unsure``.
+    """
     readings = ProbeReadings({}, {}, set(), set(), {})
     dynamic: dict[CellRef, set[CellRef]] = {}
+    values_of = [
+        [engine.value(_slot(i, j)) for j in range(len(probe.formulas))]
+        for i, probe in enumerate(plan.probes)
+    ]
+    outcomes = {
+        (probe.cell, probe.ordinal): _branch_outcome(probe, values_of[i])
+        for i, probe in enumerate(plan.probes)
+        if probe.kind is ProbeKind.branch
+    }
     for i, probe in enumerate(plan.probes):
-        values = [engine.value(_slot(i, j)) for j in range(len(probe.formulas))]
+        live = _live(probe, outcomes)
+        if live is False:
+            continue
+        values = values_of[i]
         key = (probe.cell, probe.ordinal)
+        if live is None:
+            readings.unsure.add((probe.kind, probe.cell, probe.ordinal))
+        for j, value in enumerate(values):
+            code = engine_error_code(engine, _slot(i, j), value)
+            if code is not None:
+                readings.engine_errors.setdefault(probe.cell, code)
         if probe.kind is ProbeKind.branch:
-            readings.branch[key] = _branch_outcome(probe, values)
+            readings.branch[key] = outcomes[key]
         elif probe.kind is ProbeKind.lookup:
             readings.lookup_edge[key] = _lookup_edge(values)
         elif probe.kind is ProbeKind.rounding:
@@ -652,6 +784,8 @@ def read_probes(engine: Engine, plan: ProbePlan) -> ProbeReadings:
         elif probe.kind is ProbeKind.comparison:
             if _comparison_near(probe, values):
                 readings.near_comparison.add(probe.cell)
+            if _types_differ(probe, values):
+                readings.type_mismatch.add(probe.cell)
         else:
             landed = _dynamic_cells(probe, values)
             dynamic.setdefault(probe.cell, set()).update(landed or ())

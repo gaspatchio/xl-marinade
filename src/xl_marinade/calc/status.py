@@ -27,6 +27,7 @@ from xl_marinade.calc.probes import ProbeKind, ProbePlan, ProbeReadings
 
 MAX_REASONS_PER_KIND = 5
 DYNAMIC_NOT_CHECKED = "dynamic reference not checked"
+LOOKUP_TYPE = "lookup value type differs from keys"
 
 _NO_ROOT = CellRef("", 0, 0)
 _RANK: dict[Status, int] = {
@@ -78,24 +79,42 @@ def _family_of(table: dict[tuple[CellRef, int], tuple[str, str]], key: tuple[Cel
     return entry[0] if entry is not None else f"cell:{key[0].a1()}"
 
 
-def exercised_from(plan: ProbePlan, readings: list[ProbeReadings]) -> Exercised:
+def exercised_from(
+    plan: ProbePlan,
+    readings: list[ProbeReadings],
+    *,
+    exclude: Iterable[CellRef] = (),
+) -> Exercised:
     """Every branch outcome and lookup edge seen in the trust readings, per formula family.
 
     ``interior`` counts for the whole family whichever row it landed on; ``first``,
-    ``last`` and ``not_found`` count only when the family hit that edge itself.
+    ``last`` and ``not_found`` count only when the family hit that edge itself. Only a
+    cell that reproduced vouches for its family: readings of cells in ``exclude``
+    (trust failures, refused patterns) and unsure readings (an enclosing branch had no
+    reading) are not evidence.
     """
+    skip = set(exclude)
     branch_fam = _families(plan, ProbeKind.branch)
     lookup_fam = _families(plan, ProbeKind.lookup)
     out = Exercised(set(), set())
     for reading in readings:
         for key, outcome in reading.branch.items():
+            if key[0] in skip or (ProbeKind.branch, *key) in reading.unsure:
+                continue
             out.branches.add((_family_of(branch_fam, key), key[1], outcome))
         for key, edge in reading.lookup_edge.items():
+            if key[0] in skip or (ProbeKind.lookup, *key) in reading.unsure:
+                continue
             out.lookup_edges.add((_family_of(lookup_fam, key), key[1], edge))
     return out
 
 
 # -- roots -------------------------------------------------------------------
+
+
+def engine_error_detail(code: str) -> str:
+    """Reason detail for an error code the engine returned that Excel does not have."""
+    return f"engine error {code} is not an Excel error"
 
 
 def _add(roots: dict[CellRef, list[Reason]], cell: CellRef, reason: Reason) -> None:
@@ -157,6 +176,10 @@ def policy_roots(
         _add(roots, cell, Reason(ReasonKind.near_comparison, cell, detail))
     for cell in readings.dynamic_unread:
         _add(roots, cell, Reason(ReasonKind.refused_pattern, cell, DYNAMIC_NOT_CHECKED))
+    for cell, code in readings.engine_errors.items():
+        _add(roots, cell, Reason(ReasonKind.engine_error, cell, engine_error_detail(code)))
+    for cell in readings.type_mismatch:
+        _add(roots, cell, Reason(ReasonKind.refused_pattern, cell, LOOKUP_TYPE))
     if include_unplaced:
         for cell, reasons in unplaced_roots(plan).items():
             for reason in reasons:

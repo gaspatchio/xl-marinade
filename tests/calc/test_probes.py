@@ -102,7 +102,11 @@ def test_near_flip_comparisons() -> None:
     assert near_flip(">=", 0.30000000000000004, 0.3) is True
     assert near_flip("<", 1e15, 1e15 + 0.125) is True  # relative scale
     assert near_flip("=", 0.3, 0.31) is False
-    assert near_flip("lookup", 2.0, 2.0) is True
+    # Exact equality is not near: whole-number periods sit on ``t=0`` exactly.
+    assert near_flip("lookup", 2.0, 2.0) is False
+    assert near_flip("=", 0.0, 0.0) is False
+    assert near_flip(">=", 0.3, 0.3) is False
+    assert near_flip("lookup", 2.0, 2.0000000000000004) is True
     with pytest.raises(ValueError, match="FOO"):
         near_flip("FOO", 1.0, None)
 
@@ -277,7 +281,8 @@ def test_near_rounding_and_comparison_readings(make_book: Book, ir_for: IrFor) -
     assert not any(p.cell == _c("B7") for p in plan.probes if p.kind is ProbeKind.comparison)
     got = _read(engine, plan)
     assert got.near_rounding == {_c("B1")}  # INT(2.0) sits exactly on the boundary
-    assert got.near_comparison == {_c("B3"), _c("B5")}
+    # B5 matches its key exactly: decided, not near (only 0 < distance <= tol is).
+    assert got.near_comparison == {_c("B3")}
 
 
 def test_dynamic_ref_probe(make_book: Book, ir_for: IrFor) -> None:
@@ -422,3 +427,74 @@ def test_ordinals_count_per_kind_in_pre_order(make_book: Book, ir_for: IrFor) ->
         ("comparison", 1),
         ("rounding", 1),
     ]
+
+
+def test_probes_record_their_enclosing_arms(make_book: Book, ir_for: IrFor) -> None:
+    cells: dict[str, object] = {
+        "A1": 2,
+        "B1": F("=IF(A1>1,ROUND(A1,0),IF(A1<0,1,ROUND(A1,1)))", 2),
+        "B2": F("=_xlfn.IFS(A1>5,ROUND(A1,0),A1>1,INT(A1))", 2),
+        "B3": F("=CHOOSE(A1,INT(A1),ROUND(A1,0))", 2),
+        "B4": F("=IFERROR(INT(A1),ROUND(A1,0))", 2),
+        "B5": F("=_xlfn.SWITCH(A1,1,INT(A1),ROUND(A1,0))", 2),
+    }
+    _graph, _engine, plan = _setup(make_book, ir_for, cells)
+    guards = {(p.cell, p.kind.value, p.ordinal): p.guards for p in plan.probes}
+    t, f = frozenset({"TRUE"}), frozenset({"FALSE"})
+    assert guards[(_c("B1"), "branch", 0)] == ()
+    assert guards[(_c("B1"), "rounding", 0)] == ((0, t, frozenset()),)
+    assert guards[(_c("B1"), "branch", 1)] == ((0, f, frozenset()),)
+    assert guards[(_c("B1"), "rounding", 1)] == ((0, f, frozenset()), (1, f, frozenset()))
+    # IFS: a later condition runs unless an earlier one matched; a value only on its own.
+    assert guards[(_c("B2"), "comparison", 0)] == ()
+    assert guards[(_c("B2"), "comparison", 1)] == (
+        (0, frozenset({"2", "none"}), frozenset({"error"})),
+    )
+    assert guards[(_c("B2"), "rounding", 0)] == ((0, frozenset({"1"}), frozenset()),)
+    assert guards[(_c("B2"), "rounding", 1)] == ((0, frozenset({"2"}), frozenset()),)
+    assert guards[(_c("B3"), "rounding", 0)] == ((0, frozenset({"1"}), frozenset()),)
+    assert guards[(_c("B3"), "rounding", 1)] == ((0, frozenset({"2"}), frozenset()),)
+    assert guards[(_c("B4"), "rounding", 0)] == ()
+    assert guards[(_c("B4"), "rounding", 1)] == ((0, frozenset({"error"}), frozenset()),)
+    assert guards[(_c("B5"), "rounding", 0)] == ((0, frozenset({"1"}), frozenset()),)
+    assert guards[(_c("B5"), "rounding", 1)] == ((0, frozenset({"default"}), frozenset()),)
+
+
+def test_readings_skip_probes_in_untaken_arms(make_book: Book, ir_for: IrFor) -> None:
+    cells: dict[str, object] = {
+        "A1": 0,
+        "A2": 35,
+        "T1": 10,
+        "T2": 20,
+        "T3": 30,
+        "B1": F("=IF(A1>0.5,MATCH(A2,$T$1:$T$3,1),0)", 0),
+    }
+    _graph, engine, plan = _setup(make_book, ir_for, cells)
+    off = _read(engine, plan)
+    assert off.branch == {(_c("B1"), 0): "FALSE"}
+    assert off.lookup_edge == {}
+    engine.set_value(_c("A1"), 1.0)
+    on = _read(engine, plan)
+    assert on.lookup_edge == {(_c("B1"), 0): "last"}
+    assert on.unsure == set()
+
+
+def test_unplaced_enclosing_branch_makes_readings_unsure(make_book: Book, ir_for: IrFor) -> None:
+    cells: dict[str, object] = {
+        "A1": 1,
+        "A2": 35,
+        "T1": 10,
+        "T2": 20,
+        "T3": 30,
+        "B1": F("=IF(A1>0.5,MATCH(A2,$T$1:$T$3,1),0)", 3),
+    }
+    _graph, engine, plan = _setup(make_book, ir_for, cells, cap=0)
+    assert plan.probes == []
+    book_plan = ProbePlan(
+        [p for p in plan_probes(_graph, [_c("B1")], cap=50).probes if p.kind is ProbeKind.lookup],
+        {},
+    )
+    place_probes(engine, book_plan)
+    got = _read(engine, book_plan)
+    assert got.lookup_edge == {(_c("B1"), 0): "last"}
+    assert got.unsure == {(ProbeKind.lookup, _c("B1"), 0)}

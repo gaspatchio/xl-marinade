@@ -279,3 +279,39 @@ def test_circular_block_shares_its_roots(make_book: Book, ir_for: IrFor) -> None
     near = Reason(ReasonKind.near_comparison, A1, "n")
     both = assign(g, [z1], {y1: [bad], A1: [near]}, {})[z1]
     assert both == (Status.REFUSED, [bad, near])
+
+
+def test_failing_or_refused_cells_vouch_for_nothing(graph: WorkbookGraph) -> None:
+    plan = _plan(graph)
+    trust = _readings(branch={(B40, 0): "then"}, lookup_edge={(_c("C40"), 0): "last"})
+    exercised = exercised_from(plan, [trust], exclude={B40, _c("C40")})
+    assert exercised == Exercised(set(), set())
+    roots = policy_roots(plan, _readings(branch={(B50, 0): "then"}), exercised)
+    assert [r.kind for r in roots[B50]] == [ReasonKind.unexercised_branch]
+
+
+def test_unsure_readings_are_not_evidence(graph: WorkbookGraph) -> None:
+    plan = _plan(graph)
+    trust = _readings(
+        branch={(B40, 0): "then"},
+        unsure={(ProbeKind.branch, B40, 0)},
+    )
+    assert exercised_from(plan, [trust]) == Exercised(set(), set())
+    # For a policy an unsure reading still counts as a path taken.
+    roots = policy_roots(plan, trust, Exercised(set(), set()))
+    assert [r.kind for r in roots[B40]] == [ReasonKind.unexercised_branch]
+
+
+def test_engine_errors_and_lookup_type_mismatch_become_roots(graph: WorkbookGraph) -> None:
+    plan = _plan(graph)
+    roots = policy_roots(
+        plan,
+        _readings(engine_errors={B1: "#N/IMPL!"}, type_mismatch={D9}),
+        Exercised(set(), set()),
+    )
+    assert roots[B1] == [
+        Reason(ReasonKind.engine_error, B1, "engine error #N/IMPL! is not an Excel error")
+    ]
+    assert roots[D9] == [
+        Reason(ReasonKind.refused_pattern, D9, "lookup value type differs from keys")
+    ]
