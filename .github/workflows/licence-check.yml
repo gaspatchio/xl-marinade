@@ -33,11 +33,12 @@ jobs:
           version: "0.12.5"   # pinned in lockstep with the other workflows
       - name: Install workspace + pip-licenses
         run: |
-          uv sync --frozen
+          uv sync --frozen --all-extras
           uv pip install pip-licenses
       - name: Resolve runtime closure
         run: |
           uv pip compile pyproject.toml \
+            --all-extras \
             --no-emit-package xl-marinade \
             --quiet \
             --output-file /tmp/wheel-deps.txt

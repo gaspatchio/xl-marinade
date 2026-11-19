@@ -36,6 +36,7 @@ dependencies = [
 # It used to pull in oletools, whose required pcodedmp is GPLv3.
 vba = []
 llm = ["openai>=1.0"]         # Tier-1 BYOK add-on (Plan 2)
+calc = ["ironcalc==0.9.1"]    # experimental workbook recalculator (marinade calc); pinned, engine is pre-1.0
 
 [project.scripts]
 marinade = "xl_marinade.cli.main:main"
