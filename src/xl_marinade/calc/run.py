@@ -40,8 +40,10 @@ from xl_marinade.calc.models import (
     _col_to_number,
 )
 from xl_marinade.calc.output import (
+    CALC_OUTPUTS,
     OutputValue,
     PathRecord,
+    clear_outputs,
     write_paths,
     write_results,
     write_rows,
@@ -49,7 +51,7 @@ from xl_marinade.calc.output import (
     write_trust_report,
 )
 from xl_marinade.calc.patterns import scan_patterns
-from xl_marinade.calc.prepare import PreparedCopy, prepare_engine_copy
+from xl_marinade.calc.prepare import PreparedCopy, count_external_refs, prepare_engine_copy
 from xl_marinade.calc.probes import (
     ProbeKind,
     ProbePlan,
@@ -359,7 +361,8 @@ def _check_against(
                 if not graph.has_stored(src):
                     raise CalcInputError(f"input set {pid!r}: no value in {src.a1()}")
                 s.set_input(cell, _as_text(graph.stored(src)), f"input set {pid!r}")
-        readings.append(s.recalc())
+        reading = s.recalc()
+        matched = True
         for cell, col in outputs.items():
             stored = graph.stored(CellRef(check.results_sheet, row, col))
             got = s.engine.value(cell)
@@ -370,6 +373,10 @@ def _check_against(
                 Reason(ReasonKind.check_against_mismatch, cell, detail)
             )
             mismatches.append({"input_set": pid, "cell": cell.a1(), "detail": detail})
+            matched = False
+        if matched:
+            # Only an input set the engine reproduced vouches for the paths it took.
+            readings.append(reading)
     return readings, roots, {"input_sets": len(results), "mismatches": mismatches}
 
 
@@ -419,10 +426,17 @@ def _policy_loop(
         for name, cell in s.inputs.items():
             raw = policy.values[name]
             options = allowed[name]
-            if options is not None and not _allowed(raw, options):
-                detail = f"{name}={raw!r} not in {options!r}"
-                outside.append(Reason(ReasonKind.input_outside_allowed_values, cell, detail))
-            s.set_input(cell, raw, f"policy {policy.id!r} field {name!r}")
+            what = f"policy {policy.id!r} field {name!r}"
+            if options is None or _allowed(raw, options):
+                s.set_input(cell, raw, what)
+                continue
+            detail = f"{name}={raw!r} not in {options!r}"
+            outside.append(Reason(ReasonKind.input_outside_allowed_values, cell, detail))
+            try:
+                s.set_input(cell, raw, what)
+            except CalcInputError:
+                # Refused anyway; the cell keeps its stored value for this policy.
+                continue
         readings = s.recalc()
         roots = policy_roots(s.plan, readings, exercised, include_unplaced=False)
         assigned = assign(s.graph, outputs, roots, readings.dynamic_refs, static=static)
@@ -481,6 +495,7 @@ def calc(req: CalcRequest) -> CalcResult:
         raise CalcInputError(f"tolerance must be a finite number >= 0, got {req.tolerance}")
     if req.probe_cap < 0:
         raise CalcInputError(f"probe_cap must be >= 0, got {req.probe_cap}")
+    clear_outputs(req.out_dir, CALC_OUTPUTS)
     sha = _sha256(req.workbook)
     settings = read_settings(req.workbook)
     refused = refusal_reasons(settings)
@@ -503,7 +518,11 @@ def calc(req: CalcRequest) -> CalcResult:
             for name, target in input_map.fields.items()
         }
         prepared = prepare_engine_copy(req.workbook, work / "engine.xlsx", as_of=req.as_of)
-        patterns = scan_patterns(graph, as_of=req.as_of, data_table_cells=prepared.data_table_cells)
+        patterns = _with_unheld_externals(
+            graph,
+            prepared,
+            scan_patterns(graph, as_of=req.as_of, data_table_cells=prepared.data_table_cells),
+        )
         with quiet_native_output():
             engine = Engine.load(prepared.path)
         upstream = [c for c in graph.upstream(outputs) if graph.formula(c) is not None]
@@ -571,6 +590,27 @@ def calc(req: CalcRequest) -> CalcResult:
         out / "paths.csv",
         out / "run.json",
     )
+
+
+NOT_HELD = "external reference not held"
+
+
+def _with_unheld_externals(
+    graph: WorkbookGraph, prepared: PreparedCopy, patterns: dict[CellRef, list[Reason]]
+) -> dict[CellRef, list[Reason]]:
+    """Add a ``refused_pattern`` for every formula cell whose engine copy still holds an
+    external reference (a range, or one with no cached value): IronCalc errors on it, and
+    off the stored path an ``IFERROR`` could turn that into a plausible value."""
+    out = {cell: list(reasons) for cell, reasons in patterns.items()}
+    for cell in graph.formula_cells():
+        text = graph.formula(cell) or ""
+        if count_external_refs(text) <= len(prepared.held_externals.get(cell, [])):
+            continue
+        reason = Reason(ReasonKind.refused_pattern, cell, NOT_HELD)
+        bucket = out.setdefault(cell, [])
+        if reason not in bucket:
+            bucket.append(reason)
+    return {cell: sorted(rs, key=reason_key) for cell, rs in sorted(out.items())}
 
 
 def _static_roots(

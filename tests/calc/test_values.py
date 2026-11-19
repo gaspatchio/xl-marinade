@@ -88,6 +88,18 @@ def test_values_2d_range_rejected(make_book: Book, tmp_path: Path) -> None:
         values(ValuesRequest(p, vars_, tmp_path / "o"))
 
 
+def test_values_clears_stale_outputs(make_book: Book, tmp_path: Path) -> None:
+    p = make_book("d", {"S": {"A1": 1, "B2": 2}})
+    out = tmp_path / "o"
+    out.mkdir()
+    for name in ("rows.csv", "run.json", "keep.txt"):
+        (out / name).write_text("stale", encoding="utf-8")
+    vars_ = write_json(tmp_path, {"x": {"range": "S!A1:B2", "period_start": 0}})
+    with pytest.raises(CalcInputError):
+        values(ValuesRequest(p, vars_, out))
+    assert sorted(f.name for f in out.iterdir()) == ["keep.txt"]
+
+
 def test_values_ir_reuse_and_hash_mismatch(make_book: Book, ir_for: IrFor, tmp_path: Path) -> None:
     p = _book(make_book)
     other = make_book("other", {"Proj": {"C11": 9}, "Summary": {"B4": 1}})

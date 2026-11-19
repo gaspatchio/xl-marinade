@@ -48,6 +48,13 @@ _TOKEN_RE = re.compile(
     r"|(?P<today>(?<![\w.])(?i:TODAY|NOW)\s*\(\s*\))"
 )
 
+# Any reference into another workbook, outside string literals: ``[1]S!A1``,
+# ``[1]S!A1:B9``, ``'[1]My S'!A:A``, ``[1]!Name``.
+_ANY_EXT_RE = re.compile(
+    r'(?P<str>"(?:[^"]|"")*")'
+    r"|(?P<ext>'\[[0-9]+\](?:[^']|'')*'!|\[[0-9]+\][^!\s'\"(),;{}]*!)"
+)
+
 _ExtCache = dict[int, dict[str, dict[tuple[int, int], str]]]
 
 
@@ -155,6 +162,15 @@ def _external_cache(z: zipfile.ZipFile, link_parts: list[str]) -> _ExtCache:
             per_sheet[sheet_names[sid].casefold()] = values
         cache[n] = per_sheet
     return cache
+
+
+def count_external_refs(formula: str) -> int:
+    """How many references into other workbooks ``formula`` holds (strings skipped).
+
+    Compare with :attr:`PreparedCopy.held_externals` to find references the engine
+    copy could not replace with a cached value.
+    """
+    return sum(1 for m in _ANY_EXT_RE.finditer(formula) if m.group("ext") is not None)
 
 
 class _Rewriter:

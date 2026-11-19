@@ -15,6 +15,8 @@ from xl_marinade.calc.rows import Row
 
 HEADER = ["policy", "variable", "period", "value", "status", "reasons"]
 RESULTS_HEADER = ["policy_id", "output", "value", "status", "reasons"]
+CALC_OUTPUTS = ("results.csv", "rows.csv", "paths.csv", "trust_report.json", "run.json")
+VALUES_OUTPUTS = ("rows.csv", "run.json")
 PATHS_HEADER = ["policy_id", "cell", "family", "kind", "ordinal", "outcome", "exercised"]
 _NO_ROOT = CellRef("", 0, 0)
 
@@ -82,6 +84,14 @@ def write_rows(path: Path, rows: list[Row]) -> None:
                     format_reasons(r.reasons),
                 ]
             )
+
+
+def clear_outputs(out_dir: Path, names: tuple[str, ...]) -> None:
+    """Delete the named output files a previous run left in ``out_dir`` (nothing else)."""
+    for name in names:
+        path = out_dir / name
+        if path.is_file() or path.is_symlink():
+            path.unlink()
 
 
 def _csv(path: Path, header: list[str], rows: list[list[object]]) -> None:

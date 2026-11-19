@@ -182,11 +182,62 @@ def test_value_outside_dropdown_refuses_the_policy(make_book: Book, tmp_path: Pa
     assert "input_outside_allowed_values" not in got[("2", "Calc!B4")]["reasons"]
 
 
-def test_inputs_are_reset_between_policies(make_book: Book, tmp_path: Path) -> None:
-    book = _book(make_book)
+def test_selector_and_inputs_are_reset_before_each_policy(make_book: Book, tmp_path: Path) -> None:
+    sheets: dict[str, dict[str, object]] = {
+        "Sel": {"A1": 1},
+        "T": {"A1": 40, "A2": 70},
+        "Inputs": {"B1": 5, "B2": 0},
+        "Calc": {"B1": F("=INDEX(T!A1:A2,Sel!A1)+Inputs!B1+Inputs!B2", 45)},
+        "Results": {"A2": 1, "B2": 45, "A3": 2, "B3": 75},
+    }
+    book = make_book("reset", sheets)
+    check = {
+        "results": {
+            "sheet": "Results",
+            "id_column": "A",
+            "first_row": 2,
+            "outputs": {"Calc!B1": "B"},
+        },
+        "inputs": {"selector": "Sel!A1"},
+    }
+    imap = {"id_field": "id", "fields": {"x": "Inputs!B1", "y": "Inputs!B2"}}
+    res = calc(
+        _req(
+            tmp_path,
+            book,
+            "id,x,y\n1,10,100\n2,10,0\n",
+            imap=imap,
+            outputs=["Calc!B1"],
+            check_against=_write(tmp_path, "check.json", json.dumps(check)),
+        )
+    )
+    got = _results(res)
+    # the check left the selector on input set 2 (70); each policy starts from stored (40)
+    assert got[("1", "Calc!B1")]["value"] == "150.0"
+    assert got[("2", "Calc!B1")]["value"] == "50.0"
+
+
+def test_uncoercible_value_outside_dropdown_refuses_only_that_policy(
+    make_book: Book, tmp_path: Path
+) -> None:
+    book = make_book(
+        "numdd",
+        {"Inputs": {"B1": 40}, "Calc": {"B1": F("=Inputs!B1*2", 80)}},
+        validations=[("Inputs!B1", ["40", "50"])],
+    )
     imap = {"id_field": "id", "fields": {"age": "Inputs!B1"}}
-    res = calc(_req(tmp_path, book, "id,age\n1,70\n2,50\n", imap=imap, outputs=["Calc!B4"]))
-    assert _results(res)[("2", "Calc!B4")]["value"] == "1.0"
+    res = calc(_req(tmp_path, book, "id,age\n1,X\n2,50\n", imap=imap, outputs=["Calc!B1"]))
+    got = _results(res)
+    assert got[("1", "Calc!B1")]["status"] == "refused"
+    assert "input_outside_allowed_values@Inputs!B1" in got[("1", "Calc!B1")]["reasons"]
+    assert (got[("2", "Calc!B1")]["value"], got[("2", "Calc!B1")]["status"]) == ("100.0", "ok")
+
+
+def test_uncoercible_allowed_value_is_an_input_error(make_book: Book, tmp_path: Path) -> None:
+    book = make_book("numdd2", {"Inputs": {"B1": 40}, "Calc": {"B1": F("=Inputs!B1*2", 80)}})
+    imap = {"id_field": "id", "fields": {"age": "Inputs!B1"}}
+    with pytest.raises(CalcInputError, match="not a number"):
+        calc(_req(tmp_path, book, "id,age\n1,X\n", imap=imap, outputs=["Calc!B1"]))
 
 
 def _check_book(make_book: Book, name: str, stored_140: float) -> Path:
@@ -337,6 +388,80 @@ def test_held_external_link_stays_ok_with_reason(make_book: Book, tmp_path: Path
     assert row["reasons"] == "external_link_held@Calc!B1:[1]Other!B2"
     report = json.loads(res.trust_report.read_text(encoding="utf-8"))
     assert report["held_external_links"] == [{"cell": "Calc!B1", "refs": ["[1]Other!B2"]}]
+
+
+def test_mismatching_check_set_does_not_count_as_exercised(make_book: Book, tmp_path: Path) -> None:
+    branch = "=IF(Inputs!$B$1>60,Inputs!$B$1*2,Inputs!$B$1)"
+    sheets: dict[str, dict[str, object]] = {
+        "Inputs": {"B1": 40},
+        "Calc": {"B1": F(branch, 40), "C1": F(branch, 40)},
+        "Results": {"A2": 1, "B2": 40, "A3": 2, "B3": 141},
+        "Table": {"A2": 1, "B2": 40, "A3": 2, "B3": 70},
+    }
+    book = make_book("chkex", sheets)
+    check = {
+        "results": {
+            "sheet": "Results",
+            "id_column": "A",
+            "first_row": 2,
+            "outputs": {"Calc!B1": "B"},
+        },
+        "inputs": {
+            "table": {"sheet": "Table", "id_column": "A", "first_row": 2, "fields": {"age": "B"}}
+        },
+    }
+    imap = {"id_field": "id", "fields": {"age": "Inputs!B1"}}
+    res = calc(
+        _req(
+            tmp_path,
+            book,
+            "id,age\n9,75\n",
+            imap=imap,
+            outputs=["Calc!C1"],
+            check_against=_write(tmp_path, "check.json", json.dumps(check)),
+        )
+    )
+    row = _results(res)[("9", "Calc!C1")]
+    assert row["status"] == "unverified_path"
+    assert "unexercised_branch@Calc!C1" in row["reasons"]
+
+
+@pytest.mark.parametrize(
+    ("formula", "cache"),
+    [
+        ("=IF(Inputs!B1>60,IFERROR(SUM([1]Other!A1:A3),0),Inputs!B1)", {"A1": "1"}),
+        ("=IF(Inputs!B1>60,IFERROR([1]Other!Z9,0),Inputs!B1)", {"A1": "1"}),
+    ],
+)
+def test_external_reference_not_held_is_refused(
+    make_book: Book, tmp_path: Path, formula: str, cache: dict[str, str]
+) -> None:
+    base = make_book("extx", {"Inputs": {"B1": 40}, "Calc": {"B1": F(formula, 40)}})
+    book = add_external_link(base, tmp_path / "extx2.xlsx", "Other", cache)
+    imap = {"id_field": "id", "fields": {"age": "Inputs!B1"}}
+    res = calc(_req(tmp_path, book, "id,age\n1,70\n", imap=imap, outputs=["Calc!B1"]))
+    row = _results(res)[("1", "Calc!B1")]
+    assert row["status"] == "refused"
+    assert "refused_pattern@Calc!B1:external reference not held" in row["reasons"]
+    report = json.loads(res.trust_report.read_text(encoding="utf-8"))
+    assert {"cell": "Calc!B1", "detail": "external reference not held"} in report[
+        "refused_patterns"
+    ]
+
+
+def test_stale_outputs_are_removed(make_book: Book, tmp_path: Path) -> None:
+    book = _book(make_book)
+    variables = _write(tmp_path, "vars.json", json.dumps({"r": {"cell": "Calc!B1"}}))
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "keep.txt").write_text("mine", encoding="utf-8")
+    calc(_req(tmp_path, book, "id,age,sex\n1,50,M\n", variables=variables))
+    assert (out / "rows.csv").exists()
+    calc(_req(tmp_path, book, "id,age,sex\n1,50,M\n"))
+    assert not (out / "rows.csv").exists()
+    with pytest.raises(WorkbookRefused):
+        calc(_req(tmp_path, _book(make_book, "stale1904", date1904=True), "id,age,sex\n1,50,M\n"))
+    assert sorted(f.name for f in out.iterdir()) == ["keep.txt", "run.json", "trust_report.json"]
 
 
 def test_coerce_input() -> None:
