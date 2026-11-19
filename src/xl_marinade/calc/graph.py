@@ -281,6 +281,10 @@ class WorkbookGraph:
                 out.add(src)
         return out
 
+    def dependents(self, cell: CellRef) -> frozenset[CellRef]:
+        """Formula cells that read ``cell`` directly or through a range."""
+        return frozenset(self._dependents(cell))
+
     def downstream(self, roots: Iterable[CellRef]) -> dict[CellRef, CellRef]:
         """Every cell reachable forward from the roots, mapped to the smallest root reaching it."""
         owner: dict[CellRef, CellRef] = {}
