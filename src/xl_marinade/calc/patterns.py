@@ -17,14 +17,20 @@ from typing import Literal
 
 from loguru import logger
 
+from xl_marinade.calc.formula_ast import (
+    SHEET,
+    UNKNOWN,
+    function_name,
+    literal,
+    parse_formula,
+    sign,
+)
 from xl_marinade.calc.graph import StoredValue, WorkbookGraph
 from xl_marinade.calc.models import CellRef, Reason, ReasonKind, _col_to_number
 from xl_marinade.core.levels_cycles import detect_cycles
 from xl_marinade.core.parser import (
     ASTNode,
     BinaryNode,
-    ConstNode,
-    FormulaParser,
     FunctionNode,
     RefNode,
     UnaryNode,
@@ -43,7 +49,6 @@ UNPARSEABLE = "unparseable formula"
 
 _MAX_ROW = 1_048_576
 _MAX_COL = 16_384
-_FN_PREFIXES = ("_XLFN.", "_XLWS.", "_XLL.")
 _RANDOM = frozenset({"RAND", "RANDBETWEEN", "RANDARRAY"})
 _CLOCK = frozenset({"TODAY", "NOW"})
 # Functions whose arguments are array-evaluated in every Excel version.
@@ -86,28 +91,20 @@ _ERRORS = frozenset(
 # accented letters beside their base letter).
 _SAFE_TEXT = re.compile(r"^[a-z0-9 ]*$")
 
-_SHEET = r"(?:'(?:[^']|'')+'|[^'!:\s{}();,\"#\[\]]+)"
-_CELL = r"\$?[A-Za-z]{1,3}\$?[0-9]+"
-_NAME = r"[A-Za-z_\\][\w.\\?]*"
-_END = rf"(?:{_CELL}|\$?[A-Za-z]{{1,3}}|\$?[0-9]+|{_NAME})"
-# What a well-formed RefNode may look like; anything else is a mangled parse.
-_VALID_REF = re.compile(rf"^(?:{_SHEET}!)?{_END}(?::(?:{_SHEET}!)?{_END})?$")
-_STRUCTURED = re.compile(r"^[A-Za-z_\\][\w.\\]*\[.*\]$")
 _CELL_RANGE = re.compile(
-    rf"^(?:(?P<s1>{_SHEET})!)?\$?(?P<c1>[A-Za-z]{{1,3}})\$?(?P<r1>[0-9]+)"
-    rf"(?::(?:(?P<s2>{_SHEET})!)?\$?(?P<c2>[A-Za-z]{{1,3}})\$?(?P<r2>[0-9]+))?$"
+    rf"^(?:(?P<s1>{SHEET})!)?\$?(?P<c1>[A-Za-z]{{1,3}})\$?(?P<r1>[0-9]+)"
+    rf"(?::(?:(?P<s2>{SHEET})!)?\$?(?P<c2>[A-Za-z]{{1,3}})\$?(?P<r2>[0-9]+))?$"
 )
 _COL_RANGE = re.compile(
-    rf"^(?:(?P<s1>{_SHEET})!)?\$?(?P<c1>[A-Za-z]{{1,3}}):"
-    rf"(?:(?P<s2>{_SHEET})!)?\$?(?P<c2>[A-Za-z]{{1,3}})$"
+    rf"^(?:(?P<s1>{SHEET})!)?\$?(?P<c1>[A-Za-z]{{1,3}}):"
+    rf"(?:(?P<s2>{SHEET})!)?\$?(?P<c2>[A-Za-z]{{1,3}})$"
 )
 _ROW_RANGE = re.compile(
-    rf"^(?:(?P<s1>{_SHEET})!)?\$?(?P<r1>[0-9]+):(?:(?P<s2>{_SHEET})!)?\$?(?P<r2>[0-9]+)$"
+    rf"^(?:(?P<s1>{SHEET})!)?\$?(?P<r1>[0-9]+):(?:(?P<s2>{SHEET})!)?\$?(?P<r2>[0-9]+)$"
 )
 
 Order = Literal["asc", "desc"]
 Axis = Literal["col", "row", "auto"]
-_UNKNOWN = object()
 
 # (sheet, r1, c1, r2, c2)
 _Rect = tuple[str, int, int, int, int]
@@ -117,45 +114,6 @@ def _unquote(sheet: str) -> str:
     if len(sheet) >= 2 and sheet.startswith("'") and sheet.endswith("'"):
         return sheet[1:-1].replace("''", "'")
     return sheet
-
-
-def _function_name(raw: str) -> str:
-    """Upper-case name with ``_xlfn.`` / ``_xlws.`` / ``_xll.`` prefixes removed."""
-    name = raw.upper()
-    stripped = True
-    while stripped:
-        stripped = False
-        for prefix in _FN_PREFIXES:
-            if name.startswith(prefix):
-                name = name[len(prefix) :]
-                stripped = True
-    return name
-
-
-def _parse(text: str) -> ASTNode | None:
-    """Parse the formula; None when the parser raised or the parse looks mangled.
-
-    The core parser silently stops at text it cannot place (an intersection space,
-    ``INDEX(...):B3``) and turns array constants into garbage references, so a
-    parse that left text behind or holds an implausible reference is rejected too.
-    """
-    parser = FormulaParser()
-    try:
-        root = parser.parse(text)
-    except (ValueError, IndexError, RecursionError):
-        return None
-    if parser.formula[parser.pos :].strip():
-        return None
-    for node, _direct in _walk(root):
-        if isinstance(node, RefNode) and not _plausible_ref(node.ref):
-            return None
-    return root
-
-
-def _plausible_ref(ref: str) -> bool:
-    if _VALID_REF.match(ref):
-        return True
-    return bool(_STRUCTURED.match(ref)) and ref.count("[") == ref.count("]")
 
 
 def _walk(root: ASTNode) -> Iterator[tuple[ASTNode, bool]]:
@@ -169,7 +127,7 @@ def _walk(root: ASTNode) -> Iterator[tuple[ASTNode, bool]]:
         node, direct, in_array = stack.pop()
         yield node, direct or in_array
         if isinstance(node, FunctionNode):
-            inner = in_array or _function_name(node.name) in _ALWAYS_ARRAY
+            inner = in_array or function_name(node.name) in _ALWAYS_ARRAY
             stack.extend((arg, True, inner) for arg in reversed(node.args))
         elif isinstance(node, BinaryNode):
             stack.extend([(node.right, False, in_array), (node.left, False, in_array)])
@@ -177,37 +135,19 @@ def _walk(root: ASTNode) -> Iterator[tuple[ASTNode, bool]]:
             stack.append((node.operand, False, in_array))
 
 
-def _literal(node: ASTNode) -> object:
-    """The value of a literal argument (``TRUE``, ``0``, ``-1``), else ``_UNKNOWN``."""
-    if isinstance(node, ConstNode):
-        return node.value
-    if isinstance(node, UnaryNode) and node.operator in {"+", "-"}:
-        inner = _literal(node.operand)
-        if isinstance(inner, int | float) and not isinstance(inner, bool):
-            return -inner if node.operator == "-" else inner
-    return _UNKNOWN
-
-
-def _sign(value: object) -> int | None:
-    """Sign of a numeric/boolean literal; None for text or a non-literal."""
-    if isinstance(value, bool):
-        return 1 if value else 0
-    if isinstance(value, int | float):
-        return (value > 0) - (value < 0)
-    return None
-
-
 def _lookup_spec(name: str, args: list[ASTNode]) -> tuple[ASTNode, Axis, set[Order]] | None:
     """For an approximate lookup: its key table, key axis and required orders."""
     if name in {"VLOOKUP", "HLOOKUP"} and len(args) >= 2:
-        if len(args) >= 4 and _sign(_literal(args[3])) == 0:
+        if len(args) >= 4 and sign(literal(args[3])) == 0:
             return None
         return args[1], ("col" if name == "VLOOKUP" else "row"), {"asc"}
     if name == "MATCH" and len(args) >= 2:
-        sign = 1 if len(args) < 3 else _sign(_literal(args[2]))
-        if sign == 0:
+        direction = 1 if len(args) < 3 else sign(literal(args[2]))
+        if direction == 0:
             return None
-        orders: set[Order] = {"asc", "desc"} if sign is None else {"asc" if sign > 0 else "desc"}
+        orders: set[Order] = (
+            {"asc", "desc"} if direction is None else {"asc" if direction > 0 else "desc"}
+        )
         return args[1], "auto", orders
     if name == "LOOKUP" and len(args) >= 2:
         return args[1], "auto", {"asc"}
@@ -215,12 +155,12 @@ def _lookup_spec(name: str, args: list[ASTNode]) -> tuple[ASTNode, Axis, set[Ord
     if search_at is not None and len(args) >= 2:
         if len(args) <= search_at:
             return None
-        mode = _literal(args[search_at])
+        mode = literal(args[search_at])
         if mode in (2, 2.0):
             return args[1], "auto", {"asc"}
         if mode in (-2, -2.0):
             return args[1], "auto", {"desc"}
-        if mode is _UNKNOWN or isinstance(mode, str):
+        if mode is UNKNOWN or isinstance(mode, str):
             return args[1], "auto", {"asc", "desc"}
     return None
 
@@ -405,7 +345,7 @@ def _lookup_problem(
 
 
 def _formula_reasons(scan: _Scan, cell: CellRef, text: str) -> set[str]:
-    root = _parse(text)
+    root = parse_formula(text)
     if root is None:
         return {UNPARSEABLE}
     found: set[str] = set()
@@ -425,7 +365,7 @@ def _formula_reasons(scan: _Scan, cell: CellRef, text: str) -> set[str]:
             continue
         if not isinstance(node, FunctionNode):
             continue
-        name = _function_name(node.name)
+        name = function_name(node.name)
         if name in _RANDOM:
             found.add(name)
         if name in _CLOCK and scan.as_of is None:
