@@ -173,3 +173,33 @@ def test_formula_names_and_array_cells(make_book: Book, ir_for: IrFor) -> None:
     assert not g.is_formula_name("r") and not g.is_formula_name("c")
     assert not g.is_formula_name("missing")
     assert g.is_array_formula(B1) and not g.is_array_formula(C1)
+
+
+def test_whole_column_range_buckets_only_the_used_rows(make_book: Book, ir_for: IrFor) -> None:
+    path = make_book(
+        "wc",
+        {"In": {"A1": 1, "A2": 2, "A3": 3}, "S": {"B1": F("=SUM(In!A:A)", 6)}},
+    )
+    g = WorkbookGraph.from_ir(ir_for(path))
+    b1 = CellRef("S", 1, 2)
+    assert g.precedents(b1) == {CellRef("In", r, 1) for r in (1, 2, 3)}
+    assert g.dependents(CellRef("In", 2, 1)) == {b1}
+    # One bucket for the three used rows, not one per 256 rows of the column.
+    assert len(g._range_grid) == 1
+
+
+def test_name_over_external_range_is_not_cells(
+    make_book: Book, ir_for: IrFor, tmp_path: Path
+) -> None:
+    from tests.calc.conftest import add_external_link
+
+    base = make_book(
+        "xn",
+        {"S": {"A1": 1, "B1": F("=SUM(Ext)", 6)}},
+        names={"Ext": "[1]Src!$A$1:$A$3"},
+    )
+    book = add_external_link(base, tmp_path / "xn2.xlsx", "Src", {"A1": "1", "A2": "2"})
+    g = WorkbookGraph.from_ir(ir_for(book))
+    assert g.is_external_name("Ext")
+    assert g.name_cells("Ext") == []
+    assert not g.is_external_name("missing")

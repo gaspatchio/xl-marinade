@@ -95,6 +95,7 @@ class WorkbookGraph:
         self._range_grid: dict[tuple[str, int], list[tuple[_Rect, CellRef]]] = defaultdict(list)
         self._names: dict[str, tuple[str, list[_Rect]]] = {}
         self._formula_names: set[str] = set()
+        self._external_names: set[str] = set()
         self._array_cells: set[CellRef] = set()
         self._validations: list[tuple[list[_Rect], list[str] | None, str | None, str]] = []
         self._sheets: set[str] = set()
@@ -147,6 +148,9 @@ class WorkbookGraph:
                 self._direct[by_id[frm]].add(by_id[to])
                 self._direct_rev[by_id[to]].add(by_id[frm])
 
+        # Whole columns/rows are stored to row 1048576 / column 16384; index only the
+        # extent a sheet uses, or one entry per bucket would fill memory.
+        max_row = {s: max(r for r, _c in v) for s, v in per_sheet.items()}
         range_q = (
             "SELECT from_cell_id, to_sheet_id, to_r1, to_c1, to_r2, to_c2 FROM range_edges "
             "ORDER BY from_cell_id, to_sheet_id, to_r1, to_c1, to_r2, to_c2"
@@ -157,7 +161,8 @@ class WorkbookGraph:
             rect: _Rect = (sheet_names[sid], min(r1, r2), min(c1, c2), max(r1, r2), max(c1, c2))
             src = by_id[frm]
             self._ranges[src].append(rect)
-            for bucket in range(rect[1] // _BUCKET, rect[3] // _BUCKET + 1):
+            last = min(rect[3], max_row.get(rect[0], 0))
+            for bucket in range(rect[1] // _BUCKET, last // _BUCKET + 1):
                 self._range_grid[(rect[0], bucket)].append((rect, src))
 
         ext: dict[CellRef, list[str]] = defaultdict(list)
@@ -173,10 +178,18 @@ class WorkbookGraph:
             if cid in by_id
         )
 
-        for name, scope, dests, _ext in conn.execute(
+        for name, scope, dests, ext in conn.execute(
             "SELECT name, scope, destinations, is_external FROM defined_names ORDER BY 1, 2"
         ):
             raw = [str(d) for d in json.loads(dests or "[]")]
+            if ext or any(d.lstrip("'").startswith("[") for d in raw):
+                # Cells in another workbook: not cells of this graph (``[1]Src`` would
+                # otherwise parse as a sheet of its own).
+                self._external_names.add(str(name))
+                self._formula_names.add(str(name))
+                if name not in self._names or scope == "workbook":
+                    self._names[name] = (str(scope), [])
+                continue
             rects = [r for d in raw if (r := _parse_rect(d)) is not None]
             # The IR keeps only reference destinations: a formula name has none, a
             # constant name keeps its literal text. Either way it is not cells.
@@ -227,6 +240,10 @@ class WorkbookGraph:
     def is_formula_name(self, name: str) -> bool:
         """True when a definition of ``name`` holds a formula or constant, not cells."""
         return name in self._formula_names
+
+    def is_external_name(self, name: str) -> bool:
+        """True when a definition of ``name`` points into another workbook."""
+        return name in self._external_names
 
     def is_array_formula(self, cell: CellRef) -> bool:
         """True when the cell holds an array (CSE or dynamic-array) formula."""
