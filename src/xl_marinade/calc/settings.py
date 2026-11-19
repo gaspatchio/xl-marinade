@@ -12,6 +12,7 @@ from xl_marinade.errors import CalcInputError
 __all__ = ["WorkbookSettings", "read_settings", "refusal_reasons"]
 
 _NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+_STRICT_NS = "{http://purl.oclc.org/ooxml/spreadsheetml/main}"
 _TRUE = {"1", "true"}
 
 
@@ -24,7 +25,8 @@ def _flag(value: str | None, default: bool) -> bool:
 def read_settings(path: Path) -> WorkbookSettings:
     """Read the calculation settings of an ``.xlsx`` workbook.
 
-    Absent attributes take Excel's defaults (``fullPrecision`` is true).
+    Absent attributes take Excel's defaults (``fullPrecision`` is true). A Strict
+    Open XML workbook is flagged (``strict_ooxml``) and refused.
 
     Raises:
         CalcInputError: if the file is not a readable workbook package.
@@ -44,6 +46,7 @@ def read_settings(path: Path) -> WorkbookSettings:
         full_precision=_flag(calc_attrs.get("fullPrecision"), True),
         iterate=_flag(calc_attrs.get("iterate"), False),
         manual_calc=calc_attrs.get("calcMode") == "manual",
+        strict_ooxml=root.tag.startswith(_STRICT_NS),
     )
 
 
@@ -54,4 +57,8 @@ def refusal_reasons(s: WorkbookSettings) -> list[str]:
         reasons.append("1904 date system")
     if not s.full_precision:
         reasons.append("precision as displayed")
+    if s.strict_ooxml:
+        # Neither the extractor nor the engine reads Strict namespaces: every setting
+        # and formula would be missed silently.
+        reasons.append("strict OOXML")
     return reasons

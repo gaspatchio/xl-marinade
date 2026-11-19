@@ -173,3 +173,4 @@ class WorkbookSettings:
     full_precision: bool
     iterate: bool
     manual_calc: bool
+    strict_ooxml: bool = False

@@ -56,3 +56,18 @@ def test_not_a_zip(tmp_path: Path) -> None:
     p.write_text("nope")
     with pytest.raises(CalcInputError):
         read_settings(p)
+
+
+def test_strict_ooxml_refuses_whole_workbook(make_book: Book, tmp_path: Path) -> None:
+    from tests.calc.conftest import patch_book
+
+    transitional = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+    strict = "http://purl.oclc.org/ooxml/spreadsheetml/main"
+    book = patch_book(
+        make_book("t", SHEETS),
+        tmp_path / "strict.xlsx",
+        edit={"xl/workbook.xml": lambda xml: xml.replace(transitional, strict)},
+    )
+    s = read_settings(book)
+    assert s.strict_ooxml is True
+    assert refusal_reasons(s) == ["strict OOXML"]
