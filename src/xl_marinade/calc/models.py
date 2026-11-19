@@ -116,3 +116,50 @@ SEVERITY: dict[ReasonKind, Status] = {
     ReasonKind.not_checked_path: Status.UNVERIFIED,
     ReasonKind.external_link_held: Status.OK,
 }
+
+
+@dataclass(slots=True, frozen=True)
+class InputMap:
+    """Maps policy-file field names to raw workbook targets (``Sheet!A1`` or a name)."""
+
+    fields: dict[str, str]
+    id_field: str | None
+
+
+@dataclass(slots=True, frozen=True)
+class Policy:
+    """One policy row: its id (kept as text) and the mapped field values."""
+
+    id: str
+    values: dict[str, str]
+
+
+@dataclass(slots=True, frozen=True)
+class VariableSpec:
+    """A requested output variable: a cell, or a range with a first period."""
+
+    name: str
+    target: str
+    period_start: int | None
+
+
+@dataclass(slots=True, frozen=True)
+class InputTable:
+    """Where a check-against workbook keeps its per-policy input rows."""
+
+    sheet: str
+    id_column: str
+    first_row: int
+    fields: dict[str, str]
+
+
+@dataclass(slots=True, frozen=True)
+class CheckAgainst:
+    """Where stored results (and the inputs that produced them) live."""
+
+    results_sheet: str
+    id_column: str
+    first_row: int
+    outputs: dict[str, str]
+    table: InputTable | None
+    selector: str | None
