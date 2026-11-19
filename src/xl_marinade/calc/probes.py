@@ -28,6 +28,7 @@ from xl_marinade.calc.formula_ast import (
     ALWAYS_ARRAY,
     END,
     ERROR_CODES,
+    EXTERNAL,
     SHEET,
     function_name,
     literal,
@@ -204,6 +205,10 @@ def _end(text: str) -> tuple[str, str]:
 
 
 def _anchor_ref(ref: str, sheet: str, names: NameScopes | None) -> str:
+    if EXTERNAL.match(ref):
+        # The engine copy holds the cached value only in the cell's own formula; on
+        # the probe sheet the reference would not resolve.
+        raise ValueError(f"cannot lift external reference {ref!r}")
     m = _REF.match(ref)
     if m is None:
         raise ValueError(f"cannot lift reference {ref!r}")

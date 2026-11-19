@@ -150,6 +150,8 @@ def test_anchor_rewrites_indirect_to_the_source_sheet() -> None:
         'INDIRECT("R1C1",FALSE)',
         "Table1[Amount]",
         "Local*2",
+        "[1]Other!B2+1",
+        "'[1]My Other'!$B$2+1",
     ],
 )
 def test_anchor_refuses_what_cannot_be_lifted(text: str) -> None:

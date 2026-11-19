@@ -26,6 +26,9 @@ END = rf"(?:{CELL}|\$?[A-Za-z]{{1,3}}|\$?[0-9]+|{NAME})"
 # What a well-formed RefNode may look like; anything else is a mangled parse.
 VALID_REF = re.compile(rf"^(?:{SHEET}!)?{END}(?::(?:{SHEET}!)?{END})?$")
 STRUCTURED = re.compile(r"^[A-Za-z_\\][\w.\\]*\[.*\]$")
+EXTERNAL = re.compile(r"^(?:'\[[0-9]+\]|\[[0-9]+\])")
+"""A reference into another workbook (``[1]Sheet!A1``, ``'[1]My Sheet'!A1``)."""
+_EXTERNAL_REF = re.compile(rf"^\[[0-9]+\]{SHEET}!{END}(?::{END})?$")
 
 # Functions whose arguments are array-evaluated in every Excel version.
 ALWAYS_ARRAY = frozenset(
@@ -100,7 +103,7 @@ def iter_nodes(root: ASTNode) -> Iterator[ASTNode]:
 
 def plausible_ref(ref: str) -> bool:
     """True when a RefNode's text looks like a real reference, name or structured ref."""
-    if VALID_REF.match(ref):
+    if VALID_REF.match(ref) or _EXTERNAL_REF.match(ref):
         return True
     return bool(STRUCTURED.match(ref)) and ref.count("[") == ref.count("]")
 
