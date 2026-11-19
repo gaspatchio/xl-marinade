@@ -156,3 +156,73 @@ def test_prepare_shared_master_replaces_only_absolute_externals(make_book, tmp_p
         CellRef("S", 1, 1): ["[1]Other!$B$2"],
         CellRef("S", 2, 1): ["[1]Other!$B$2"],
     }
+
+
+def test_prepare_strips_array_range_values(make_book, ir_for, tmp_path):
+    from openpyxl.worksheet.formula import ArrayFormula
+
+    book = make_book(
+        "arr",
+        {
+            "S": {
+                "A1": 1,
+                "A2": 2,
+                "A3": 3,
+                "B1": F(ArrayFormula("B1:B3", "=A1:A3*2"), 2),
+                "B2": 999,  # Excel keeps non-anchor results as bare <v>; wrong on purpose
+                "B3": 999,
+                "C1": F("=SUM(B1:B3)", 12),
+            }
+        },
+    )
+    assert "<v>999</v>" in _sheet_xml(book)
+    copy = prepare_engine_copy(book, tmp_path / "e.xlsx", as_of=None)
+    xml = _sheet_xml(copy.path)
+    assert "999" not in xml and 't="array"' in xml
+    assert copy.stripped == 4  # B1 anchor, C1, and the two non-anchor array cells
+    eng, res = _trust(copy, WorkbookGraph.from_ir(ir_for(book)))
+    # IronCalc refills the spilled cells from the anchor, so SUM sees 2+4+6.
+    assert eng.value(CellRef("S", 2, 2)) == 4.0 and eng.value(CellRef("S", 3, 2)) == 6.0
+    assert eng.value(CellRef("S", 1, 3)) == 12.0
+    assert res.failures == [] and res.reproduced == res.checked
+
+
+def test_prepare_keeps_numeric_character_references(make_book, ir_for, tmp_path):
+    base = make_book("base", {"S": {"A1": F('="a"&CHAR(10)&"b"', "a\nb"), "A2": F("=1+1", 2)}})
+
+    def add_ncr(xml: str) -> str:
+        return xml.replace("<f>1+1</f>", '<f>LEN("x&#10;y")+1</f>', 1)
+
+    book = patch_book(base, tmp_path / "ncr.xlsx", edit={"xl/worksheets/sheet1.xml": add_ncr})
+    assert "&#10;" in _sheet_xml(book)
+    copy = prepare_engine_copy(book, tmp_path / "e.xlsx", as_of=None)
+    xml = _sheet_xml(copy.path)
+    assert '<f>LEN("x&#10;y")+1</f>' in xml and "&amp;#10;" not in xml
+    copy2 = prepare_engine_copy(book, tmp_path / "f.xlsx", as_of=date(2026, 1, 1))
+    assert "&amp;#10;" not in _sheet_xml(copy2.path)
+    eng = Engine.load(copy.path)
+    eng.evaluate()
+    assert eng.value(CellRef("S", 2, 1)) == 4.0
+
+
+def test_prepare_as_of_rewrites_defined_names(make_book, ir_for, tmp_path):
+    book = make_book("nm", {"S": {"A1": F("=AsOf+1", 46024)}}, names={"AsOf": "TODAY()"})
+    copy = prepare_engine_copy(book, tmp_path / "e.xlsx", as_of=date(2026, 1, 1))
+    wb_xml = _sheet_xml(copy.path, "xl/workbook.xml")
+    assert "DATE(2026,1,1)" in wb_xml and "TODAY()" not in wb_xml
+    # IronCalc 0.9.1 accepts only reference-valued names ("Invalid defined name formula"
+    # for DATE(...) or a constant), so the cell fails rather than passing on a guess.
+    eng, res = _trust(copy, WorkbookGraph.from_ir(ir_for(book)))
+    assert eng.value(CellRef("S", 1, 1)) == "#NAME?"
+    assert [f.reason.kind.value for f in res.failures] == ["unsupported_function"]
+
+
+def test_prepare_external_in_defined_name(make_book, tmp_path):
+    base = make_book("base", {"S": {"A1": F("=Ext*2", 84)}}, names={"Ext": "[1]Other!$B$2"})
+    book = add_external_link(base, tmp_path / "ext.xlsx", "Other", {"B2": "42"})
+    copy = prepare_engine_copy(book, tmp_path / "e.xlsx", as_of=None)
+    wb_xml = _sheet_xml(copy.path, "xl/workbook.xml")
+    assert "[1]Other" not in wb_xml and 'name="Ext">42<' in wb_xml
+    eng = Engine.load(copy.path)
+    eng.evaluate()
+    assert eng.value(CellRef("S", 1, 1)) == "#NAME?"  # constant-valued name: unsupported

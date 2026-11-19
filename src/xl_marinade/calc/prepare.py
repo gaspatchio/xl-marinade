@@ -8,6 +8,7 @@ for them inside the workbook.
 
 from __future__ import annotations
 
+import html
 import posixpath
 import re
 import xml.etree.ElementTree as ET
@@ -61,13 +62,8 @@ class PreparedCopy:
 
 
 def _xml_unescape(text: str) -> str:
-    return (
-        text.replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", '"')
-        .replace("&apos;", "'")
-        .replace("&amp;", "&")
-    )
+    """Decode named and numeric character references (``&amp;``, ``&#10;``, ...)."""
+    return html.unescape(text)
 
 
 def _xml_escape(text: str) -> str:
@@ -224,12 +220,17 @@ def _cell_pos(attrs: str) -> tuple[int, int] | None:
 
 
 def _prepare_sheet(xml: str, sheet: str, rewriter: _Rewriter) -> _SheetResult:
-    # Pass 1: data-table rectangles, and the external references each shared master holds.
+    # Pass 1: data-table rectangles, and array/spill rectangles. Only an array's anchor
+    # holds the <f>; its other cells hold Excel's results as bare <v>, which the engine
+    # would otherwise load as constants.
     table_cells: set[CellRef] = set()
+    array_cells: set[CellRef] = set()
     for f_attrs, _ in _F_RE.findall(xml):
         attrs = dict(_ATTR_RE.findall(f_attrs))
         if attrs.get("t") == "dataTable" and "ref" in attrs:
             table_cells.update(_rect_cells(sheet, attrs["ref"]))
+        if attrs.get("t") == "array" and "ref" in attrs:
+            array_cells.update(_rect_cells(sheet, attrs["ref"]))
 
     stripped = 0
     held: dict[CellRef, list[str]] = {}
@@ -247,7 +248,10 @@ def _prepare_sheet(xml: str, sheet: str, rewriter: _Rewriter) -> _SheetResult:
             body = _F_RE.sub(lambda fm: "" if 't="dataTable"' in fm.group(1) else fm.group(0), body)
             return "<c" + _T_RE.sub("", attrs) + ">" + _V_RE.sub("", body) + "</c>"
         if "<f" not in body:
-            return m.group(0)
+            if cell is None or cell not in array_cells:
+                return m.group(0)
+            stripped += 1
+            return "<c" + _T_RE.sub("", attrs) + ">" + _V_RE.sub("", body) + "</c>"
         stripped += 1
 
         def fix_f(fm: re.Match[str]) -> str:
@@ -259,11 +263,14 @@ def _prepare_sheet(xml: str, sheet: str, rewriter: _Rewriter) -> _SheetResult:
                 if shared and cell is not None:
                     shared_children[si].append(cell)
                 return fm.group(0)
-            new, refs = rewriter.rewrite(_xml_unescape(text), shared=shared)
+            plain = _xml_unescape(text)
+            new, refs = rewriter.rewrite(plain, shared=shared)
             if refs and cell is not None:
                 held[cell] = refs
                 if shared:
                     shared_held[si] = refs
+            if new == plain:
+                return fm.group(0)  # unchanged: keep the original bytes
             return f"<f{f_attrs}>{_xml_escape(new)}</f>"
 
         body = _F_RE.sub(fix_f, body)
@@ -276,11 +283,31 @@ def _prepare_sheet(xml: str, sheet: str, rewriter: _Rewriter) -> _SheetResult:
     return _SheetResult(out, stripped, sorted(table_cells), held)
 
 
+_DEFINED_NAME_RE = re.compile(r"(<definedName\b[^>]*>)(.*?)(</definedName>)", re.S)
+
+
+def _prepare_workbook_xml(xml: str, rewriter: _Rewriter) -> str:
+    """Apply the formula rewrites to every ``<definedName>`` (e.g. ``AsOf = TODAY()``)."""
+
+    def fix(m: re.Match[str]) -> str:
+        plain = _xml_unescape(m.group(2))
+        new, refs = rewriter.rewrite(plain, shared=False)
+        if new == plain:
+            return m.group(0)
+        if refs:
+            logger.debug("defined name {} holds external references {}", m.group(1), refs)
+        return m.group(1) + _xml_escape(new) + m.group(3)
+
+    return _DEFINED_NAME_RE.sub(fix, xml)
+
+
 def prepare_engine_copy(src: Path, dst: Path, *, as_of: date | None) -> PreparedCopy:
     """Write the engine copy of ``src`` to ``dst``.
 
-    External references with no cached value are left as they are: IronCalc then gives
-    ``#REF!`` and the trust run reports the cell.
+    The same rewrites apply to defined names in ``xl/workbook.xml``. External references
+    with no cached value are left as they are: IronCalc then gives an error (``#REF!``,
+    or ``#ERROR!`` when the book has an external-link part) and the trust run reports
+    the cell. ``stripped`` counts formula cells plus the non-anchor cells of array ranges.
 
     Raises:
         CalcInputError: if ``src`` is not a readable xlsx package.
@@ -301,7 +328,9 @@ def prepare_engine_copy(src: Path, dst: Path, *, as_of: date | None) -> Prepared
         for item in zin.infolist():
             data = zin.read(item.filename)
             sheet = sheets.get(item.filename)
-            if sheet is not None:
+            if item.filename == "xl/workbook.xml":
+                data = _prepare_workbook_xml(data.decode("utf-8"), rewriter).encode("utf-8")
+            elif sheet is not None:
                 res = _prepare_sheet(data.decode("utf-8"), sheet, rewriter)
                 data = res.xml.encode("utf-8")
                 stripped += res.stripped
