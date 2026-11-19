@@ -25,7 +25,9 @@ from loguru import logger
 
 from xl_marinade.calc.engine import Engine, EngineValue
 from xl_marinade.calc.formula_ast import (
+    ALWAYS_ARRAY,
     END,
+    ERROR_CODES,
     SHEET,
     function_name,
     literal,
@@ -47,9 +49,6 @@ from xl_marinade.core.ref_converter import quote_sheet_name
 PROBE_SHEET = "_marinade_probes"
 NEAR_TOLERANCE = 1e-12
 
-_ERROR_LITERALS = frozenset(
-    {"#NULL!", "#DIV/0!", "#VALUE!", "#REF!", "#NAME?", "#NUM!", "#N/A", "#GETTING_DATA"}
-)
 _COMPARISONS = frozenset({"<", "<=", ">", ">=", "=", "<>"})
 _NEAR_COMPARE = _COMPARISONS | {"lookup"}
 # Functions that bind names: nothing beneath them can be lifted on its own.
@@ -129,6 +128,8 @@ class ProbeReadings:
     near_rounding: set[CellRef]
     near_comparison: set[CellRef]
     dynamic_refs: dict[CellRef, list[CellRef]]
+    dynamic_unread: set[CellRef] = field(default_factory=set)
+    """Cells with a dynamic-ref probe that errored or could not be parsed."""
 
 
 class NameScopes(Protocol):
@@ -151,7 +152,9 @@ def _half(y: float) -> bool:
 
 
 def _whole(y: float) -> bool:
-    return _near(y, float(round(y)))
+    # Exactly on the boundary is not near (typed whole numbers sit there); only a
+    # value a hair off it is.
+    return y != round(y) and _near(y, float(round(y)))
 
 
 def near_flip(fn: str, x: float, arg: float | None) -> bool:
@@ -229,8 +232,11 @@ def _const(value: object) -> str:
     if isinstance(value, bool):
         return "TRUE" if value else "FALSE"
     if isinstance(value, str):
-        # The parser keeps error literals and text literals alike as str.
-        return value if value.upper() in _ERROR_LITERALS else _text_literal(value)
+        # The parser keeps error literals and text literals alike as str, so neither
+        # can be written back faithfully.
+        if value.upper() in ERROR_CODES:
+            raise ValueError(f"cannot lift error-code constant {value!r}")
+        return _text_literal(value)
     if isinstance(value, float):
         return repr(value)
     return str(value)
@@ -335,24 +341,27 @@ class _Planner:
             return
         self.probes.append(Probe(kind, self.cell, self.family, ordinal, formulas, meta))
 
-    def visit(self, node: ASTNode, in_cond: bool, scoped: bool) -> None:
+    def visit(self, node: ASTNode, in_cond: bool, blocked: bool) -> None:
+        """Probe ``node`` and its children; ``blocked`` probes go unplaced (under
+        ``LET``/``LAMBDA``, in an array formula or an always-array function)."""
         if isinstance(node, BinaryNode):
             if in_cond and node.operator in _COMPARISONS:
-                self.add(ProbeKind.comparison, scoped, lambda: self._comparison(node))
-            self.visit(node.left, in_cond, scoped)
-            self.visit(node.right, in_cond, scoped)
+                self.add(ProbeKind.comparison, blocked, lambda: self._comparison(node))
+            self.visit(node.left, in_cond, blocked)
+            self.visit(node.right, in_cond, blocked)
             return
         if isinstance(node, UnaryNode):
-            self.visit(node.operand, in_cond, scoped)
+            self.visit(node.operand, in_cond, blocked)
             return
         if not isinstance(node, FunctionNode):
             return
         name = function_name(node.name)
-        scoped = scoped or name in _SCOPING
-        self._probe_function(node, name, scoped)
+        blocked = blocked or name in _SCOPING
+        self._probe_function(node, name, blocked)
+        inner = blocked or name in ALWAYS_ARRAY
         conds = _condition_args(name, len(node.args))
         for i, arg in enumerate(node.args):
-            self.visit(arg, in_cond or i in conds, scoped)
+            self.visit(arg, in_cond or i in conds, inner)
 
     def _probe_function(self, node: FunctionNode, name: str, scoped: bool) -> None:
         if name in _BRANCHES and node.args:
@@ -372,20 +381,24 @@ class _Planner:
         return (self.lift(node.left), self.lift(node.right)), {"operator": node.operator}
 
     def _branch(self, node: FunctionNode, name: str) -> tuple[tuple[str, ...], dict[str, str]]:
-        args = [self.lift(a) for a in node.args]
+        # Only the deciding arguments are lifted: what a branch returns is irrelevant.
+        args = node.args
         meta = {"function": name}
-        if name == "IF":
-            return (f'IF({args[0]},"TRUE","FALSE")',), meta
         if name == "IFS":
-            pairs = [f'{c},"{i}"' for i, c in enumerate(args[0:-1:2], 1)]
+            pairs = [f'{self.lift(c)},"{i}"' for i, c in enumerate(args[0:-1:2], 1)]
             return (f'{node.name}({",".join(pairs)},TRUE,"none")',), meta
         if name == "SWITCH":
-            cases = [f'{v},"{i}"' for i, v in enumerate(args[1:-1:2], 1)]
-            return (f'{node.name}({",".join([args[0], *cases])},"default")',), meta
+            cases = [f'{self.lift(v)},"{i}"' for i, v in enumerate(args[1:-1:2], 1)]
+            # No default: an unmatched value is #N/A in the cell, so it reads "error".
+            default = ',"default"' if len(args) % 2 == 0 else ""
+            return (f"{node.name}({','.join([self.lift(args[0]), *cases])}{default})",), meta
+        first = self.lift(args[0])
+        if name == "IF":
+            return (f'IF({first},"TRUE","FALSE")',), meta
         if name == "CHOOSE":
-            return (f"TRUNC({args[0]})",), {**meta, "choices": str(len(args) - 1)}
+            return (f"TRUNC({first})",), {**meta, "choices": str(len(args) - 1)}
         test = "ISERROR" if name == "IFERROR" else "ISNA"
-        return (f"{test}({args[0]})",), meta
+        return (f"{test}({first})",), meta
 
     def _keys(self, node: FunctionNode, name: str) -> tuple[str, str]:
         """Key vector and its length, as formula text."""
@@ -497,8 +510,9 @@ def plan_probes(graph: WorkbookGraph, cells: Iterable[CellRef], *, cap: int) -> 
     """Plan probes for the branch, lookup, rounding, comparison and dynamic-ref
     nodes of each cell's formula; cells are taken in sorted order.
 
-    A node that :func:`anchor` cannot lift, any node beneath ``LET``/``LAMBDA``, and
-    every probe beyond ``cap`` is recorded in ``unplaced`` (one entry per probe).
+    A node that :func:`anchor` cannot lift, any node beneath ``LET``/``LAMBDA``,
+    every node of an array formula or inside an always-array function's arguments
+    (``SUMPRODUCT``...), and every probe beyond ``cap`` is recorded in ``unplaced`` (one entry per probe).
     Unparseable formulas produce no probes (the pattern scan refuses them).
     """
     planner = _Planner(graph, cap)
@@ -513,7 +527,7 @@ def plan_probes(graph: WorkbookGraph, cells: Iterable[CellRef], *, cap: int) -> 
         planner.cell = cell
         planner.family = graph.family(cell)
         planner.counters = {}
-        planner.visit(root, False, False)
+        planner.visit(root, False, graph.is_array_formula(cell))
     return ProbePlan(planner.probes, planner.unplaced)
 
 
@@ -587,13 +601,13 @@ def _comparison_near(probe: Probe, values: list[EngineValue]) -> bool:
     return near_flip(probe.meta["operator"], a, b)
 
 
-def _text_cells(text: EngineValue, sheet: str) -> list[CellRef]:
-    """Cells of an ``INDIRECT`` text address (A1 style), or [] when not a plain range."""
+def _text_cells(text: EngineValue, sheet: str) -> list[CellRef] | None:
+    """Cells of an ``INDIRECT`` text address (A1 style); None when not a plain range."""
     if not isinstance(text, str) or _is_error(text):
-        return []
+        return None
     m = _TEXT_REF.match(text.strip())
     if m is None:
-        return []
+        return None
     target = _unquote(m.group("sheet")) if m.group("sheet") else sheet
     r1, c1 = int(m.group("r1")), _col_to_number(m.group("c1"))
     r2 = int(m.group("r2")) if m.group("r2") else r1
@@ -605,12 +619,13 @@ def _rect(sheet: str, row: int, col: int, rows: int, cols: int) -> list[CellRef]
     return [CellRef(sheet, r, c) for r in range(row, row + rows) for c in range(col, col + cols)]
 
 
-def _dynamic_cells(probe: Probe, values: list[EngineValue]) -> list[CellRef]:
+def _dynamic_cells(probe: Probe, values: list[EngineValue]) -> list[CellRef] | None:
+    """The cells a dynamic reference landed on; None when the reading is unusable."""
     if probe.meta["function"] == "INDIRECT":
         return _text_cells(values[0], probe.meta["sheet"])
     nums = [v for v in values if isinstance(v, float)]
-    if len(nums) != 4:
-        return []
+    if len(nums) != 4 or nums[2] < 1 or nums[3] < 1:
+        return None
     row, col, rows, cols = (int(v) for v in nums)
     return _rect(probe.meta["sheet"], row, col, rows, cols)
 
@@ -633,6 +648,9 @@ def read_probes(engine: Engine, plan: ProbePlan) -> ProbeReadings:
             if _comparison_near(probe, values):
                 readings.near_comparison.add(probe.cell)
         else:
-            dynamic.setdefault(probe.cell, set()).update(_dynamic_cells(probe, values))
+            landed = _dynamic_cells(probe, values)
+            dynamic.setdefault(probe.cell, set()).update(landed or ())
+            if landed is None:
+                readings.dynamic_unread.add(probe.cell)
     readings.dynamic_refs = {cell: sorted(cells) for cell, cells in dynamic.items()}
     return readings

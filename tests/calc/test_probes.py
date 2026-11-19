@@ -6,6 +6,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+from openpyxl.worksheet.formula import ArrayFormula
 
 pytest.importorskip("ironcalc")
 
@@ -78,7 +79,13 @@ def test_near_flip() -> None:
 def test_near_flip_other_functions() -> None:
     assert near_flip("ROUNDUP", 1.2300000000000002, 2) is True
     assert near_flip("ROUNDDOWN", 1.235, 2) is False
-    assert near_flip("TRUNC", 7.0, None) is True
+    # Exactly on an integer / multiple is not near (ruling); a hair off it is.
+    assert near_flip("TRUNC", 7.0, None) is False
+    assert near_flip("TRUNC", 7.000000000000001, None) is True
+    assert near_flip("INT", 3.0, None) is False
+    assert near_flip("ROUNDUP", 1.5, 1) is False
+    assert near_flip("CEILING", 6.0, 3) is False
+    assert near_flip("FLOOR", 6.0, None) is False
     assert near_flip("TRUNC", 7.5, None) is False
     assert near_flip("INT", 3.5, None) is False
     assert near_flip("MROUND", 5.0, 2) is True  # 2.5 is a half-integer
@@ -191,7 +198,7 @@ def test_branch_kinds(make_book: Book, ir_for: IrFor) -> None:
         (_c("B1"), 0): "2",
         (_c("B2"), 0): "none",
         (_c("B3"), 0): "2",
-        (_c("B4"), 0): "default",
+        (_c("B4"), 0): "error",  # no case, no default: the cell is #N/A
         (_c("B5"), 0): "2",
         (_c("B6"), 0): "error",
         (_c("B7"), 0): "error",
@@ -267,7 +274,7 @@ def test_near_rounding_and_comparison_readings(make_book: Book, ir_for: IrFor) -
     assert [p.meta["function"] for p in rounding] == ["ROUND", "ROUND", "INT"]
     assert not any(p.cell == _c("B7") for p in plan.probes if p.kind is ProbeKind.comparison)
     got = _read(engine, plan)
-    assert got.near_rounding == {_c("B1"), _c("B8")}
+    assert got.near_rounding == {_c("B1")}  # INT(2.0) sits exactly on the boundary
     assert got.near_comparison == {_c("B3"), _c("B5")}
 
 
@@ -290,8 +297,79 @@ def test_dynamic_ref_probe(make_book: Book, ir_for: IrFor) -> None:
     assert got[_c("B2")] == [_c("A3")]
     assert got[_c("B3")] == [_c("B3", "Other"), _c("C3", "Other")]
     assert got[_c("B4")] == [_c("B2")]
+    assert _read(engine, plan).dynamic_unread == set()
     engine.set_value(_c("C1"), 0.0)
     assert _read(engine, plan).dynamic_refs[_c("B1")] == [_c("A1"), _c("A2")]
+
+
+def test_unreadable_dynamic_refs_are_reported(make_book: Book, ir_for: IrFor) -> None:
+    cells: dict[str, object] = {
+        "C1": 4,
+        "D1": "A:A",
+        "B1": F("=SUM(OFFSET(A1,C1,0,2,1))", 0),
+        "B2": F("=SUM(INDIRECT(D1))", 0),  # whole column: text not a plain range
+        "B3": F("=SUM(OFFSET(A1,C1,0),INDIRECT(D1))", 0),
+    }
+    _graph, engine, plan = _setup(make_book, ir_for, cells)
+    got = _read(engine, plan)
+    assert got.dynamic_unread == {_c("B2"), _c("B3")}
+    assert got.dynamic_refs[_c("B2")] == []
+    assert got.dynamic_refs[_c("B3")] == [_c("A5")]  # the readable one is kept
+    engine.set_value(_c("C1"), -5.0)  # OFFSET off the sheet: #REF!
+    got = _read(engine, plan)
+    assert _c("B1") in got.dynamic_unread and got.dynamic_refs[_c("B1")] == []
+
+
+def test_branch_probe_lifts_only_the_deciding_arguments(make_book: Book, ir_for: IrFor) -> None:
+    cells: dict[str, object] = {
+        "A1": 2,
+        "B1": F("=IF(A1>1,1,ROW())", 1),
+        "B2": F("=IF(A1>1,IF(A1>5,ROW(),2),3)", 2),
+        "B3": F("=_xlfn.SWITCH(A1,2,COLUMN(),0)", 2),
+        "B4": F("=IFERROR(1/A1,ROW())", 0.5),
+    }
+    _graph, engine, plan = _setup(make_book, ir_for, cells)
+    assert plan.unplaced == {}
+    assert _read(engine, plan).branch == {
+        (_c("B1"), 0): "TRUE",
+        (_c("B2"), 0): "TRUE",
+        (_c("B2"), 1): "FALSE",
+        (_c("B3"), 0): "1",
+        (_c("B4"), 0): "ok",
+    }
+
+
+def test_error_code_text_is_not_lifted() -> None:
+    with pytest.raises(ValueError, match="error-code"):
+        _anchor('IF(A1="#REF!",1,0)', "S")
+    assert _anchor('IF(A1="#REFS",1,0)', "S") == 'IF(S!$A$1="#REFS",1,0)'
+
+
+def test_error_code_text_goes_unplaced(make_book: Book, ir_for: IrFor) -> None:
+    cells: dict[str, object] = {"A1": "#REF!", "B1": F('=IF(A1="#REF!",1,0)', 1)}
+    _graph, _engine, plan = _setup(make_book, ir_for, cells)
+    assert plan.probes == []
+    assert plan.unplaced[_c("B1")] == [ProbeKind.branch, ProbeKind.comparison]
+
+
+def test_array_contexts_go_unplaced(make_book: Book, ir_for: IrFor) -> None:
+    cells: dict[str, object] = {
+        "A1": 2,
+        "A2": 3,
+        "B1": F(ArrayFormula("B1", "=SUM(IF(A1:A2>1,1,0))"), 2),
+        "B2": F("=SUMPRODUCT(ROUND(A1:A2,0))+ROUND(A1,0)", 7),
+        "B3": F('=IF(A1>1,"a","b")', "a"),
+    }
+    _graph, _engine, plan = _setup(make_book, ir_for, cells)
+    assert plan.unplaced == {
+        _c("B1"): [ProbeKind.branch, ProbeKind.comparison],
+        _c("B2"): [ProbeKind.rounding],
+    }
+    assert [(p.cell, p.kind, p.ordinal) for p in plan.probes] == [
+        (_c("B2"), ProbeKind.rounding, 1),
+        (_c("B3"), ProbeKind.branch, 0),
+        (_c("B3"), ProbeKind.comparison, 0),
+    ]
 
 
 def test_unliftable_goes_unplaced(make_book: Book, ir_for: IrFor) -> None:
