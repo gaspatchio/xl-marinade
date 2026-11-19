@@ -4,7 +4,8 @@ This layer only parses arguments, calls the ``xl_marinade`` library, renders
 output, and maps the typed error hierarchy to process exit codes. It contains
 no business logic — that all lives in ``xl_marinade.core``.
 
-Exit codes: 0 success, 1 generic error, 3 memory-budget exceeded, 4 LLM unavailable.
+Exit codes: 0 success, 1 generic error, 3 memory-budget exceeded, 4 LLM unavailable,
+5 calc engine unavailable, 6 workbook refused for recalculation.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ from __future__ import annotations
 import importlib.metadata
 import importlib.util
 import json
+from datetime import date
 from pathlib import Path
 
 import typer
@@ -19,7 +21,13 @@ from rich.console import Console
 from rich.markup import escape
 
 import xl_marinade
-from xl_marinade.errors import LLMUnavailable, MarinadeError, MemoryBudgetExceeded
+from xl_marinade.errors import (
+    CalcUnavailable,
+    LLMUnavailable,
+    MarinadeError,
+    MemoryBudgetExceeded,
+    WorkbookRefused,
+)
 
 app = typer.Typer(add_completion=False)
 _err = Console(stderr=True)
@@ -187,6 +195,79 @@ def values(
         _err.print(f"[red]error:[/] {escape(str(exc))}")
         raise typer.Exit(code=1)
     _err.print(f"[green]wrote[/] {rows_path}")
+
+
+@app.command()
+def calc(
+    workbook: Path = typer.Argument(
+        ..., exists=True, dir_okay=False, readable=True, help="Excel workbook (.xlsx/.xlsm)."
+    ),
+    policies: Path = typer.Option(
+        ..., "--policies", exists=True, dir_okay=False, readable=True, help="Policies CSV file."
+    ),
+    input_map: Path = typer.Option(
+        ..., "--map", exists=True, dir_okay=False, readable=True, help="map.json (inputs)."
+    ),
+    outputs: list[str] = typer.Option(
+        [], "--outputs", help="Output cell or range reference; repeat for several."
+    ),
+    variables: Path | None = typer.Option(
+        None, "--variables", exists=True, dir_okay=False, readable=True, help="vars.json file."
+    ),
+    check_against: Path | None = typer.Option(
+        None,
+        "--check-against",
+        exists=True,
+        dir_okay=False,
+        readable=True,
+        help="Input sets with stored workbook results to check the recalculation against.",
+    ),
+    ir: Path | None = typer.Option(
+        None, "--ir", exists=True, dir_okay=False, readable=True, help="Reuse this IR database."
+    ),
+    as_of: str | None = typer.Option(None, "--as-of", help="Valuation date, YYYY-MM-DD."),
+    tolerance: float = typer.Option(1e-9, "--tolerance", help="Numeric comparison tolerance."),
+    probe_cap: int = typer.Option(50_000, "--probe-cap", help="Maximum number of probe cells."),
+    out: Path = typer.Option(..., "--out", "-o", help="Output directory."),
+) -> None:
+    """Experimental: recalculate a workbook per policy and report how far to trust each value."""
+    from xl_marinade.calc import CalcRequest
+    from xl_marinade.calc import calc as _calc
+
+    try:
+        as_of_date = date.fromisoformat(as_of) if as_of is not None else None
+    except ValueError:
+        _err.print(f"[red]error:[/] --as-of must be YYYY-MM-DD, got {escape(as_of or '')}")
+        raise typer.Exit(code=1)
+    try:
+        result = _calc(
+            CalcRequest(
+                workbook=workbook,
+                policies=policies,
+                input_map=input_map,
+                out_dir=out,
+                outputs=list(outputs),
+                variables=variables,
+                check_against=check_against,
+                ir=ir,
+                as_of=as_of_date,
+                tolerance=tolerance,
+                probe_cap=probe_cap,
+            )
+        )
+    except CalcUnavailable as exc:
+        _err.print(f"[red]error:[/] {escape(str(exc))}")
+        _err.print("[yellow]hint:[/] pip install 'xl-marinade\\[calc]'")
+        raise typer.Exit(code=5)
+    except WorkbookRefused as exc:
+        _err.print(f"[red]error:[/] {escape(str(exc))}")
+        for reason in exc.reasons:
+            _err.print(f"  - {escape(reason)}")
+        raise typer.Exit(code=6)
+    except MarinadeError as exc:
+        _err.print(f"[red]error:[/] {escape(str(exc))}")
+        raise typer.Exit(code=1)
+    _err.print(f"[green]wrote[/] {result.results_csv.parent}")
 
 
 def main() -> None:
