@@ -22,6 +22,7 @@ NON_RANGE = "approximate lookup on a non-range table"
 IMPLICIT = "implicit intersection on multi-cell name"
 IMPLICIT_RANGE = "implicit intersection on multi-cell range"
 NAME_FORMULA = "name holds a formula"
+WHOLE_LINE = "approximate lookup on whole column"
 
 
 def _c(a1: str) -> CellRef:
@@ -88,7 +89,6 @@ def test_approximate_lookup_on_sorted_column_is_not_refused(make_book: Book, ir_
             "D2": F("=MATCH(4,A1:A5,1)", 2),
             "D3": F("=LOOKUP(4,A1:A5,B1:B5)", 20),
             "D4": F('=_xlfn.XLOOKUP(4,A1:A5,B1:B5,"none",0,2)', "#N/A"),
-            "D5": F("=VLOOKUP(4,A:B,2)", 20),
         },
     )
     assert found == {}
@@ -183,6 +183,27 @@ def test_hlookup_uses_first_row_and_lookup_is_always_approximate(
     assert _details(found, "D4") == [UNSORTED]
 
 
+def test_approximate_lookup_on_whole_column_or_row(make_book: Book, ir_for: IrFor) -> None:
+    # IronCalc 0.9.1: approximate MATCH over a whole column returns 1048576 where
+    # Excel returns the last key at or below the value, even on sorted keys.
+    found = _scan(
+        make_book,
+        ir_for,
+        {
+            **SORTED_KEYS,
+            "D1": F("=MATCH(4,A:A)", 2),
+            "D2": F("=VLOOKUP(4,$A:$B,2,TRUE)", 0),
+            "D3": F("=HLOOKUP(4,1:2,1)", 1),
+            "D4": F("=LOOKUP(4,S!A:A)", 3),
+            "D5": F("=MATCH(4,A:A,0)", "#N/A"),  # exact: fine
+            "D6": F("=MATCH(4,A1:A4)", 2),
+        },
+    )
+    for a1 in ("D1", "D2", "D3", "D4"):
+        assert _details(found, a1) == [WHOLE_LINE], a1
+    assert _c("D5") not in found and _c("D6") not in found
+
+
 def test_approximate_lookup_through_a_defined_name(make_book: Book, ir_for: IrFor) -> None:
     found = _scan(
         make_book,
@@ -212,7 +233,7 @@ def test_implicit_intersection_on_multi_cell_name(make_book: Book, ir_for: IrFor
     assert _details(found, "D1") == [IMPLICIT]
     assert _details(found, "D2") == [IMPLICIT]
     assert _c("D3") not in found
-    assert _c("D4") not in found
+    assert _c("D4") not in found and _c("D7") not in found
     assert _details(found, "D5") == [IMPLICIT]
     assert _details(found, "D6") == [IMPLICIT]
 
@@ -271,9 +292,12 @@ def test_unparseable_formula(make_book: Book, ir_for: IrFor) -> None:
             "D2": F("=SUM({1,2})", 3),  # array constant: the parser mangles it
             "D3": F("=A1:A2 A1:B1", 1),  # the parser drops the intersection
             "D4": F("=A1+1", 2),
+            "D5": F("=IFERROR(1/A1,#N/A)", 1),  # the parser splits #N/A at the slash
+            "D6": F("=IF(A1=0,#DIV/0!,1)", 1),
+            "D7": F('=IF(A1="#N/A",1,0)', 0),  # text, not an error literal
         },
     )
-    for a1 in ("D1", "D2", "D3"):
+    for a1 in ("D1", "D2", "D3", "D5", "D6"):
         assert _details(found, a1) == ["unparseable formula"], a1
     assert _c("D4") not in found
 
@@ -305,7 +329,7 @@ def test_binary_search_xlookup_and_whole_column_on_unsorted_keys(
     )
     assert _details(found, "D1") == [UNSORTED]
     assert _c("D2") not in found
-    assert _details(found, "D3") == [UNSORTED]
+    assert _details(found, "D3") == [WHOLE_LINE]
     assert _details(found, "D4") == [UNSORTED]
 
 

@@ -18,6 +18,8 @@ from typing import Literal
 from loguru import logger
 
 from xl_marinade.calc.formula_ast import (
+    ALWAYS_ARRAY,
+    ERROR_CODES,
     SHEET,
     UNKNOWN,
     function_name,
@@ -40,6 +42,7 @@ from xl_marinade.errors import CalcInputError
 UNSORTED = "approximate lookup on unsorted column"
 MIXED = "approximate lookup on mixed text and numbers"
 NON_RANGE = "approximate lookup on a non-range table"
+WHOLE_LINE = "approximate lookup on whole column"
 IMPLICIT = "implicit intersection on multi-cell name"
 IMPLICIT_RANGE = "implicit intersection on multi-cell range"
 NAME_FORMULA = "name holds a formula"
@@ -51,41 +54,6 @@ _MAX_ROW = 1_048_576
 _MAX_COL = 16_384
 _RANDOM = frozenset({"RAND", "RANDBETWEEN", "RANDARRAY"})
 _CLOCK = frozenset({"TODAY", "NOW"})
-# Functions whose arguments are array-evaluated in every Excel version.
-_ALWAYS_ARRAY = frozenset(
-    {
-        "SUMPRODUCT",
-        "MMULT",
-        "MDETERM",
-        "MINVERSE",
-        "TRANSPOSE",
-        "FREQUENCY",
-        "LINEST",
-        "LOGEST",
-        "TREND",
-        "GROWTH",
-    }
-)
-_ERRORS = frozenset(
-    {
-        "#NULL!",
-        "#DIV/0!",
-        "#VALUE!",
-        "#REF!",
-        "#NAME?",
-        "#NUM!",
-        "#N/A",
-        "#GETTING_DATA",
-        "#SPILL!",
-        "#CALC!",
-        "#FIELD!",
-        "#BLOCKED!",
-        "#CONNECT!",
-        "#BUSY!",
-        "#UNKNOWN!",
-    }
-)
-
 # Text keys made only of these characters sort the same in Python and in Excel's
 # collation (which ignores hyphens/apostrophes, puts ``_`` before digits and files
 # accented letters beside their base letter).
@@ -127,7 +95,7 @@ def _walk(root: ASTNode) -> Iterator[tuple[ASTNode, bool]]:
         node, direct, in_array = stack.pop()
         yield node, direct or in_array
         if isinstance(node, FunctionNode):
-            inner = in_array or function_name(node.name) in _ALWAYS_ARRAY
+            inner = in_array or function_name(node.name) in ALWAYS_ARRAY
             stack.extend((arg, True, inner) for arg in reversed(node.args))
         elif isinstance(node, BinaryNode):
             stack.extend([(node.right, False, in_array), (node.left, False, in_array)])
@@ -297,7 +265,7 @@ def _kind(value: StoredValue) -> str:
         return "bool"
     if isinstance(value, float):
         return "number"
-    if isinstance(value, str) and value in _ERRORS:
+    if isinstance(value, str) and value in ERROR_CODES:
         return "error"
     return "text"
 
@@ -334,6 +302,12 @@ def _lookup_problem(
     key = (cell.sheet, table.ref, axis, frozenset(orders))
     if key in scan.lookups:
         return scan.lookups[key]
+    parsed = _ref_rect(table.ref, cell.sheet)
+    if parsed is not None and parsed[1]:
+        # IronCalc 0.9.1's approximate MATCH over a whole column/row returns the last
+        # row (1048576) where Excel returns the last key at or below the value.
+        scan.lookups[key] = WHOLE_LINE
+        return WHOLE_LINE
     resolved = _table_cells(scan, cell, table.ref)
     problem = (
         NON_RANGE

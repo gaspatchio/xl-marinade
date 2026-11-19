@@ -27,6 +27,46 @@ END = rf"(?:{CELL}|\$?[A-Za-z]{{1,3}}|\$?[0-9]+|{NAME})"
 VALID_REF = re.compile(rf"^(?:{SHEET}!)?{END}(?::(?:{SHEET}!)?{END})?$")
 STRUCTURED = re.compile(r"^[A-Za-z_\\][\w.\\]*\[.*\]$")
 
+# Functions whose arguments are array-evaluated in every Excel version.
+ALWAYS_ARRAY = frozenset(
+    {
+        "SUMPRODUCT",
+        "MMULT",
+        "MDETERM",
+        "MINVERSE",
+        "TRANSPOSE",
+        "FREQUENCY",
+        "LINEST",
+        "LOGEST",
+        "TREND",
+        "GROWTH",
+    }
+)
+ERROR_CODES = frozenset(
+    {
+        "#NULL!",
+        "#DIV/0!",
+        "#VALUE!",
+        "#REF!",
+        "#NAME?",
+        "#NUM!",
+        "#N/A",
+        "#GETTING_DATA",
+        "#SPILL!",
+        "#CALC!",
+        "#FIELD!",
+        "#BLOCKED!",
+        "#CONNECT!",
+        "#BUSY!",
+        "#UNKNOWN!",
+    }
+)
+
+# Error literals the core parser splits at ``/`` (``#N/A`` -> ``"#N" / A``).
+_SPLIT_ERROR = re.compile(r"#(?:N/A|DIV/0!)", re.IGNORECASE)
+# Text where ``#`` is not an error literal: strings, quoted sheets, structured refs.
+_SKIPPED = re.compile(r"\"(?:[^\"]|\"\")*\"|'(?:[^']|'')*'|\[[^\]]*\]")
+
 UNKNOWN = object()
 """Sentinel returned by :func:`literal` for a non-literal argument."""
 
@@ -69,9 +109,12 @@ def parse_formula(text: str) -> ASTNode | None:
     """Parse the formula; None when the parser raised or the parse looks mangled.
 
     The core parser silently stops at text it cannot place (an intersection space,
-    ``INDEX(...):B3``) and turns array constants into garbage references, so a
-    parse that left text behind or holds an implausible reference is rejected too.
+    ``INDEX(...):B3``), turns array constants into garbage references and splits
+    ``#N/A`` / ``#DIV/0!`` at the slash, so a parse that left text behind, holds an
+    implausible reference or contains such an error literal is rejected too.
     """
+    if _SPLIT_ERROR.search(_SKIPPED.sub("", text)):
+        return None
     parser = FormulaParser()
     try:
         root = parser.parse(text)
