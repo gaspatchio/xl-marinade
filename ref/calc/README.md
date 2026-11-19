@@ -1,7 +1,8 @@
 # Recalculating a workbook for new inputs (`marinade calc`): engine comparison
 
 Status: **investigation only. Nothing is built.** This note records the evidence behind
-choosing an engine, and the plan it points to.
+choosing an engine, and the plan it points to. The approved design for PR 1 is
+[`specs/01-calculator-and-trust-report-design.md`](specs/01-calculator-and-trust-report-design.md).
 
 ## The question
 
