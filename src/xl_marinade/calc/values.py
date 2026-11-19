@@ -11,7 +11,7 @@ from xl_marinade.calc.config import load_input_map, load_variables
 from xl_marinade.calc.graph import StoredValue, WorkbookGraph, open_graph
 from xl_marinade.calc.models import CellRef, Reason, Status
 from xl_marinade.calc.output import write_rows
-from xl_marinade.calc.rows import expand_variables, period_0_cell, rows_for
+from xl_marinade.calc.rows import expand_variables, rows_for, variables_record
 from xl_marinade.errors import CalcInputError
 
 
@@ -61,17 +61,7 @@ def values(req: ValuesRequest) -> Path:
     rows_path = req.out_dir / "rows.csv"
     write_rows(rows_path, rows)
 
-    run: dict[str, object] = {"variables": {}}
-    by_name = {s.name: s for s in specs}
-    entries: dict[str, dict[str, object]] = {}
-    for var in variables:
-        p0 = period_0_cell(var)
-        entries[var.name] = {
-            "range": by_name[var.name].target,
-            "period_start": var.period_start,
-            "period_0_cell": p0.a1() if p0 else None,
-        }
-    run["variables"] = entries
+    run: dict[str, object] = {"variables": variables_record(specs, variables)}
     (req.out_dir / "run.json").write_text(
         json.dumps(run, indent=2) + "\n", encoding="utf-8", newline="\n"
     )

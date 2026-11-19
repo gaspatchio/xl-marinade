@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import os
+import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +28,40 @@ def _import_ironcalc() -> Any:
             "the calc engine is not installed; run pip install 'xl-marinade[calc]'"
         ) from exc
     return ironcalc
+
+
+@contextmanager
+def quiet_native_output() -> Iterator[None]:
+    """Send fds 1 and 2 to ``os.devnull`` for the duration.
+
+    IronCalc's Rust code prints diagnostics (``Unexpected type (empty) ...``) straight
+    to the process's stdout/stderr when it loads a cache-free copy; Python-level
+    redirection cannot catch them.
+    """
+    sys.stdout.flush()
+    sys.stderr.flush()
+    saved = [os.dup(1), os.dup(2)]
+    try:
+        with open(os.devnull, "wb") as devnull:
+            os.dup2(devnull.fileno(), 1)
+            os.dup2(devnull.fileno(), 2)
+        yield
+    finally:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os.dup2(saved[0], 1)
+        os.dup2(saved[1], 2)
+        os.close(saved[0])
+        os.close(saved[1])
+
+
+def engine_version() -> str | None:
+    """The installed IronCalc version, or None when it is not installed."""
+    try:
+        ironcalc = _import_ironcalc()
+    except CalcUnavailable:
+        return None
+    return str(getattr(ironcalc, "__version__", "unknown"))
 
 
 class Engine:
@@ -70,6 +108,10 @@ class Engine:
             self._model.update_cell_with_text(idx, cell.row, cell.col, value)
             return
         self._model.update_cell_with_number(idx, cell.row, cell.col, float(value))
+
+    def clear(self, cell: CellRef) -> None:
+        """Delete a cell's contents (it reads back as empty)."""
+        self._model.clear_cell_contents(self._sheet(cell), cell.row, cell.col)
 
     def set_formula(self, cell: CellRef, formula: str) -> None:
         """Set a formula; a missing leading ``=`` is added."""

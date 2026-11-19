@@ -90,3 +90,20 @@ def rows_for(
             period = None if var.period_start is None else var.period_start + i
             rows.append(Row(policy, var.name, period, value, status, list(reasons)))
     return rows
+
+
+def variables_record(
+    specs: list[VariableSpec], variables: list[VariableCells]
+) -> dict[str, dict[str, object]]:
+    """``run.json``'s ``variables``: per variable its range, ``period_start`` and the
+    cell period 0 falls on (None for a single cell or when it is off the sheet)."""
+    by_name = {s.name: s for s in specs}
+    entries: dict[str, dict[str, object]] = {}
+    for var in variables:
+        p0 = period_0_cell(var)
+        entries[var.name] = {
+            "range": by_name[var.name].target,
+            "period_start": var.period_start,
+            "period_0_cell": p0.a1() if p0 else None,
+        }
+    return entries
