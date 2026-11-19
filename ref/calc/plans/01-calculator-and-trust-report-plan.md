@@ -444,7 +444,7 @@ def test_unliftable_goes_unplaced(...):      # LET(...) and cap=0 cases
 
 **Files:**
 - Create: `docs/guide/calc.md`
-- Modify: `mkdocs.yml` (nav), `skills/using-xl-marinade/SKILL.md` (section "Recalculating with `marinade calc` (experimental)"), generated manifests via `uv run python scripts/gen_skill_manifests.py`, `CHANGELOG.md` (`## [Unreleased]` → `### Added`), `README.md` (one line under commands)
+- Modify: `mkdocs.yml` (nav), `skills/using-xl-marinade/SKILL.md` (section "Recalculating with `marinade calc` (experimental)"), generated manifests via `uv run python scripts/gen_skill_manifests.py`, `CHANGELOG.md` (`## [Unreleased]` → `### Added`), `README.md` (one line under commands), `docs/reference/cli.md` (both commands, every option, exit codes 5 and 6), `docs/ai/skills.md` (the workflow lines that list `extract` / `document` / `diff`), `ref/calc/README.md` (status line: PR 1 built, experimental)
 - Create: `ref/calc/upstream/` with one openpyxl script per IronCalc gap (text-vs-number approximate `VLOOKUP`, implicit intersection, `'S'!A1:'S'!A3` range, 1904 dates, precision as displayed) — each prints Excel's documented result and IronCalc's
 
 - [ ] **Step 1:** Write the guide: what `calc` is for, the four files in, the files out, the statuses and what each means, the fixed points, "experimental" up front, and that `period_start` has no default and periods count from it.
