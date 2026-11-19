@@ -163,3 +163,13 @@ class CheckAgainst:
     outputs: dict[str, str]
     table: InputTable | None
     selector: str | None
+
+
+@dataclass(slots=True, frozen=True)
+class WorkbookSettings:
+    """Workbook-level calculation settings that change what a recalculation means."""
+
+    date1904: bool
+    full_precision: bool
+    iterate: bool
+    manual_calc: bool
