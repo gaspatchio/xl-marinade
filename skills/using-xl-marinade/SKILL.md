@@ -217,7 +217,7 @@ marinade values book.xlsx --variables vars.json [--map map.json] -o stored/
 - **Refused even when they reproduce:** approximate lookups on unsorted, mixed,
   whole-column or non-plain-text keys (and `XLOOKUP`/`XMATCH` binary search);
   implicit intersection on a multi-cell name or on a range outside a function
-  argument; names holding a formula; `RAND`/`RANDBETWEEN`/`RANDARRAY`;
+  argument; names holding a formula or constant; `RAND`/`RANDBETWEEN`/`RANDARRAY`;
   `TODAY`/`NOW` without `--as-of`; circular refs; data tables; unparseable
   formulas (an error literal such as `#N/A` typed into a formula is a known
   cause); external references that cannot be held (ranges, no cached value).

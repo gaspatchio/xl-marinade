@@ -180,7 +180,7 @@ the next. They are refused even when the trust run reproduces them. The `detail`
 | `approximate lookup on whole column` | The table is a whole column or row. IronCalc counts empty cells; Excel skips them. |
 | `implicit intersection on multi-cell name` | A single-cell use of a defined name that covers several cells. |
 | `implicit intersection on multi-cell range` | A multi-cell range used outside a function argument. Ranges inside `SUMPRODUCT`, `MMULT` and similar are fine. |
-| `name holds a formula` | A defined name whose value is a formula or constant. IronCalc 0.9.1 rejects such names. |
+| `name holds a formula` | A formula reads a defined name whose definition is a formula or a constant rather than cells (the detail text says "formula" for both). IronCalc 0.9.1 rejects such names. |
 | `RAND`, `RANDBETWEEN`, `RANDARRAY` | Always. |
 | `TODAY`, `NOW` | Unless `--as-of YYYY-MM-DD` is given; then they are replaced by that date. |
 | `circular reference` | Always (iterative calculation is noted in the report, not honoured). |
@@ -200,8 +200,8 @@ the next. They are refused even when the trust run reproduces them. The `detail`
 | Manual calculation mode | Recorded, not refused; stale stored values show as mismatches. |
 | `TODAY`, `NOW` | Refused unless `--as-of`. |
 
-Known IronCalc 0.9.1 gaps, each with a synthetic reproduction, are listed in
-`ref/calc/upstream/` in the repository.
+Known IronCalc 0.9.1 gaps, each with a synthetic reproduction and the way `calc` handles
+it, are listed in `ref/calc/upstream/` in the repository.
 
 ## Exit codes
 

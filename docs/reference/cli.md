@@ -172,6 +172,13 @@ marinade values [OPTIONS] WORKBOOK
 | `--ir FILE` | Reuse this IR database. | extract afresh |
 | `-o`, `--out PATH` | Output directory (`rows.csv` + `run.json`). Required. | |
 
+**Exit codes**
+
+| Code | Meaning |
+|---|---|
+| 0 | Success. |
+| 1 | Error (bad input, unknown sheet, IR from another workbook). |
+
 **Example**
 
 ```bash
