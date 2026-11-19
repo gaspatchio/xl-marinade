@@ -24,8 +24,16 @@ def blocked_ironcalc(monkeypatch):
     monkeypatch.setattr(builtins, "__import__", guard)
 
 
-def test_calc_imports_without_ironcalc(blocked_ironcalc):
-    import xl_marinade.calc  # noqa: F401
+def test_calc_imports_without_ironcalc():
+    # Subprocess so xl_marinade.calc is imported fresh (never already in sys.modules);
+    # a None entry makes any `import ironcalc` raise ImportError.
+    code = (
+        "import sys\n"
+        "sys.modules['ironcalc'] = None\n"
+        "import xl_marinade.calc, xl_marinade.calc.models, xl_marinade.calc.engine\n"
+    )
+    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
 
 
 def test_engine_load_without_ironcalc_raises(blocked_ironcalc, tmp_path):
