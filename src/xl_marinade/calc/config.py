@@ -39,6 +39,8 @@ def _read_json(path: Path) -> Any:
         return json.loads(path.read_text(encoding="utf-8-sig"))
     except OSError as exc:
         raise CalcInputError(f"cannot read {path}: {exc}") from exc
+    except UnicodeDecodeError as exc:
+        raise CalcInputError(f"{path} is not UTF-8 text: {exc}") from exc
     except json.JSONDecodeError as exc:
         raise CalcInputError(f"{path} is not valid JSON: {exc}") from exc
 
@@ -72,6 +74,9 @@ def load_policies(path: Path, input_map: InputMap) -> list[Policy]:
         with path.open(encoding="utf-8-sig", newline="") as fh:
             reader = csv.DictReader(fh)
             header = reader.fieldnames or []
+            dupes = sorted({h for h in header if header.count(h) > 1})
+            if dupes:
+                raise CalcInputError(f"{path} has duplicate column(s): {dupes}")
             if id_col not in header:
                 raise CalcInputError(f"{path} has no id column {id_col!r}")
             missing = [f for f in input_map.fields if f not in header]
@@ -95,6 +100,10 @@ def load_policies(path: Path, input_map: InputMap) -> list[Policy]:
                 policies.append(Policy(id=pid, values=values))
     except OSError as exc:
         raise CalcInputError(f"cannot read {path}: {exc}") from exc
+    except UnicodeDecodeError as exc:
+        raise CalcInputError(f"{path} is not UTF-8 text (save it as CSV UTF-8): {exc}") from exc
+    except csv.Error as exc:
+        raise CalcInputError(f"{path} is not a readable CSV file: {exc}") from exc
     return policies
 
 

@@ -171,3 +171,31 @@ def test_check_against_needs_exactly_one_input_source(tmp_path: Path) -> None:
 
 def test_parse_outputs_dedupes_in_order() -> None:
     assert parse_outputs(["A!B1", "A!B2", "A!B1"]) == ["A!B1", "A!B2"]
+
+
+def test_policies_not_utf8_is_input_error(tmp_path: Path) -> None:
+    p = tmp_path / "p.csv"
+    p.write_bytes("id,name\n1,Jos\xe9\n".encode("cp1252"))
+    with pytest.raises(CalcInputError, match="UTF-8"):
+        load_policies(p, InputMap(fields={"name": "S!B1"}, id_field=None))
+
+
+def test_policies_malformed_csv_is_input_error(tmp_path: Path) -> None:
+    p = tmp_path / "p.csv"
+    p.write_text("id,age\n1," + "9" * 200_000 + "\n", encoding="utf-8")  # over csv's field limit
+    with pytest.raises(CalcInputError, match="CSV"):
+        load_policies(p, InputMap(fields={"age": "S!B1"}, id_field=None))
+
+
+def test_policies_duplicate_header_is_input_error(tmp_path: Path) -> None:
+    p = tmp_path / "p.csv"
+    p.write_text("id,age,age\n1,40,41\n", encoding="utf-8")
+    with pytest.raises(CalcInputError, match="duplicate column.*age"):
+        load_policies(p, InputMap(fields={"age": "S!B1"}, id_field=None))
+
+
+def test_json_not_utf8_is_input_error(tmp_path: Path) -> None:
+    p = tmp_path / "m.json"
+    p.write_bytes('{"fields": {"n\xe9": "S!B1"}}'.encode("cp1252"))
+    with pytest.raises(CalcInputError, match="UTF-8"):
+        load_input_map(p)
