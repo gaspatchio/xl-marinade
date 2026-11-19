@@ -390,3 +390,27 @@ def test_implicit_intersection_on_multi_cell_range(make_book: Book, ir_for: IrFo
     assert _details(found, "D3") == [IMPLICIT_RANGE]
     for a1 in ("D4", "D5", "D6", "D7"):
         assert _c(a1) not in found, a1
+
+
+def test_always_array_functions_do_not_intersect(make_book: Book, ir_for: IrFor) -> None:
+    found = _scan(
+        make_book,
+        ir_for,
+        {
+            "A1": 1,
+            "A2": -2,
+            "A3": 3,
+            "B1": 4,
+            "B2": 5,
+            "B3": 6,
+            "D1": F("=SUMPRODUCT(A1:A3*B1:B3)", 12),
+            "D2": F("=SUMPRODUCT((A1:A3>0)*B1:B3)", 10),
+            "D3": F("=SUM(A1:A3*B1:B3)", 4),
+            "D4": F("=A1:A3*2", 2),
+            "D5": F("=sumproduct(rate*B1:B3)", 12),
+        },
+        names={"rate": "S!$A$1:$A$3"},
+    )
+    assert _c("D1") not in found and _c("D2") not in found and _c("D5") not in found
+    assert _details(found, "D3") == [IMPLICIT_RANGE]
+    assert _details(found, "D4") == [IMPLICIT_RANGE]

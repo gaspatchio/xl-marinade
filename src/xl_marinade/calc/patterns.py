@@ -46,6 +46,21 @@ _MAX_COL = 16_384
 _FN_PREFIXES = ("_XLFN.", "_XLWS.", "_XLL.")
 _RANDOM = frozenset({"RAND", "RANDBETWEEN", "RANDARRAY"})
 _CLOCK = frozenset({"TODAY", "NOW"})
+# Functions whose arguments are array-evaluated in every Excel version.
+_ALWAYS_ARRAY = frozenset(
+    {
+        "SUMPRODUCT",
+        "MMULT",
+        "MDETERM",
+        "MINVERSE",
+        "TRANSPOSE",
+        "FREQUENCY",
+        "LINEST",
+        "LOGEST",
+        "TREND",
+        "GROWTH",
+    }
+)
 _ERRORS = frozenset(
     {
         "#NULL!",
@@ -144,17 +159,22 @@ def _plausible_ref(ref: str) -> bool:
 
 
 def _walk(root: ASTNode) -> Iterator[tuple[ASTNode, bool]]:
-    """Every node with a flag: True when it is directly a function argument."""
-    stack: list[tuple[ASTNode, bool]] = [(root, False)]
+    """Every node with a flag: True when no implicit intersection can apply to it.
+
+    That is a node directly a function argument, or anywhere inside the arguments
+    of a function that array-evaluates in every Excel version (``SUMPRODUCT``...).
+    """
+    stack: list[tuple[ASTNode, bool, bool]] = [(root, False, False)]
     while stack:
-        node, direct = stack.pop()
-        yield node, direct
+        node, direct, in_array = stack.pop()
+        yield node, direct or in_array
         if isinstance(node, FunctionNode):
-            stack.extend((arg, True) for arg in reversed(node.args))
+            inner = in_array or _function_name(node.name) in _ALWAYS_ARRAY
+            stack.extend((arg, True, inner) for arg in reversed(node.args))
         elif isinstance(node, BinaryNode):
-            stack.extend([(node.right, False), (node.left, False)])
+            stack.extend([(node.right, False, in_array), (node.left, False, in_array)])
         elif isinstance(node, UnaryNode):
-            stack.append((node.operand, False))
+            stack.append((node.operand, False, in_array))
 
 
 def _literal(node: ASTNode) -> object:
@@ -389,13 +409,13 @@ def _formula_reasons(scan: _Scan, cell: CellRef, text: str) -> set[str]:
     if root is None:
         return {UNPARSEABLE}
     found: set[str] = set()
-    for node, direct in _walk(root):
+    for node, exempt in _walk(root):
         if isinstance(node, RefNode):
             if _refers_to_self(scan, cell, node.ref):
                 found.add(CIRCULAR)
             if any(scan.graph.is_formula_name(n) for n in _name_candidates(node.ref)):
                 found.add(NAME_FORMULA)
-            if direct or scan.graph.is_array_formula(cell):
+            if exempt or scan.graph.is_array_formula(cell):
                 continue
             named = _named_cells(scan, node.ref)[0]
             if len(named) > 1:
