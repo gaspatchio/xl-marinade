@@ -143,3 +143,99 @@ def blocked_ironcalc(monkeypatch):
         if mod == "ironcalc" or mod.startswith("ironcalc."):
             monkeypatch.delitem(sys.modules, mod, raising=False)
     monkeypatch.setattr(builtins, "__import__", guard)
+
+
+def patch_book(
+    src: Path,
+    dst: Path,
+    *,
+    edit: dict[str, Callable[[str], str]] | None = None,
+    add: dict[str, str] | None = None,
+) -> Path:
+    """Copy an xlsx, rewriting parts with ``edit`` callables and adding ``add`` parts.
+
+    For XML openpyxl cannot write: data tables, external-link caches.
+    """
+    edit = edit or {}
+    with zipfile.ZipFile(src) as zin, zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zout:
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            if item.filename in edit:
+                data = edit[item.filename](data.decode("utf-8")).encode("utf-8")
+            zout.writestr(item, data)
+        for name, text in (add or {}).items():
+            zout.writestr(name, text.encode("utf-8"))
+    return dst
+
+
+_SSML = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+_RELNS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+
+
+def add_external_link(src: Path, dst: Path, sheet: str, cells: dict[str, str]) -> Path:
+    """Attach ``externalLink1.xml`` caching ``cells`` (``A1`` -> ``<v>`` text) for ``sheet``.
+
+    Values that parse as numbers are cached as numbers, anything else as text.
+    """
+
+    def cell_xml(ref: str, v: str) -> str:
+        try:
+            float(v)
+            return f'<cell r="{ref}"><v>{v}</v></cell>'
+        except ValueError:
+            return f'<cell r="{ref}" t="str"><v>{escape(v)}</v></cell>'
+
+    rows: dict[int, list[str]] = {}
+    for ref, v in cells.items():
+        row = int(re.sub(r"[A-Z]+", "", ref))
+        rows.setdefault(row, []).append(cell_xml(ref, v))
+    sheet_data = "".join(f'<row r="{r}">{"".join(cs)}</row>' for r, cs in sorted(rows.items()))
+    link = (
+        f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f'<externalLink xmlns="{_SSML}" xmlns:r="{_RELNS}"><externalBook r:id="rId1">'
+        f'<sheetNames><sheetName val="{escape(sheet)}"/></sheetNames>'
+        f'<sheetDataSet><sheetData sheetId="0">{sheet_data}</sheetData></sheetDataSet>'
+        f"</externalBook></externalLink>"
+    )
+    link_rels = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/'
+        'relationships/externalLinkPath" Target="other.xlsx" TargetMode="External"/>'
+        "</Relationships>"
+    )
+
+    def wb(xml: str) -> str:
+        root_tag = xml[xml.index("<workbook") : xml.index(">", xml.index("<workbook"))]
+        if "xmlns:r=" not in root_tag:
+            xml = xml.replace("<workbook ", f'<workbook xmlns:r="{_RELNS}" ', 1)
+        refs = '<externalReferences><externalReference r:id="rIdExt1"/></externalReferences>'
+        return xml.replace("</sheets>", "</sheets>" + refs, 1)
+
+    def rels(xml: str) -> str:
+        rel = (
+            '<Relationship Id="rIdExt1" Type="http://schemas.openxmlformats.org/officeDocument/'
+            '2006/relationships/externalLink" Target="externalLinks/externalLink1.xml"/>'
+        )
+        return xml.replace("</Relationships>", rel + "</Relationships>", 1)
+
+    def types(xml: str) -> str:
+        ov = (
+            '<Override PartName="/xl/externalLinks/externalLink1.xml" ContentType="application/'
+            'vnd.openxmlformats-officedocument.spreadsheetml.externalLink+xml"/>'
+        )
+        return xml.replace("</Types>", ov + "</Types>", 1)
+
+    return patch_book(
+        src,
+        dst,
+        edit={
+            "xl/workbook.xml": wb,
+            "xl/_rels/workbook.xml.rels": rels,
+            "[Content_Types].xml": types,
+        },
+        add={
+            "xl/externalLinks/externalLink1.xml": link,
+            "xl/externalLinks/_rels/externalLink1.xml.rels": link_rels,
+        },
+    )
