@@ -1,6 +1,6 @@
 # Recalculating a workbook for new inputs (`marinade calc`): engine comparison
 
-Status: **investigation only. Nothing is built.** This note records the evidence behind
+Status: **PR 1 is built and experimental** (calculator, trust report, `marinade values`; see `docs/guide/calc.md`, and `upstream/` for the IronCalc reproductions). PRs 2 and 3 are not started. This note records the evidence behind
 choosing an engine, and the plan it points to. The approved design for PR 1 is
 [`specs/01-calculator-and-trust-report-design.md`](specs/01-calculator-and-trust-report-design.md).
 

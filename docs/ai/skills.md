@@ -27,7 +27,7 @@ The skill includes detailed instructions, the SQLite query contract (which views
 
 When the skill is invoked you get:
 
-- The CLI workflow — `marinade extract` / `document` / `diff`
+- The CLI workflow — `marinade extract` / `document` / `diff`, and the experimental `calc` / `values` recalculation
 - The SQLite query contract — the `agent_*` / `atlas_*` views and how to query them (never the base tables)
 - A verification core (structure proof, then value proof) and an adversarial-audit checklist for what passing proofs still miss
 - Excel operational hazards — recalc traps, `openpyxl` cached-value stripping, ArrayFormula corruption, single-instance discipline

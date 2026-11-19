@@ -7,13 +7,14 @@ description: Use XL Marinade (deterministic Excel formula-graph extraction to SQ
 
 XL Marinade extracts a workbook's calculation structure into a SQLite "IR"
 database: cells, formulas, binding-level groups, a dependency graph, and
-parsed VBA. It is an **auditor/tracer, not a calculator** — it snapshots
-cached values and never recalculates.
+parsed VBA. It is an **auditor/tracer** — `extract` snapshots cached values and
+never recalculates. The one exception is the experimental `marinade calc` (below),
+which recalculates with a separate engine and labels how far to trust each value.
 
 Install and run it with `uv` (or any venv where `xl-marinade` is installed):
 
 ```bash
-uv run marinade --help          # extract · document · diff
+uv run marinade --help          # extract · document · diff · calc · values
 ```
 
 Pick the reference for your task BEFORE starting:
@@ -185,6 +186,45 @@ Practical rules:
   layer change into an expected bucket — anything outside the list is a
   finding. This is the regression tool after any builder change or version
   bump; don't re-prove from scratch.
+
+## Recalculating with `marinade calc` (experimental)
+
+Needs `pip install 'xl-marinade[calc]'` (exit 5 if missing); outside SemVer, so
+formats may change. `marinade values` returns stored values and needs no extra.
+
+```bash
+marinade calc book.xlsx --policies policies.csv --map map.json \
+    --outputs 'Summary!B4' --variables vars.json \
+    [--check-against check.json] [--as-of 2026-01-01] -o out/
+marinade values book.xlsx --variables vars.json [--map map.json] -o stored/
+```
+
+- **Files in.** `policies.csv` (id column + one column per field), `map.json`
+  (`{"id_field": "policy", "fields": {"age": "Inputs!C3"}}`; targets must be
+  constants), `vars.json` (`{"prem": {"range": "Proj!C11:C130", "period_start": 0}}`
+  or `{"npv": {"cell": "Summary!B4"}}`). **`period_start` is required on every
+  range, no default; periods count from it.** `check.json` names stored results
+  for other input sets (results sheet + id column + output-to-column map, and an
+  input `table` or a `selector` cell) so the trust run covers more paths.
+- **Files out** in `-o`: `results.csv`, `rows.csv`, `paths.csv`,
+  `trust_report.json`, `run.json`. Known outputs are cleared at the start of a run.
+- **Read `trust_report.json` first** (`share` reproduced, `failures`,
+  `refused_patterns`, `settings`), then filter on `status`:
+  `refused` (depends on a failing/refused root cell — do not use),
+  `uncertain` (rounding flip or near-equal comparison), `unverified_path` (a
+  branch or lookup row the trust run never took), `ok`. Only `ok` can be used as
+  is; the `reasons` column names the root cell. `values` rows are `stored`.
+- **Refused even when they reproduce:** approximate lookups on unsorted, mixed,
+  whole-column or non-plain-text keys (and `XLOOKUP`/`XMATCH` binary search);
+  implicit intersection on a multi-cell name or on a range outside a function
+  argument; names holding a formula; `RAND`/`RANDBETWEEN`/`RANDARRAY`;
+  `TODAY`/`NOW` without `--as-of`; circular refs; data tables; unparseable
+  formulas (an error literal such as `#N/A` typed into a formula is a known
+  cause); external references that cannot be held (ranges, no cached value).
+- **Exit codes:** 0 ok, 1 error, 5 `[calc]` missing, 6 workbook refused outright
+  (1904 dates, precision as displayed).
+- A pass on the stored inputs proves only the paths those inputs take; never
+  call a value verified because the share is 100%.
 
 ## Verification core rules (templates in references/authoring.md)
 
