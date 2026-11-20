@@ -65,13 +65,18 @@ from xl_marinade.calc.rows import Row, VariableCells, expand_variables, rows_for
 from xl_marinade.calc.settings import read_settings, refusal_reasons
 from xl_marinade.calc.status import (
     Exercised,
+    PathKey,
+    PathSignature,
     StaticLabels,
     assign,
     engine_error_detail,
     exercised_from,
+    path_keys,
+    path_signature,
     policy_roots,
     propagate_static,
     reason_key,
+    same_path,
     unplaced_roots,
 )
 from xl_marinade.calc.trust import TrustResult, run_trust, same
@@ -323,10 +328,43 @@ def _id_rows(graph: WorkbookGraph, sheet: str, column: int, first_row: int) -> d
     return rows
 
 
+@dataclass(slots=True)
+class _Mismatches:
+    """The input sets that did not reproduce one ``--check-against`` output.
+
+    ``keys`` are the branch and lookup probes upstream of the output (``unplaced`` when
+    one of them could not be placed); ``sets`` holds each mismatching set's path through
+    them and the reason a policy on that path gets.
+    """
+
+    keys: frozenset[PathKey]
+    unplaced: bool
+    sets: list[tuple[PathSignature, Reason]] = field(default_factory=list)
+
+
+def _json_value(value: EngineValue) -> float | str | bool | None:
+    """A value as JSON can hold it: non-finite numbers become their ``repr``."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return repr(value)
+    return value
+
+
+def _difference(stored: StoredValue, got: EngineValue) -> float | None:
+    """``|stored - got|`` scaled as the tolerance is (relative, absolute below 1)."""
+    numbers = [v for v in (stored, got) if isinstance(v, int | float) and not isinstance(v, bool)]
+    if len(numbers) != 2:
+        return None
+    e, g = (float(v) for v in numbers)
+    if not (math.isfinite(e) and math.isfinite(g)):
+        return None
+    return abs(e - g) / max(1.0, abs(e), abs(g))
+
+
 def _check_against(
     s: _Session, check: CheckAgainst
-) -> tuple[list[ProbeReadings], dict[CellRef, list[Reason]], dict[str, Any]]:
-    """Recalculate every stored input set; return its readings and mismatch roots."""
+) -> tuple[list[ProbeReadings], dict[CellRef, _Mismatches], dict[str, Any]]:
+    """Recalculate every stored input set; return the readings of the sets that matched
+    and, per output, the sets that did not with the path each took to it."""
     graph = s.graph
     results = _id_rows(
         graph, check.results_sheet, _column(check.id_column, "results.id_column"), check.first_row
@@ -350,8 +388,8 @@ def _check_against(
     # A set vouches only for the paths that fed the outputs it was compared on.
     compared = graph.upstream(outputs)
     readings: list[ProbeReadings] = []
-    roots: dict[CellRef, list[Reason]] = {}
-    mismatches: list[dict[str, str]] = []
+    scoped: dict[CellRef, _Mismatches] = {}
+    mismatches: list[dict[str, Any]] = []
     for pid, row in results.items():
         s.reset()
         if selector is not None:
@@ -373,15 +411,31 @@ def _check_against(
             if same(stored, got, s.req.tolerance):
                 continue
             detail = f"input set {pid!r}: stored {stored!r}, engine {got!r}"
-            roots.setdefault(cell, []).append(
-                Reason(ReasonKind.check_against_mismatch, cell, detail)
+            entry = scoped.get(cell)
+            if entry is None:
+                entry = _Mismatches(*path_keys(s.plan, graph.upstream([cell])))
+                scoped[cell] = entry
+            entry.sets.append(
+                (
+                    path_signature(reading, entry.keys, entry.unplaced),
+                    Reason(ReasonKind.check_against_mismatch, cell, detail),
+                )
             )
-            mismatches.append({"input_set": pid, "cell": cell.a1(), "detail": detail})
+            mismatches.append(
+                {
+                    "input_set": pid,
+                    "cell": cell.a1(),
+                    "detail": detail,
+                    "stored": _json_value(stored),
+                    "computed": _json_value(got),
+                    "relative_difference": _difference(stored, got),
+                }
+            )
             matched = False
         if matched:
             # Only an input set the engine reproduced vouches for the paths it took.
             readings.append(_restrict(reading, compared))
-    return readings, roots, {"input_sets": len(results), "mismatches": mismatches}
+    return readings, scoped, {"input_sets": len(results), "mismatches": mismatches}
 
 
 def _restrict(reading: ProbeReadings, cells: set[CellRef]) -> ProbeReadings:
@@ -394,6 +448,23 @@ def _restrict(reading: ProbeReadings, cells: set[CellRef]) -> ProbeReadings:
         dynamic_refs={},
         unsure=set(reading.unsure),
     )
+
+
+def _mismatch_roots(
+    roots: dict[CellRef, list[Reason]],
+    readings: ProbeReadings,
+    mismatches: dict[CellRef, _Mismatches],
+) -> None:
+    """Add a ``check_against_mismatch`` on each output a mismatching input set reached by
+    the path this policy took (or may have taken) too."""
+    for cell, entry in mismatches.items():
+        mine = path_signature(readings, entry.keys, entry.unplaced)
+        for theirs, reason in entry.sets:
+            if not same_path(theirs, mine):
+                continue
+            bucket = roots.setdefault(cell, [])
+            if reason not in bucket:
+                bucket.append(reason)
 
 
 def _paths(
@@ -433,6 +504,7 @@ def _policy_loop(
     variables: list[VariableCells],
     exercised: Exercised,
     static: StaticLabels,
+    mismatches: dict[CellRef, _Mismatches],
 ) -> _Outputs:
     allowed = {name: s.graph.allowed_values(cell) for name, cell in s.inputs.items()}
     out = _Outputs()
@@ -455,6 +527,7 @@ def _policy_loop(
                 continue
         readings = s.recalc()
         roots = policy_roots(s.plan, readings, exercised, include_unplaced=False)
+        _mismatch_roots(roots, readings, mismatches)
         values = {cell: s.engine.value(cell) for cell in outputs}
         for cell, value in values.items():
             code = engine_error_code(s.engine, cell, value)
@@ -574,18 +647,18 @@ def calc(req: CalcRequest) -> CalcResult:
         if check is not None and check.selector is not None:
             resets.append(_input_cell(graph, check.selector, "selector"))
         session = _Session(req, graph, engine, plan, inputs, list(dict.fromkeys(resets)))
-        check_roots: dict[CellRef, list[Reason]] = {}
+        mismatches: dict[CellRef, _Mismatches] = {}
         check_record: dict[str, Any] | None = None
         if check is not None:
-            more, check_roots, check_record = _check_against(session, check)
+            more, mismatches, check_record = _check_against(session, check)
             trust_readings.extend(more)
 
         failing = {f.cell for f in trust.failures}
         exercised = exercised_from(plan, trust_readings, exclude=failing | set(patterns))
-        static = propagate_static(
-            graph, _static_roots(trust, patterns, plan, prepared, check_roots)
+        static = propagate_static(graph, _static_roots(trust, patterns, plan, prepared))
+        produced = _policy_loop(
+            session, policies, outputs, variables, exercised, static, mismatches
         )
-        produced = _policy_loop(session, policies, outputs, variables, exercised, static)
 
     out = req.out_dir
     write_results(out / "results.csv", produced.values)
@@ -659,10 +732,10 @@ def _static_roots(
     patterns: dict[CellRef, list[Reason]],
     plan: ProbePlan,
     prepared: PreparedCopy,
-    check_roots: dict[CellRef, list[Reason]],
 ) -> dict[CellRef, list[Reason]]:
     """Roots that hold for every policy: trust failures, refused patterns, unplaced
-    probes, held external links and ``--check-against`` mismatches."""
+    probes and held external links. A ``--check-against`` mismatch is not one: it holds
+    only for policies on the mismatching set's path (:func:`_mismatch_roots`)."""
     roots: dict[CellRef, list[Reason]] = {}
 
     def add(cell: CellRef, reason: Reason) -> None:
@@ -672,7 +745,7 @@ def _static_roots(
 
     for failure in trust.failures:
         add(failure.cell, failure.reason)
-    for source in (patterns, unplaced_roots(plan), check_roots):
+    for source in (patterns, unplaced_roots(plan)):
         for cell, reasons in source.items():
             for reason in reasons:
                 add(cell, reason)

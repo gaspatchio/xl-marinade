@@ -266,7 +266,8 @@ def test_check_against_exercises_the_other_branch(make_book: Book, tmp_path: Pat
 def test_check_against_mismatch_refuses_the_output(make_book: Book, tmp_path: Path) -> None:
     book = _check_book(make_book, "chkbad", 141)
     check = _write(tmp_path, "check.json", json.dumps(CHECK))
-    res = calc(_req(tmp_path, book, "id,age,sex\n9,50,M\n", check_against=check))
+    # Age 75 takes the branch the mismatching input set (age 70) took.
+    res = calc(_req(tmp_path, book, "id,age,sex\n9,75,M\n", check_against=check))
     got = _results(res)
     assert got[("9", "Calc!B1")]["status"] == "refused"
     assert "check_against_mismatch@Calc!B1" in got[("9", "Calc!B1")]["reasons"]
@@ -474,3 +475,86 @@ def test_coerce_input() -> None:
         coerce_input("abc", 1.0)
     with pytest.raises(CalcInputError):
         coerce_input("yes", True)
+
+
+# -- a --check-against mismatch refuses only the path that input set took ---------
+
+_NESTED = "=IF(Inputs!B1>60,Inputs!B1*2,IF(Inputs!B1>30,Inputs!B1,0))"
+
+
+def _scoped_book(make_book: Book, name: str) -> Path:
+    """Set 1 (age 40) matches; set 2 (age 70, outer branch true) mismatches B1 and B5."""
+    sheets: dict[str, dict[str, object]] = {
+        "Inputs": {"B1": 40},
+        "Calc": {"B1": F(_NESTED, 40), "B5": F("=Inputs!B1*3", 120)},
+        "Results": {"A2": 1, "B2": 40, "C2": 120, "A3": 2, "B3": 141, "C3": 211},
+        "Table": {"A2": 1, "B2": 40, "A3": 2, "B3": 70},
+    }
+    return make_book(name, sheets)
+
+
+def _scoped_check(outputs: dict[str, str]) -> dict[str, object]:
+    return {
+        "results": {"sheet": "Results", "id_column": "A", "first_row": 2, "outputs": outputs},
+        "inputs": {
+            "table": {"sheet": "Table", "id_column": "A", "first_row": 2, "fields": {"age": "B"}}
+        },
+    }
+
+
+def _scoped(make_book: Book, tmp_path: Path, outputs: dict[str, str], target: str) -> CalcResult:
+    imap = {"id_field": "id", "fields": {"age": "Inputs!B1"}}
+    return calc(
+        _req(
+            tmp_path,
+            _scoped_book(make_book, "scoped"),
+            "id,age\nsame,75\nchecked,50\nunchecked,10\n",
+            imap=imap,
+            outputs=[target],
+            check_against=_write(tmp_path, "check.json", json.dumps(_scoped_check(outputs))),
+        )
+    )
+
+
+def test_mismatch_refuses_a_policy_on_the_same_path(make_book: Book, tmp_path: Path) -> None:
+    got = _results(_scoped(make_book, tmp_path, {"Calc!B1": "B"}, "Calc!B1"))
+    row = got[("same", "Calc!B1")]
+    assert (row["value"], row["status"]) == ("150.0", "refused")
+    assert "check_against_mismatch@Calc!B1:input set '2'" in row["reasons"]
+
+
+def test_mismatch_spares_a_policy_on_a_path_another_set_checked(
+    make_book: Book, tmp_path: Path
+) -> None:
+    got = _results(_scoped(make_book, tmp_path, {"Calc!B1": "B"}, "Calc!B1"))
+    row = got[("checked", "Calc!B1")]
+    assert (row["value"], row["status"], row["reasons"]) == ("50.0", "ok", "")
+
+
+def test_mismatch_leaves_an_unchecked_path_unverified(make_book: Book, tmp_path: Path) -> None:
+    got = _results(_scoped(make_book, tmp_path, {"Calc!B1": "B"}, "Calc!B1"))
+    row = got[("unchecked", "Calc!B1")]
+    assert row["status"] == "unverified_path"
+    assert "check_against_mismatch" not in row["reasons"]
+
+
+def test_mismatch_on_a_probe_free_output_refuses_every_policy(
+    make_book: Book, tmp_path: Path
+) -> None:
+    got = _results(_scoped(make_book, tmp_path, {"Calc!B5": "C"}, "Calc!B5"))
+    for pid in ("same", "checked", "unchecked"):
+        row = got[(pid, "Calc!B5")]
+        assert row["status"] == "refused", pid
+        assert "check_against_mismatch@Calc!B5" in row["reasons"]
+
+
+def test_trust_report_lists_the_mismatch_with_its_difference(
+    make_book: Book, tmp_path: Path
+) -> None:
+    res = _scoped(make_book, tmp_path, {"Calc!B1": "B"}, "Calc!B1")
+    report = json.loads(res.trust_report.read_text(encoding="utf-8"))
+    [mismatch] = report["check_against"]["mismatches"]
+    assert mismatch["input_set"] == "2"
+    assert mismatch["cell"] == "Calc!B1"
+    assert (mismatch["stored"], mismatch["computed"]) == (141.0, 140.0)
+    assert mismatch["relative_difference"] == pytest.approx(1 / 141)

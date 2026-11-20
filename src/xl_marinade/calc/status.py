@@ -109,6 +109,76 @@ def exercised_from(
     return out
 
 
+# -- path signatures ---------------------------------------------------------
+
+PathKey = tuple[CellRef, int, ProbeKind]
+"""A branch or lookup-edge probe: ``(cell, ordinal, kind)``."""
+
+_PATH_KINDS = (ProbeKind.branch, ProbeKind.lookup)
+
+
+@dataclass(slots=True, frozen=True)
+class PathSignature:
+    """The path one recalculation took through a set of path probes.
+
+    ``outcomes`` holds every live reading of those probes (a probe in an arm the cell
+    did not evaluate has none). ``unsure`` is set when the path cannot be told: one of
+    the probes was unplaced, or its reading is unsure.
+    """
+
+    outcomes: frozenset[tuple[PathKey, str]]
+    unsure: bool
+
+
+def path_keys(plan: ProbePlan, cells: Iterable[CellRef]) -> tuple[frozenset[PathKey], bool]:
+    """The branch and lookup probes of ``cells``, and whether any of them is unplaced."""
+    scope = set(cells)
+    keys = frozenset(
+        (p.cell, p.ordinal, p.kind)
+        for p in plan.probes
+        if p.kind in _PATH_KINDS and p.cell in scope
+    )
+    unplaced = any(
+        kind in _PATH_KINDS
+        for cell, kinds in plan.unplaced.items()
+        if cell in scope
+        for kind in kinds
+    )
+    return keys, unplaced
+
+
+def path_signature(
+    readings: ProbeReadings, keys: frozenset[PathKey], unplaced: bool
+) -> PathSignature:
+    """The path ``readings`` took through ``keys`` (from :func:`path_keys`).
+
+    Uses the same rules as :func:`exercised_from`: a skipped probe has no outcome, and
+    an unsure reading leaves the path unknown.
+    """
+    outcomes: set[tuple[PathKey, str]] = set()
+    unsure = unplaced
+    for kind, table in (
+        (ProbeKind.branch, readings.branch),
+        (ProbeKind.lookup, readings.lookup_edge),
+    ):
+        for (cell, ordinal), outcome in table.items():
+            key = (cell, ordinal, kind)
+            if key not in keys:
+                continue
+            outcomes.add((key, outcome))
+            if (kind, cell, ordinal) in readings.unsure:
+                unsure = True
+    return PathSignature(frozenset(outcomes), unsure)
+
+
+def same_path(a: PathSignature, b: PathSignature) -> bool:
+    """Whether two recalculations may have taken the same path.
+
+    An unknown path on either side counts as the same: it errs toward refusing.
+    """
+    return a.unsure or b.unsure or a.outcomes == b.outcomes
+
+
 # -- roots -------------------------------------------------------------------
 
 

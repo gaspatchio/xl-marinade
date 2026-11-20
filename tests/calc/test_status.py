@@ -15,8 +15,11 @@ from xl_marinade.calc.status import (
     Exercised,
     assign,
     exercised_from,
+    path_keys,
+    path_signature,
     policy_roots,
     propagate_static,
+    same_path,
     unplaced_roots,
 )
 
@@ -315,3 +318,76 @@ def test_engine_errors_and_lookup_type_mismatch_become_roots(graph: WorkbookGrap
     assert roots[D9] == [
         Reason(ReasonKind.refused_pattern, D9, "lookup value type differs from keys")
     ]
+
+
+# -- path signatures (scoping a --check-against mismatch) --------------------
+
+
+def test_path_keys_cover_branch_and_lookup_probes_of_the_cells(graph: WorkbookGraph) -> None:
+    keys, unplaced = path_keys(_plan(graph), {B40, _c("C40")})
+    assert keys == frozenset({(B40, 0, ProbeKind.branch), (_c("C40"), 0, ProbeKind.lookup)})
+    assert not unplaced
+
+
+def test_same_outcomes_are_the_same_path(graph: WorkbookGraph) -> None:
+    keys, unplaced = path_keys(_plan(graph), {B40, B50})
+    a = path_signature(_readings(branch={(B40, 0): "then", (B50, 0): "else"}), keys, unplaced)
+    b = path_signature(_readings(branch={(B40, 0): "then", (B50, 0): "else"}), keys, unplaced)
+    c = path_signature(_readings(branch={(B40, 0): "else", (B50, 0): "else"}), keys, unplaced)
+    assert same_path(a, b)
+    assert not same_path(a, c)
+
+
+def test_readings_outside_the_keys_do_not_tell_paths_apart(graph: WorkbookGraph) -> None:
+    keys, unplaced = path_keys(_plan(graph), {B40})
+    a = path_signature(_readings(branch={(B40, 0): "then", (B50, 0): "then"}), keys, unplaced)
+    b = path_signature(_readings(branch={(B40, 0): "then", (B50, 0): "else"}), keys, unplaced)
+    assert same_path(a, b)
+
+
+def test_a_probe_skipped_in_one_reading_is_a_different_path(graph: WorkbookGraph) -> None:
+    keys, unplaced = path_keys(_plan(graph), {B40, B50})
+    a = path_signature(_readings(branch={(B40, 0): "then"}), keys, unplaced)
+    b = path_signature(_readings(branch={(B40, 0): "then", (B50, 0): "else"}), keys, unplaced)
+    assert not same_path(a, b)
+
+
+@pytest.mark.parametrize("side", ["mismatch", "policy"])
+def test_an_unsure_probe_makes_the_paths_the_same(graph: WorkbookGraph, side: str) -> None:
+    keys, unplaced = path_keys(_plan(graph), {B40, B50})
+    unsure = {(ProbeKind.branch, B50, 0)}
+    a = _readings(branch={(B40, 0): "then", (B50, 0): "then"})
+    b = _readings(branch={(B40, 0): "else", (B50, 0): "else"})
+    (a if side == "mismatch" else b).unsure = unsure
+    assert same_path(path_signature(a, keys, unplaced), path_signature(b, keys, unplaced))
+
+
+def test_an_unsure_probe_outside_the_keys_changes_nothing(graph: WorkbookGraph) -> None:
+    keys, unplaced = path_keys(_plan(graph), {B40})
+    a = _readings(branch={(B40, 0): "then"}, unsure={(ProbeKind.branch, B50, 0)})
+    b = _readings(branch={(B40, 0): "else"})
+    assert not same_path(path_signature(a, keys, unplaced), path_signature(b, keys, unplaced))
+
+
+@pytest.mark.parametrize("kind", [ProbeKind.branch, ProbeKind.lookup])
+def test_an_unplaced_path_probe_makes_every_path_the_same(
+    graph: WorkbookGraph, kind: ProbeKind
+) -> None:
+    keys, unplaced = path_keys(_plan(graph, {B1: [kind]}), {B1, B40})
+    assert unplaced
+    a = path_signature(_readings(branch={(B40, 0): "then"}), keys, unplaced)
+    b = path_signature(_readings(branch={(B40, 0): "else"}), keys, unplaced)
+    assert same_path(a, b)
+
+
+def test_an_unplaced_value_probe_does_not_hide_the_path(graph: WorkbookGraph) -> None:
+    keys, unplaced = path_keys(_plan(graph, {B1: [ProbeKind.rounding]}), {B1, B40})
+    assert not unplaced
+
+
+def test_no_path_probes_means_one_shared_path(graph: WorkbookGraph) -> None:
+    keys, unplaced = path_keys(_plan(graph), {B1, C1})
+    assert keys == frozenset()
+    a = path_signature(_readings(branch={(B40, 0): "then"}), keys, unplaced)
+    b = path_signature(_readings(), keys, unplaced)
+    assert same_path(a, b)
