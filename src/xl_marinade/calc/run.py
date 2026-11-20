@@ -62,6 +62,7 @@ from xl_marinade.calc.probes import (
 from xl_marinade.calc.rows import VariableCells, expand_variables, rows_for, variables_record
 from xl_marinade.calc.settings import read_settings, refusal_reasons
 from xl_marinade.calc.status import (
+    MAX_REASONS_PER_KIND,
     Exercised,
     ExercisedBuilder,
     PathKey,
@@ -331,13 +332,23 @@ class _Mismatches:
     """The input sets that did not reproduce one ``--check-against`` output.
 
     ``keys`` are the branch and lookup probes upstream of the output (``unplaced`` when
-    one of them could not be placed); ``sets`` holds each mismatching set's path through
-    them and the reason a policy on that path gets.
+    one of them could not be placed). ``sets`` groups the mismatching sets by their path
+    through those probes; per path it keeps the smallest reasons only, as many as a
+    label can carry, so a policy compares once per distinct path and memory stays
+    bounded however many sets mismatch.
     """
 
     keys: frozenset[PathKey]
     unplaced: bool
-    sets: list[tuple[PathSignature, Reason]] = field(default_factory=list)
+    sets: dict[PathSignature, list[Reason]] = field(default_factory=dict)
+
+    def add(self, signature: PathSignature, reason: Reason) -> None:
+        kept = self.sets.setdefault(signature, [])
+        if reason in kept:
+            return
+        kept.append(reason)
+        kept.sort(key=reason_key)
+        del kept[MAX_REASONS_PER_KIND:]
 
 
 def _json_value(value: EngineValue) -> float | str | bool | None:
@@ -415,11 +426,9 @@ def _check_against(
             if entry is None:
                 entry = _Mismatches(*path_keys(s.plan, graph.upstream([cell])))
                 scoped[cell] = entry
-            entry.sets.append(
-                (
-                    path_signature(reading, entry.keys, entry.unplaced),
-                    Reason(ReasonKind.check_against_mismatch, cell, detail),
-                )
+            entry.add(
+                path_signature(reading, entry.keys, entry.unplaced),
+                Reason(ReasonKind.check_against_mismatch, cell, detail),
             )
             mismatches.append(
                 {
@@ -447,12 +456,12 @@ def _mismatch_roots(
     the path this policy took (or may have taken) too."""
     for cell, entry in mismatches.items():
         mine = path_signature(readings, entry.keys, entry.unplaced)
-        for theirs, reason in entry.sets:
+        for theirs, reasons in entry.sets.items():
             if not same_path(theirs, mine):
                 continue
             bucket = roots.setdefault(cell, [])
-            if reason not in bucket:
-                bucket.append(reason)
+            seen = set(bucket)
+            bucket.extend(r for r in reasons if r not in seen)
 
 
 def _paths(

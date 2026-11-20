@@ -9,6 +9,8 @@ from pathlib import Path
 from types import TracebackType
 from typing import IO, Any, Self
 
+from loguru import logger
+
 from xl_marinade.calc.engine import EngineValue
 from xl_marinade.calc.graph import StoredValue
 from xl_marinade.calc.models import CellRef, Reason, Status
@@ -144,9 +146,13 @@ class _Stream:
         self.path = path
         path.parent.mkdir(parents=True, exist_ok=True)
         self._fh: IO[str] = path.open("w", encoding="utf-8", newline="\n")
-        self._writer = csv.writer(self._fh, lineterminator="\n")
-        self._writer.writerow(header)
-        self._fh.flush()
+        try:
+            self._writer = csv.writer(self._fh, lineterminator="\n")
+            self._writer.writerow(header)
+            self._fh.flush()
+        except BaseException:
+            self.discard()
+            raise
 
     def write(self, rows: list[list[object]]) -> None:
         self._writer.writerows(rows)
@@ -156,6 +162,16 @@ class _Stream:
 
     def close(self) -> None:
         self._fh.close()
+
+    def discard(self) -> None:
+        """Close and delete the file. A failing close is logged, not raised: the file
+        goes either way, and the error that led here is the one worth reporting."""
+        try:
+            self.close()
+        except OSError as exc:
+            logger.warning(f"closing {self.path} before deleting it failed: {exc}")
+        finally:
+            self.path.unlink(missing_ok=True)
 
 
 class PolicyWriter:
@@ -196,8 +212,7 @@ class PolicyWriter:
 
     def _discard(self) -> None:
         for stream in self._streams:
-            stream.close()
-            stream.path.unlink(missing_ok=True)
+            stream.discard()
 
     def __enter__(self) -> Self:
         return self

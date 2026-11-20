@@ -18,7 +18,9 @@ from xl_marinade.calc import CalcRequest, CalcResult, calc  # noqa: E402
 from xl_marinade.calc import run as run_module  # noqa: E402
 from xl_marinade.calc.output import OutputValue, PathRecord  # noqa: E402
 from xl_marinade.calc.probes import ProbeReadings  # noqa: E402
+from xl_marinade.calc.rows import Row  # noqa: E402
 from xl_marinade.calc.run import coerce_input  # noqa: E402
+from xl_marinade.calc.status import MAX_REASONS_PER_KIND  # noqa: E402
 from xl_marinade.errors import CalcInputError, WorkbookRefused  # noqa: E402
 
 Book = Callable[..., Path]
@@ -582,15 +584,25 @@ def test_results_stream_to_disk_one_policy_at_a_time(
     }
     book = make_book("stream", sheets)
     out = tmp_path / "out"
-    seen: list[tuple[int, int, int, int, int]] = []
+    seen: list[tuple[int, int, int, int, int, int, int]] = []
     real = run_module._Session.recalc
 
+    def lines(name: str) -> int:
+        path = out / name
+        return len(path.read_text(encoding="utf-8").splitlines()) if path.exists() else -1
+
     def spy(self: object) -> ProbeReadings:
-        results = out / "results.csv"
-        lines = len(results.read_text(encoding="utf-8").splitlines()) if results.exists() else -1
-        paths = out / "paths.csv"
-        plines = len(paths.read_text(encoding="utf-8").splitlines()) if paths.exists() else -1
-        seen.append((lines, plines, _live(OutputValue), _live(PathRecord), _live(ProbeReadings)))
+        seen.append(
+            (
+                lines("results.csv"),
+                lines("paths.csv"),
+                _live(OutputValue),
+                _live(PathRecord),
+                _live(ProbeReadings),
+                lines("rows.csv"),
+                _live(Row),
+            )
+        )
         return real(self)  # type: ignore[arg-type]
 
     monkeypatch.setattr(run_module._Session, "recalc", spy)
@@ -605,6 +617,11 @@ def test_results_stream_to_disk_one_policy_at_a_time(
             policies,
             imap=imap,
             outputs=["Calc!B1:B2"],
+            variables=_write(
+                tmp_path,
+                "vars.json",
+                json.dumps({"calc": {"range": "Calc!B1:B2", "period_start": 0}}),
+            ),
             check_against=_write(tmp_path, "check.json", json.dumps(check)),
         )
     )
@@ -613,12 +630,16 @@ def test_results_stream_to_disk_one_policy_at_a_time(
     loop = seen[4:]
     # Before policy k recalculates, the k policies before it are already on disk.
     assert [s[0] for s in loop] == [1 + 2 * k for k in range(n)]
+    assert [s[5] for s in loop] == [1 + 2 * k for k in range(n)]
     assert all(b[1] > a[1] for a, b in zip(loop[1:], loop[2:], strict=False))
     # Nothing per policy or per check set stays in memory.
     assert max(s[2] for s in loop) <= 2
     assert max(s[3] for s in loop) <= 4
     assert max(s[4] for s in loop) <= 1
+    assert max(s[6] for s in loop) <= 2
     assert len(res.results_csv.read_text(encoding="utf-8").splitlines()) == 1 + 2 * n
+    assert res.rows_csv is not None
+    assert len(res.rows_csv.read_text(encoding="utf-8").splitlines()) == 1 + 2 * n
 
 
 def test_failed_policy_leaves_no_partial_results(make_book: Book, tmp_path: Path) -> None:
@@ -628,3 +649,55 @@ def test_failed_policy_leaves_no_partial_results(make_book: Book, tmp_path: Path
         calc(_req(tmp_path, book, "id,age\n1,50\n2,X\n", imap=imap, outputs=["Calc!B1"]))
     out = tmp_path / "out"
     assert not any((out / name).exists() for name in ("results.csv", "rows.csv", "paths.csv"))
+
+
+def test_many_mismatching_sets_on_one_path_keep_a_bounded_list(
+    make_book: Book, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    m = 12
+    results: dict[str, object] = {}
+    table: dict[str, object] = {}
+    for i in range(1, m + 1):
+        results |= {f"A{i + 1}": i, f"B{i + 1}": i * 2 + 1}  # every set is off by one
+        table |= {f"A{i + 1}": i, f"B{i + 1}": i}
+    sheets: dict[str, dict[str, object]] = {
+        "Inputs": {"B1": 1},
+        "Calc": {"B1": F("=Inputs!B1*2", 2)},
+        "Results": results,
+        "Table": table,
+    }
+    captured: list[dict[object, object]] = []
+    real = run_module._policy_loop
+
+    def spy(*args: object) -> None:
+        captured.append(args[6])  # type: ignore[arg-type]
+        real(*args)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(run_module, "_policy_loop", spy)
+    imap = {"id_field": "id", "fields": {"age": "Inputs!B1"}}
+    res = calc(
+        _req(
+            tmp_path,
+            make_book("many", sheets),
+            "id,age\n9,50\n",
+            imap=imap,
+            outputs=["Calc!B1"],
+            check_against=_write(
+                tmp_path, "check.json", json.dumps(_scoped_check({"Calc!B1": "B"}))
+            ),
+        )
+    )
+    [entry] = captured[0].values()
+    assert len(entry.sets) == 1  # type: ignore[attr-defined]
+    [kept] = entry.sets.values()  # type: ignore[attr-defined]
+    assert len(kept) == MAX_REASONS_PER_KIND
+    row = _results(res)[("9", "Calc!B1")]
+    assert row["status"] == "refused"
+    # The five smallest reasons, as before the grouping.
+    assert row["reasons"] == "; ".join(
+        f"check_against_mismatch@Calc!B1:input set {i!r}: stored {int(i) * 2 + 1}.0, "
+        f"engine {int(i) * 2}.0"
+        for i in ("1", "10", "11", "12", "2")
+    )
+    report = json.loads(res.trust_report.read_text(encoding="utf-8"))
+    assert len(report["check_against"]["mismatches"]) == m
