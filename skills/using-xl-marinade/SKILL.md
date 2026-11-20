@@ -232,6 +232,25 @@ marinade values book.xlsx --variables vars.json [--map map.json] -o stored/
   (1904 dates, precision as displayed, Strict Open XML).
 - A pass on the stored inputs proves only the paths those inputs take; never
   call a value verified because the share is 100%.
+- **Give `--check-against` whenever the workbook stores results for other input
+  sets** (a batch-results sheet): with results stored for one input set only,
+  lookups landing mid-table and branches the stored inputs skip stay unverified.
+  On lifelib BasicTerm, no check set gave 100% `unverified_path`; 200 checked
+  points gave 100% `ok`, all correct.
+- A check-set mismatch (`check_against_mismatch`) refuses an output only for
+  policies on the same path (same branch and lookup-edge outcomes upstream; an
+  unplaced or unsure probe counts as the same; a probe-free output has one path).
+  `trust_report.json` `check_against.mismatches` gives `stored`, `computed`,
+  `relative_difference`.
+- **`ok` means every formula and path was checked against Excel's stored values,
+  not that a new value is within tolerance of what Excel would give**:
+  cancellation (a net figure as a small difference of large present values) can
+  amplify floating-point differences past 1e-9 (one lifelib point: 1.003e-9).
+- `#NAME?` downstream of a VBA UDF is `macro_function` rooted at the UDF cell;
+  `unsupported_function` only when no UDF is involved.
+- Results stream to disk per policy: memory stays flat in policies and check
+  sets, but `paths.csv` can run to ~1,000+ rows per policy. A run that stops
+  part-way deletes `results.csv`/`paths.csv`/`rows.csv`.
 
 ## Verification core rules (templates in references/authoring.md)
 

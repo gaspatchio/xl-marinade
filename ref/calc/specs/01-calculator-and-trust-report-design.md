@@ -75,7 +75,11 @@ holds for other input sets, such as a batch-results sheet: the results sheet, it
 which result column matches which output, and where each input set's inputs come from
 (an input table with a column per map field, or a selector cell that picks the input set).
 The trust run recalculates each of those input sets and compares. Branches and lookup rows
-they reach count as exercised. A mismatch fails the outputs involved.
+they reach count as exercised. A mismatch fails the outputs involved for every policy that
+took the mismatching input set's path to them: the same outcome at every branch and
+lookup-edge probe upstream of the output. An unplaced or unsure probe counts as the same
+path, and an output with no such probes has one path, so the mismatch fails it for all
+policies (agreed 2026-11-20).
 
 ## Statuses
 

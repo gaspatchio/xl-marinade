@@ -86,9 +86,38 @@ batch-results sheet, so the trust run can recalculate those input sets too and c
 
 `results.outputs` maps an output cell to the results-sheet column holding its stored value
 per input set. `inputs` has exactly one of `table` (a column per `map.json` field) or
-`selector` (a single cell, e.g. `"Control!C4"`, that picks the input set by id). A mismatch
-fails the outputs involved; only input sets the engine reproduced count towards the
-exercised paths.
+`selector` (a single cell, e.g. `"Control!C4"`, that picks the input set by id). Only input
+sets the engine reproduced count towards the exercised paths.
+
+A **mismatch** (an input set whose recalculated output differs from the stored one by more
+than `--tolerance`) refuses that output only for policies that took the same path to it:
+
+- For the mismatching set, the run records its path to the output: the outcome of every
+  branch and lookup-edge probe upstream of the output.
+- A policy whose own outcomes for those probes are all the same gets
+  `check_against_mismatch` on that output, and the output is `refused`.
+- If any of those probes is unplaced, or its reading is unsure (for the set or for the
+  policy), the paths count as the same and the output is refused. The rule errs toward
+  refusing.
+- An output with no branch or lookup probes upstream has only one path, so a mismatch on it
+  refuses it for every policy.
+- A policy on a different path is judged by the usual rules: `ok` if a matching input set
+  (or the stored inputs) checked its path, `unverified_path` if nothing did.
+
+`trust_report.json` lists every mismatch under `check_against.mismatches`: the input set
+id (`input_set`), the output (`cell`), `stored`, `computed`, and `relative_difference`
+(measured the way the tolerance is: relative, or absolute below 1).
+
+#### When you need `--check-against`
+
+When a workbook stores results for only one input set, give `--check-against` whenever it
+holds results for others (a batch-results sheet, a scenario table). Without it, the trust
+run sees only the paths the stored inputs take. A lookup that lands in the middle of a
+table for a new policy (a different age row, a different year) and a branch the stored
+inputs do not take stay unverified, so most new values come back `unverified_path`.
+Measured on lifelib BasicTerm (10,000 model points stored in `Batch_Results`, selector
+`Control!C4`): with no check set, 100% of new values came back `unverified_path`; with 200
+checked points, 100% came back `ok`, and all of them were correct.
 
 ## How a run works
 
@@ -121,7 +150,7 @@ All in the `-o` directory, UTF-8, `\n` line endings, no timestamps.
 | `results.csv` | `policy_id`, `output` (`Sheet!A1`), `value`, `status`, `reasons`. One row per policy and output cell. |
 | `rows.csv` | With `--variables`: `policy`, `variable`, `period`, `value`, `status`, `reasons`. |
 | `paths.csv` | `policy_id`, `cell`, `family`, `kind`, `ordinal`, `outcome`, `exercised`. The branch or lookup edge each policy took; `ordinal` tells apart several probes of one kind in one cell; `exercised` is `true` when the trust run took it too. |
-| `trust_report.json` | `formula_cells`, `checked`, `reproduced`, `share`, `failures`, `refused_patterns`, `settings` (with `settings.refused`), `held_external_links`, `check_against`. |
+| `trust_report.json` | `formula_cells`, `checked`, `reproduced`, `share`, `failures`, `refused_patterns`, `settings` (with `settings.refused`), `held_external_links`, `check_against` (`input_sets`, and `mismatches` with `input_set`, `cell`, `detail`, `stored`, `computed`, `relative_difference`). |
 | `run.json` | `ironcalc_version`, `marinade_version`, `workbook_sha256`, `tolerance`, `as_of`, `probe_cap`, `probes_unplaced`, and per variable its range, `period_start` and the cell period 0 falls on. |
 
 `marinade values` writes `rows.csv` and `run.json` (variables only). Its rows carry status
@@ -138,7 +167,7 @@ serious.
 
 | Status | Meaning |
 |---|---|
-| `refused` | The output depends, through the graph, on a cell that failed the trust run or matches a refused pattern. The value is returned for inspection but must not be used. The reason names the root cell. |
+| `refused` | The output depends, through the graph, on a cell that failed the trust run or matches a refused pattern, or a `--check-against` input set on the same path did not reproduce it. The value is returned for inspection but must not be used. The reason names the root cell. |
 | `uncertain` | The value rests on something implementation-dependent: a rounding function whose input sits within about 1e-12 relative of the point where the result flips, or a comparison or sorted lookup whose two sides are that close (but not equal). A rounding or comparison probe that could not be placed also lands here (`not_checked_value`). |
 | `unverified_path` | The policy took a branch or lookup position the trust run never exercised, so those formulas were never checked against Excel. A branch or lookup probe that could not be placed also lands here (`not_checked_path`). |
 | `ok` | None of the above. |
@@ -186,6 +215,41 @@ Details worth knowing:
 `near_rounding_flip`, `near_comparison` and `not_checked_value` give `uncertain`.
 `unexercised_branch`, `unexercised_lookup_edge` and `not_checked_path` give
 `unverified_path`. `external_link_held` is informational and leaves the status `ok`.
+
+A `#NAME?` from the engine is `macro_function` when the cell, or any cell upstream of it,
+calls a VBA function (the engine cannot run VBA); the root is that UDF cell, the smallest
+one if several feed it. It is `unsupported_function` only when no UDF is involved: the
+engine does not know a function the cell uses.
+
+## What `ok` means, and what it does not
+
+`ok` means every formula and every path behind the value was checked against values Excel
+stored: on the stored inputs, or on a `--check-against` input set that took the same
+branches and lookup edges. It does not guarantee that a new input set's value is within
+`--tolerance` of what Excel would compute for it. Floating-point differences between the
+engine and Excel are tiny, but cancellation can amplify them: a net figure that is a small
+difference of large present values can move by more than 1e-9 relative even when every
+formula reproduced. On lifelib BasicTerm_SE one model point's net cash-flow present value
+came out at 1.003e-9 relative to Excel's, against the default tolerance of 1e-9. Choose
+`--tolerance` for the outputs you compare, and treat agreement with Excel beyond it as
+likely, not proven.
+
+## Memory and output size
+
+`results.csv`, `paths.csv` and `rows.csv` are written one policy at a time, flushed as each
+policy finishes, so memory does not grow with the number of policies. Nor does it grow
+with the number of `--check-against` input sets: each matching set's branch and lookup
+outcomes are folded into the exercised set as it finishes and its readings dropped; a
+mismatching set keeps only its path to the output it missed. Peak memory is set by the
+workbook: the formula graph, the engine's copy of the workbook and the probe plan.
+
+The files on disk do grow with the policies. `paths.csv` has one row per policy per
+branch or lookup probe it reached, which for an actuarial projection can be over a
+thousand rows per policy (about 1.2 million rows and 126 MB for 1,000 lifelib BasicTerm_S
+policies). Leave room in `-o` for it.
+
+A run that stops part-way (a bad value in `policies.csv`, for instance) deletes
+`results.csv`, `paths.csv` and `rows.csv`, so partial results never look complete.
 
 ## Refused patterns
 

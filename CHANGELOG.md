@@ -25,6 +25,28 @@ schema is a versioned public contract.
   displayed, Strict Open XML). Experimental: outside the SemVer contract until it settles. See
   `docs/guide/calc.md`; synthetic reproductions of the IronCalc 0.9.1 gaps are in
   `ref/calc/upstream/`.
+- **`marinade calc`: a `--check-against` mismatch refuses only the policies on the
+  mismatching input set's path.** The run records the set's path to the output (every
+  branch and lookup-edge outcome upstream of it); a policy gets `check_against_mismatch`
+  only when its own outcomes are the same. An unplaced or unsure probe counts as the
+  same path, and an output with no such probes upstream is refused for every policy, as
+  before. Other policies fall back to the exercised rules (`ok` if a matching set checked
+  their path, `unverified_path` otherwise). Before, one input set that missed lifelib
+  BasicTerm_SE's net cash flow by 1.003e-9 relative refused that output for every
+  policy. `trust_report.json` mismatches now carry `stored`, `computed` and
+  `relative_difference`.
+- **`marinade calc` streams `results.csv`, `paths.csv` and `rows.csv` to disk one policy
+  at a time**, and folds each `--check-against` set into the exercised outcomes as it
+  finishes, so memory no longer grows with policies or check sets (lifelib
+  BasicTerm_SE had reached 3.77 GB peak RSS at 9,949 check points). The files are
+  byte-identical to before; a run that stops part-way deletes them.
+- **`marinade calc`: a `#NAME?` downstream of a VBA UDF is `macro_function`**, rooted at
+  the UDF cell, instead of `unsupported_function`.
+- **Docs: what `ok` means.** `ok` says every formula and path behind a value was checked
+  against Excel's stored values, not that a new value is within the tolerance of what
+  Excel would compute: cancellation can amplify floating-point differences past 1e-9.
+  The calc guide also explains why `--check-against` is effectively required when a
+  workbook stores results for one input set only.
 
 ## [0.7.1] - 2026-11-11
 
