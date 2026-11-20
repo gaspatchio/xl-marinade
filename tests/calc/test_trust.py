@@ -116,3 +116,42 @@ def test_trust_skip_cells_not_compared(make_book, ir_for, tmp_path):
 
 def test_share_of_empty_run():
     assert TrustResult(checked=0, reproduced=0, failures=[]).share == 1.0
+
+
+def _udf_run(make_book, ir_for, tmp_path, sheet, udf):
+    book = make_book("udf", {"S": sheet})
+    copy = prepare_engine_copy(book, tmp_path / "e.xlsx", as_of=None)
+    eng = Engine.load(copy.path)
+    eng.evaluate()
+    graph = WorkbookGraph.from_ir(ir_for(book))
+    graph.udf_cells = frozenset(udf)
+    return run_trust(eng, graph, tolerance=1e-9, skip=set())
+
+
+def test_name_error_downstream_of_a_udf_is_macro_function(make_book, ir_for, tmp_path):
+    a1, b1 = CellRef("S", 1, 1), CellRef("S", 1, 2)
+    sheet = {"A1": F("=MyUdf(1)", 3), "B1": F("=ROUND(A1,2)", 3)}
+    res = _udf_run(make_book, ir_for, tmp_path, sheet, {a1})
+    got = {f.cell: (f.reason.kind, f.reason.root) for f in res.failures}
+    assert got == {
+        a1: (ReasonKind.macro_function, a1),
+        b1: (ReasonKind.macro_function, a1),
+    }
+
+
+def test_macro_function_root_is_the_smallest_udf_ancestor(make_book, ir_for, tmp_path):
+    a1, b1, c1 = CellRef("S", 1, 1), CellRef("S", 1, 2), CellRef("S", 1, 3)
+    sheet = {"A1": F("=MyUdf(1)", 3), "B1": F("=MyUdf(2)", 4), "C1": F("=A1+B1", 7)}
+    res = _udf_run(make_book, ir_for, tmp_path, sheet, {b1, a1})
+    got = {f.cell: (f.reason.kind, f.reason.root) for f in res.failures}
+    assert got[c1] == (ReasonKind.macro_function, a1)
+    assert got[b1] == (ReasonKind.macro_function, b1)
+
+
+def test_name_error_with_no_udf_upstream_stays_unsupported(make_book, ir_for, tmp_path):
+    a1, b1 = CellRef("S", 1, 1), CellRef("S", 1, 2)
+    sheet = {"A1": F("=NOSUCHFN(1)", 3), "B1": F("=ROUND(A1,2)", 3), "C1": F("=MyUdf(1)", 1)}
+    res = _udf_run(make_book, ir_for, tmp_path, sheet, {CellRef("S", 1, 3)})
+    got = {f.cell: (f.reason.kind, f.reason.root) for f in res.failures}
+    assert got[a1] == (ReasonKind.unsupported_function, a1)
+    assert got[b1] == (ReasonKind.unsupported_function, b1)
