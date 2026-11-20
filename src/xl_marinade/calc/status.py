@@ -18,7 +18,7 @@ order. Roots that do not change between policies can be propagated once per run
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Iterable
+from collections.abc import Container, Iterable
 from dataclasses import dataclass
 
 from xl_marinade.calc.graph import WorkbookGraph
@@ -79,6 +79,40 @@ def _family_of(table: dict[tuple[CellRef, int], tuple[str, str]], key: tuple[Cel
     return entry[0] if entry is not None else f"cell:{key[0].a1()}"
 
 
+class ExercisedBuilder:
+    """Folds trust readings into an :class:`Exercised` one at a time, so a run keeps
+    the outcomes seen, not the readings (see :func:`exercised_from` for the rules)."""
+
+    def __init__(self, plan: ProbePlan, *, exclude: Iterable[CellRef] = ()) -> None:
+        self._skip = set(exclude)
+        self._branch_fam = _families(plan, ProbeKind.branch)
+        self._lookup_fam = _families(plan, ProbeKind.lookup)
+        self.exercised = Exercised(set(), set())
+
+    def add(self, reading: ProbeReadings, *, only: Container[CellRef] | None = None) -> None:
+        """Count ``reading``'s outcomes; with ``only``, just those of probes in those cells."""
+        out = self.exercised
+        for key, outcome in reading.branch.items():
+            if not self._counts(reading, ProbeKind.branch, key, only):
+                continue
+            out.branches.add((_family_of(self._branch_fam, key), key[1], outcome))
+        for key, edge in reading.lookup_edge.items():
+            if not self._counts(reading, ProbeKind.lookup, key, only):
+                continue
+            out.lookup_edges.add((_family_of(self._lookup_fam, key), key[1], edge))
+
+    def _counts(
+        self,
+        reading: ProbeReadings,
+        kind: ProbeKind,
+        key: tuple[CellRef, int],
+        only: Container[CellRef] | None,
+    ) -> bool:
+        if key[0] in self._skip or (kind, *key) in reading.unsure:
+            return False
+        return only is None or key[0] in only
+
+
 def exercised_from(
     plan: ProbePlan,
     readings: list[ProbeReadings],
@@ -93,20 +127,10 @@ def exercised_from(
     (trust failures, refused patterns) and unsure readings (an enclosing branch had no
     reading) are not evidence.
     """
-    skip = set(exclude)
-    branch_fam = _families(plan, ProbeKind.branch)
-    lookup_fam = _families(plan, ProbeKind.lookup)
-    out = Exercised(set(), set())
+    builder = ExercisedBuilder(plan, exclude=exclude)
     for reading in readings:
-        for key, outcome in reading.branch.items():
-            if key[0] in skip or (ProbeKind.branch, *key) in reading.unsure:
-                continue
-            out.branches.add((_family_of(branch_fam, key), key[1], outcome))
-        for key, edge in reading.lookup_edge.items():
-            if key[0] in skip or (ProbeKind.lookup, *key) in reading.unsure:
-                continue
-            out.lookup_edges.add((_family_of(lookup_fam, key), key[1], edge))
-    return out
+        builder.add(reading)
+    return builder.exercised
 
 
 # -- path signatures ---------------------------------------------------------

@@ -43,10 +43,8 @@ from xl_marinade.calc.output import (
     CALC_OUTPUTS,
     OutputValue,
     PathRecord,
+    PolicyWriter,
     clear_outputs,
-    write_paths,
-    write_results,
-    write_rows,
     write_run,
     write_trust_report,
 )
@@ -61,16 +59,16 @@ from xl_marinade.calc.probes import (
     plan_probes,
     read_probes,
 )
-from xl_marinade.calc.rows import Row, VariableCells, expand_variables, rows_for, variables_record
+from xl_marinade.calc.rows import VariableCells, expand_variables, rows_for, variables_record
 from xl_marinade.calc.settings import read_settings, refusal_reasons
 from xl_marinade.calc.status import (
     Exercised,
+    ExercisedBuilder,
     PathKey,
     PathSignature,
     StaticLabels,
     assign,
     engine_error_detail,
-    exercised_from,
     path_keys,
     path_signature,
     policy_roots,
@@ -361,10 +359,13 @@ def _difference(stored: StoredValue, got: EngineValue) -> float | None:
 
 
 def _check_against(
-    s: _Session, check: CheckAgainst
-) -> tuple[list[ProbeReadings], dict[CellRef, _Mismatches], dict[str, Any]]:
-    """Recalculate every stored input set; return the readings of the sets that matched
-    and, per output, the sets that did not with the path each took to it."""
+    s: _Session, check: CheckAgainst, evidence: ExercisedBuilder
+) -> tuple[dict[CellRef, _Mismatches], dict[str, Any]]:
+    """Recalculate every stored input set. A set that matched adds the paths it took to
+    ``evidence``; per output, return the sets that did not with the path each took.
+
+    Each set's readings are dropped once folded in, so memory does not grow with the
+    number of sets (a mismatching set keeps only its path signature)."""
     graph = s.graph
     results = _id_rows(
         graph, check.results_sheet, _column(check.id_column, "results.id_column"), check.first_row
@@ -387,7 +388,6 @@ def _check_against(
 
     # A set vouches only for the paths that fed the outputs it was compared on.
     compared = graph.upstream(outputs)
-    readings: list[ProbeReadings] = []
     scoped: dict[CellRef, _Mismatches] = {}
     mismatches: list[dict[str, Any]] = []
     for pid, row in results.items():
@@ -434,20 +434,8 @@ def _check_against(
             matched = False
         if matched:
             # Only an input set the engine reproduced vouches for the paths it took.
-            readings.append(_restrict(reading, compared))
-    return readings, scoped, {"input_sets": len(results), "mismatches": mismatches}
-
-
-def _restrict(reading: ProbeReadings, cells: set[CellRef]) -> ProbeReadings:
-    """``reading`` with its branch and lookup readings cut to probes of ``cells``."""
-    return ProbeReadings(
-        branch={k: v for k, v in reading.branch.items() if k[0] in cells},
-        lookup_edge={k: v for k, v in reading.lookup_edge.items() if k[0] in cells},
-        near_rounding=set(),
-        near_comparison=set(),
-        dynamic_refs={},
-        unsure=set(reading.unsure),
-    )
+            evidence.add(reading, only=compared)
+    return scoped, {"input_sets": len(results), "mismatches": mismatches}
 
 
 def _mismatch_roots(
@@ -490,13 +478,6 @@ def _paths(
     return records
 
 
-@dataclass(slots=True)
-class _Outputs:
-    values: list[OutputValue] = field(default_factory=list)
-    rows: list[Row] = field(default_factory=list)
-    paths: list[PathRecord] = field(default_factory=list)
-
-
 def _policy_loop(
     s: _Session,
     policies: list[Policy],
@@ -505,9 +486,10 @@ def _policy_loop(
     exercised: Exercised,
     static: StaticLabels,
     mismatches: dict[CellRef, _Mismatches],
-) -> _Outputs:
+    writer: PolicyWriter,
+) -> None:
+    """Recalculate each policy and hand its records to ``writer`` before the next one."""
     allowed = {name: s.graph.allowed_values(cell) for name, cell in s.inputs.items()}
-    out = _Outputs()
     for policy in policies:
         s.reset()
         outside: list[Reason] = []
@@ -539,16 +521,19 @@ def _policy_loop(
                 bucket.append(reason)
         assigned = assign(s.graph, outputs, roots, readings.dynamic_refs, static=static)
         computed: dict[CellRef, tuple[EngineValue, Status, list[Reason]]] = {}
+        results: list[OutputValue] = []
         for cell in outputs:
             status, reasons = assigned[cell]
             if outside:
                 status, reasons = Status.REFUSED, sorted([*reasons, *outside], key=reason_key)
             value = values[cell]
             computed[cell] = (value, status, reasons)
-            out.values.append(OutputValue(policy.id, cell, value, status, reasons))
-        out.rows.extend(rows_for(policy.id, variables, computed.__getitem__))
-        out.paths.extend(_paths(policy.id, s.plan, readings, exercised))
-    return out
+            results.append(OutputValue(policy.id, cell, value, status, reasons))
+        writer.write_policy(
+            results,
+            _paths(policy.id, s.plan, readings, exercised),
+            rows_for(policy.id, variables, computed.__getitem__),
+        )
 
 
 def _refuse(req: CalcRequest, settings: WorkbookSettings, reasons: list[str], sha: str) -> NoReturn:
@@ -606,6 +591,8 @@ def calc(req: CalcRequest) -> CalcResult:
     check = load_check_against(req.check_against) if req.check_against else None
     targets = parse_outputs(req.outputs)
 
+    out = req.out_dir
+    rows_csv = out / "rows.csv" if req.variables is not None else None
     with tempfile.TemporaryDirectory(prefix="marinade-calc-") as tmp:
         work = Path(tmp)
         graph = open_graph(req.workbook, req.ir, work / "ir")
@@ -641,7 +628,9 @@ def calc(req: CalcRequest) -> CalcResult:
             tolerance=req.tolerance,
             skip=set(patterns) | set(prepared.data_table_cells),
         )
-        trust_readings = [read_probes(engine, plan)]
+        failing = {f.cell for f in trust.failures}
+        evidence = ExercisedBuilder(plan, exclude=failing | set(patterns))
+        evidence.add(read_probes(engine, plan))
 
         resets = list(dict.fromkeys(inputs.values()))
         if check is not None and check.selector is not None:
@@ -650,23 +639,14 @@ def calc(req: CalcRequest) -> CalcResult:
         mismatches: dict[CellRef, _Mismatches] = {}
         check_record: dict[str, Any] | None = None
         if check is not None:
-            more, mismatches, check_record = _check_against(session, check)
-            trust_readings.extend(more)
-
-        failing = {f.cell for f in trust.failures}
-        exercised = exercised_from(plan, trust_readings, exclude=failing | set(patterns))
+            mismatches, check_record = _check_against(session, check, evidence)
+        exercised = evidence.exercised
         static = propagate_static(graph, _static_roots(trust, patterns, plan, prepared))
-        produced = _policy_loop(
-            session, policies, outputs, variables, exercised, static, mismatches
-        )
+        with PolicyWriter(out / "results.csv", out / "paths.csv", rows_csv) as writer:
+            _policy_loop(
+                session, policies, outputs, variables, exercised, static, mismatches, writer
+            )
 
-    out = req.out_dir
-    write_results(out / "results.csv", produced.values)
-    rows_csv: Path | None = None
-    if req.variables is not None:
-        rows_csv = out / "rows.csv"
-        write_rows(rows_csv, produced.rows)
-    write_paths(out / "paths.csv", produced.paths)
     write_trust_report(
         out / "trust_report.json",
         _trust_report(

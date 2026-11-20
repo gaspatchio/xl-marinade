@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import gc
 import json
 import tempfile
 from collections.abc import Callable
@@ -14,6 +15,9 @@ pytest.importorskip("ironcalc")
 
 from tests.calc.conftest import F, add_external_link  # noqa: E402
 from xl_marinade.calc import CalcRequest, CalcResult, calc  # noqa: E402
+from xl_marinade.calc import run as run_module  # noqa: E402
+from xl_marinade.calc.output import OutputValue, PathRecord  # noqa: E402
+from xl_marinade.calc.probes import ProbeReadings  # noqa: E402
 from xl_marinade.calc.run import coerce_input  # noqa: E402
 from xl_marinade.errors import CalcInputError, WorkbookRefused  # noqa: E402
 
@@ -558,3 +562,69 @@ def test_trust_report_lists_the_mismatch_with_its_difference(
     assert mismatch["cell"] == "Calc!B1"
     assert (mismatch["stored"], mismatch["computed"]) == (141.0, 140.0)
     assert mismatch["relative_difference"] == pytest.approx(1 / 141)
+
+
+# -- results stream to disk: memory does not grow with policies or check sets ---------
+
+
+def _live(cls: type) -> int:
+    return sum(1 for o in gc.get_objects() if type(o) is cls)
+
+
+def test_results_stream_to_disk_one_policy_at_a_time(
+    make_book: Book, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sheets: dict[str, dict[str, object]] = {
+        "Inputs": {"B1": 40},
+        "Calc": {"B1": F(_NESTED, 40), "B2": F("=Calc!B1+1", 41)},
+        "Results": {"A2": 1, "B2": 40, "A3": 2, "B3": 140, "A4": 3, "B4": 50, "A5": 4, "B5": 0},
+        "Table": {"A2": 1, "B2": 40, "A3": 2, "B3": 70, "A4": 3, "B4": 50, "A5": 4, "B5": 10},
+    }
+    book = make_book("stream", sheets)
+    out = tmp_path / "out"
+    seen: list[tuple[int, int, int, int, int]] = []
+    real = run_module._Session.recalc
+
+    def spy(self: object) -> ProbeReadings:
+        results = out / "results.csv"
+        lines = len(results.read_text(encoding="utf-8").splitlines()) if results.exists() else -1
+        paths = out / "paths.csv"
+        plines = len(paths.read_text(encoding="utf-8").splitlines()) if paths.exists() else -1
+        seen.append((lines, plines, _live(OutputValue), _live(PathRecord), _live(ProbeReadings)))
+        return real(self)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(run_module._Session, "recalc", spy)
+    n = 8
+    policies = "id,age\n" + "".join(f"{i},{(10, 50, 75)[i % 3]}\n" for i in range(n))
+    imap = {"id_field": "id", "fields": {"age": "Inputs!B1"}}
+    check = _scoped_check({"Calc!B1": "B"})
+    res = calc(
+        _req(
+            tmp_path,
+            book,
+            policies,
+            imap=imap,
+            outputs=["Calc!B1:B2"],
+            check_against=_write(tmp_path, "check.json", json.dumps(check)),
+        )
+    )
+    # Four check sets, then one recalculation per policy.
+    assert len(seen) == 4 + n
+    loop = seen[4:]
+    # Before policy k recalculates, the k policies before it are already on disk.
+    assert [s[0] for s in loop] == [1 + 2 * k for k in range(n)]
+    assert all(b[1] > a[1] for a, b in zip(loop[1:], loop[2:], strict=False))
+    # Nothing per policy or per check set stays in memory.
+    assert max(s[2] for s in loop) <= 2
+    assert max(s[3] for s in loop) <= 4
+    assert max(s[4] for s in loop) <= 1
+    assert len(res.results_csv.read_text(encoding="utf-8").splitlines()) == 1 + 2 * n
+
+
+def test_failed_policy_leaves_no_partial_results(make_book: Book, tmp_path: Path) -> None:
+    book = make_book("partial", {"Inputs": {"B1": 40}, "Calc": {"B1": F("=Inputs!B1*2", 80)}})
+    imap = {"id_field": "id", "fields": {"age": "Inputs!B1"}}
+    with pytest.raises(CalcInputError, match="not a number"):
+        calc(_req(tmp_path, book, "id,age\n1,50\n2,X\n", imap=imap, outputs=["Calc!B1"]))
+    out = tmp_path / "out"
+    assert not any((out / name).exists() for name in ("results.csv", "rows.csv", "paths.csv"))

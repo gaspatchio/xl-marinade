@@ -6,7 +6,8 @@ import csv
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from types import TracebackType
+from typing import IO, Any, Self
 
 from xl_marinade.calc.engine import EngineValue
 from xl_marinade.calc.graph import StoredValue
@@ -67,23 +68,42 @@ def format_reasons(reasons: list[Reason]) -> str:
     )
 
 
+def _row_fields(r: Row) -> list[object]:
+    return [
+        r.policy,
+        r.variable,
+        "" if r.period is None else r.period,
+        format_value(r.value),
+        r.status.value,
+        format_reasons(r.reasons),
+    ]
+
+
+def _result_fields(v: OutputValue) -> list[object]:
+    return [
+        v.policy_id,
+        v.cell.a1(),
+        format_value(v.value),
+        v.status.value,
+        format_reasons(v.reasons),
+    ]
+
+
+def _path_fields(r: PathRecord) -> list[object]:
+    return [
+        r.policy_id,
+        r.cell.a1(),
+        r.family,
+        r.kind,
+        r.ordinal,
+        r.outcome,
+        "true" if r.exercised else "false",
+    ]
+
+
 def write_rows(path: Path, rows: list[Row]) -> None:
     """Write ``rows.csv`` (UTF-8, ``\\n`` line endings)."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8", newline="\n") as fh:
-        writer = csv.writer(fh, lineterminator="\n")
-        writer.writerow(HEADER)
-        for r in rows:
-            writer.writerow(
-                [
-                    r.policy,
-                    r.variable,
-                    "" if r.period is None else r.period,
-                    format_value(r.value),
-                    r.status.value,
-                    format_reasons(r.reasons),
-                ]
-            )
+    _csv(path, HEADER, [_row_fields(r) for r in rows])
 
 
 def clear_outputs(out_dir: Path, names: tuple[str, ...]) -> None:
@@ -109,40 +129,90 @@ def _json(path: Path, data: dict[str, Any]) -> None:
 
 def write_results(path: Path, values: list[OutputValue]) -> None:
     """Write ``results.csv`` in the given order (UTF-8, ``\\n`` line endings)."""
-    _csv(
-        path,
-        RESULTS_HEADER,
-        [
-            [
-                v.policy_id,
-                v.cell.a1(),
-                format_value(v.value),
-                v.status.value,
-                format_reasons(v.reasons),
-            ]
-            for v in values
-        ],
-    )
+    _csv(path, RESULTS_HEADER, [_result_fields(v) for v in values])
 
 
 def write_paths(path: Path, records: list[PathRecord]) -> None:
     """Write ``paths.csv`` in the given order; ``exercised`` is ``true``/``false``."""
-    _csv(
-        path,
-        PATHS_HEADER,
-        [
-            [
-                r.policy_id,
-                r.cell.a1(),
-                r.family,
-                r.kind,
-                r.ordinal,
-                r.outcome,
-                "true" if r.exercised else "false",
-            ]
-            for r in records
-        ],
-    )
+    _csv(path, PATHS_HEADER, [_path_fields(r) for r in records])
+
+
+class _Stream:
+    """One CSV file written row by row."""
+
+    def __init__(self, path: Path, header: list[str]) -> None:
+        self.path = path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._fh: IO[str] = path.open("w", encoding="utf-8", newline="\n")
+        self._writer = csv.writer(self._fh, lineterminator="\n")
+        self._writer.writerow(header)
+        self._fh.flush()
+
+    def write(self, rows: list[list[object]]) -> None:
+        self._writer.writerows(rows)
+
+    def flush(self) -> None:
+        self._fh.flush()
+
+    def close(self) -> None:
+        self._fh.close()
+
+
+class PolicyWriter:
+    """Streams ``results.csv``, ``paths.csv`` and (optionally) ``rows.csv`` one policy at
+    a time, so a run holds no more than one policy's outputs in memory.
+
+    The files are byte-identical to :func:`write_results`, :func:`write_paths` and
+    :func:`write_rows` given the same records in the same order. Leaving the ``with``
+    block on an exception deletes all three files: a run that stopped part-way must not
+    leave results that look complete.
+    """
+
+    def __init__(self, results: Path, paths: Path, rows: Path | None) -> None:
+        self._streams: list[_Stream] = []
+        try:
+            self._results = self._open(results, RESULTS_HEADER)
+            self._paths = self._open(paths, PATHS_HEADER)
+            self._rows = self._open(rows, HEADER) if rows is not None else None
+        except BaseException:
+            self._discard()
+            raise
+
+    def _open(self, path: Path, header: list[str]) -> _Stream:
+        stream = _Stream(path, header)
+        self._streams.append(stream)
+        return stream
+
+    def write_policy(
+        self, values: list[OutputValue], paths: list[PathRecord], rows: list[Row]
+    ) -> None:
+        """Append one policy's records and flush them to disk."""
+        self._results.write([_result_fields(v) for v in values])
+        self._paths.write([_path_fields(r) for r in paths])
+        if self._rows is not None:
+            self._rows.write([_row_fields(r) for r in rows])
+        for stream in self._streams:
+            stream.flush()
+
+    def _discard(self) -> None:
+        for stream in self._streams:
+            stream.close()
+            stream.path.unlink(missing_ok=True)
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        if exc_type is not None:
+            self._discard()
+            return
+        for stream in self._streams:
+            stream.close()
 
 
 def write_trust_report(path: Path, report: dict[str, Any]) -> None:
