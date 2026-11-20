@@ -67,6 +67,10 @@ marinade document ir.db -o out/ --enrich
 
 # Diff two extracted databases, emitting a JSON changelist
 marinade diff a.db b.db
+
+# Experimental: recalculate a workbook for new inputs, with a trust status per value
+# (requires xl-marinade[calc]; `marinade values` returns stored values and needs no extra)
+marinade calc book.xlsx --policies policies.csv --map map.json --outputs 'Summary!B4' -o out/
 ```
 
 Extraction and diffing are always deterministic and network-free. `--enrich` on

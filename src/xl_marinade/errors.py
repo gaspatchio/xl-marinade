@@ -32,3 +32,27 @@ class DiffError(MarinadeError):
 
 class LLMUnavailable(MarinadeError):
     """An LLM feature was requested but no provider is configured/installed."""
+
+
+class CalcError(MarinadeError):
+    """Base class for errors raised by the experimental ``marinade calc`` feature."""
+
+
+class CalcInputError(CalcError):
+    """A calc input (map, policies, vars, check file, cell reference) is invalid."""
+
+
+class CalcUnavailable(CalcError):
+    """The calc engine is not installed; install ``xl-marinade[calc]``."""
+
+
+class WorkbookRefused(CalcError):
+    """The whole workbook is refused for recalculation.
+
+    Attributes:
+        reasons: Human-readable reasons the workbook was refused.
+    """
+
+    def __init__(self, message: str, reasons: list[str] | None = None) -> None:
+        super().__init__(message)
+        self.reasons: list[str] = list(reasons) if reasons is not None else []

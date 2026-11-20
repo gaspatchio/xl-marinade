@@ -1,0 +1,42 @@
+{
+ "S": {
+  "pv_net_cf_max_abs_vs_excel": 9.171117199002765e-10,
+  "engine": "ironcalc",
+  "policies": 10000,
+  "seconds": 60.1,
+  "per_policy_ms": 6.0,
+  "distinct_result_rows": 9599,
+  "premium_exact_vs_excel": 10000,
+  "premium_mismatch_ids": [],
+  "pv_net_cf_bit_identical_vs_excel": 404,
+  "pv_net_cf_max_rel_vs_excel": 7.858396472760407e-10,
+  "max_rel_vs_lifelib": {
+   "premium_pp": 0.0,
+   "pv_premiums": 7.660313281205886e-13,
+   "pv_claims": 9.28655260379108e-13,
+   "pv_expenses": 6.47424652468442e-14,
+   "pv_commissions": 5.676456182332975e-12,
+   "pv_net_cf": 6.828495742219979e-10
+  }
+ },
+ "SE": {
+  "pv_net_cf_max_abs_vs_excel": 1.1548036127351224e-07,
+  "engine": "ironcalc",
+  "policies": 10000,
+  "seconds": 77.6,
+  "per_policy_ms": 7.8,
+  "distinct_result_rows": 10000,
+  "premium_exact_vs_excel": 10000,
+  "premium_mismatch_ids": [],
+  "pv_net_cf_bit_identical_vs_excel": 1132,
+  "pv_net_cf_max_rel_vs_excel": 1.003227589006331e-09,
+  "max_rel_vs_lifelib": {
+   "premium_pp": 0.0,
+   "pv_premiums": 1.3487758751145228e-12,
+   "pv_claims": 2.6744901179513528e-12,
+   "pv_expenses": 1.7032710135440145e-12,
+   "pv_commissions": 1.4632828922382203e-12,
+   "pv_net_cf": 1.0026464799351258e-09
+  }
+ }
+}
