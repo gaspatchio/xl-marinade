@@ -1,6 +1,6 @@
 # `marinade calc`, PR 1: calculator and trust report — design
 
-Status: **design, approved 2026-11-19. Nothing is built.** Background, engine comparison and
+Status: **design, approved 2026-11-19; built in PR #67 (experimental).** User guide: [`docs/guide/calc.md`](../../../docs/guide/calc.md). Background, engine comparison and
 the three-PR plan are in [`../README.md`](../README.md).
 
 `marinade calc` recalculates a workbook for new input sets with IronCalc, proves itself
