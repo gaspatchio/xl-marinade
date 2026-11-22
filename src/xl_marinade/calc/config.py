@@ -74,7 +74,10 @@ def load_policies(path: Path, input_map: InputMap) -> list[Policy]:
         with path.open(encoding="utf-8-sig", newline="") as fh:
             reader = csv.DictReader(fh)
             header = reader.fieldnames or []
-            dupes = sorted({h for h in header if header.count(h) > 1})
+            # Unnamed columns (spreadsheet exports often end lines with ",,") are never
+            # mapped, so only named columns can clash.
+            named = [h for h in header if h.strip()]
+            dupes = sorted({h for h in named if named.count(h) > 1})
             if dupes:
                 raise CalcInputError(f"{path} has duplicate column(s): {dupes}")
             if id_col not in header:

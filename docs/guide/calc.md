@@ -30,7 +30,7 @@ pip install 'xl-marinade[calc]'
 | Option | File | What it holds |
 |---|---|---|
 | `WORKBOOK` | `.xlsx` / `.xlsm` | The model, saved by Excel so it carries stored values. |
-| `--policies` | `policies.csv` | One row per input set. An id column plus one column per mapped field. UTF-8 (save from Excel as "CSV UTF-8"). Ids stay text; a blank value, a duplicate id or a duplicate column name is an error. |
+| `--policies` | `policies.csv` | One row per input set. An id column plus one column per mapped field. UTF-8 (save from Excel as "CSV UTF-8"). Ids stay text; a blank value, a duplicate id or a duplicate column name is an error. Columns with no name (the empty trailing columns some exports add) are ignored. |
 | `--map` | `map.json` | Which cell or defined name each field sets. |
 | `--outputs` | repeatable | Output cells, ranges or defined names (`'Results!B5:B64'`). Ranges expand to cells. |
 | `--variables` | `vars.json` | Optional. Named output variables for `rows.csv`. |

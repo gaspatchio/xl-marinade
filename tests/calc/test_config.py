@@ -194,6 +194,24 @@ def test_policies_duplicate_header_is_input_error(tmp_path: Path) -> None:
         load_policies(p, InputMap(fields={"age": "S!B1"}, id_field=None))
 
 
+def test_policies_trailing_empty_header_columns_are_ignored(tmp_path: Path) -> None:
+    # Spreadsheet exports often end every line with empty columns.
+    p = tmp_path / "p.csv"
+    p.write_text("id,age,,\n1,40,,\n2,41,,\n", encoding="utf-8")
+    policies = load_policies(p, InputMap(fields={"age": "S!B1"}, id_field=None))
+    assert policies == [
+        Policy(id="1", values={"age": "40"}),
+        Policy(id="2", values={"age": "41"}),
+    ]
+
+
+def test_policies_named_duplicate_still_refused_beside_empty_headers(tmp_path: Path) -> None:
+    p = tmp_path / "p.csv"
+    p.write_text("id,age,age,,\n1,40,41,,\n", encoding="utf-8")
+    with pytest.raises(CalcInputError, match=r"duplicate column\(s\): \['age'\]"):
+        load_policies(p, InputMap(fields={"age": "S!B1"}, id_field=None))
+
+
 def test_json_not_utf8_is_input_error(tmp_path: Path) -> None:
     p = tmp_path / "m.json"
     p.write_bytes('{"fields": {"n\xe9": "S!B1"}}'.encode("cp1252"))
