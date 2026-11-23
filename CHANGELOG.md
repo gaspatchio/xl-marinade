@@ -7,6 +7,15 @@ schema is a versioned public contract.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-24
+
+Adds `marinade calc` and `marinade values`, both experimental. `calc` recalculates
+a workbook for new input sets with IronCalc, through the optional
+`xl-marinade[calc]` extra, and puts a trust status on every output value.
+`values` writes a workbook's stored values in the same row shape. Neither is
+covered by SemVer yet. Extraction, documentation and the output schema (3.0)
+are unchanged.
+
 ### Added
 - **`marinade calc` and `marinade values` (experimental).** `calc` recalculates a
   workbook for new input sets with IronCalc (the optional `xl-marinade[calc]` extra),
