@@ -175,6 +175,8 @@ class WorkbookGraph:
         # Array formulas: anchor -> its range, and each other cell of a range -> anchor.
         self._arrays: dict[CellRef, ArrayRange] = {}
         self._member_anchor: dict[CellRef, CellRef] = {}
+        # Dynamic arrays per sheet: their spill can grow past the stored range.
+        self._spills: dict[str, list[ArrayRange]] = defaultdict(list)
         # Cells holding a dynamic reference -> what they read besides where it lands:
         # references outside the dynamic calls, and the calls' arguments.
         self._reads: dict[CellRef, list[_Rect]] = {}
@@ -373,6 +375,8 @@ class WorkbookGraph:
             if anchor not in self._formula:
                 continue
             self._arrays[anchor] = array
+            if array.dynamic:
+                self._spills[anchor.sheet].append(array)
             for cell in array.cells()[1:]:
                 if cell in self._formula or cell in self._member_anchor:
                     continue
@@ -455,6 +459,20 @@ class WorkbookGraph:
         if array is None:
             return []
         return [c for c in array.cells()[1:] if self._member_anchor.get(c) == anchor]
+
+    def may_spill_into(self, cell: CellRef) -> bool:
+        """True when a dynamic array could spill into ``cell`` for some policy: the cell
+        lies below or right of an anchor, outside the range the workbook stored, and
+        the workbook keeps nothing in it."""
+        if self.holds(cell):
+            return False
+        for array in self._spills.get(cell.sheet, ()):
+            anchor = array.anchor
+            if cell.row < anchor.row or cell.col < anchor.col:
+                continue
+            if cell.row > array.last_row or cell.col > array.last_col:
+                return True
+        return False
 
     def arrays(self) -> list[ArrayRange]:
         """Every array formula's range, by anchor."""

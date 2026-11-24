@@ -514,7 +514,8 @@ def _number_text_reason(probe: Probe, values: list[EngineValue]) -> str | None:
 def _general_reason(values: list[EngineValue], check: str) -> str | None:
     """For ``(x, x&"")`` readings: why Excel's text for ``x`` may differ; None if not."""
     x, text = values[0], values[1]
-    if not isinstance(x, float) or not isinstance(text, str):
+    if not isinstance(x, float) or not isinstance(text, str) or text == "":
+        # An empty cell reads 0 but joins as "" in Excel and the engine alike.
         return None
     differs = excel_general_text(x) != text
     if check == "criterion" and (differs or x != math.floor(x)):
@@ -891,13 +892,15 @@ class _Planner:
     def _plain_constant(self, cell: CellRef) -> bool:
         """A cell no policy changes whose text Excel writes as the engine does: blank,
         text, a boolean, or a number that needs at most 15 significant digits. A cell of
-        an array formula's range is computed, however its stored value looks."""
+        an array formula's range is computed, however its stored value looks, and so is
+        an empty cell a dynamic array can spill into."""
         if cell in self.inputs or self.graph.formula(cell) is not None:
             return False
         if self.graph.array_anchor(cell) is not None:
             return False
         if not self.graph.has_stored(cell):
-            return True
+            # Blank, unless a dynamic array's spill can grow into it for some policy.
+            return not self.graph.may_spill_into(cell)
         value = self.graph.stored(cell)
         return not isinstance(value, float) or plain_number(value)
 
