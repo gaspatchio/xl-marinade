@@ -385,3 +385,30 @@ def test_an_indirect_landing_inside_an_array_is_not_ok(make_book: Book, tmp_path
     row = _rows(res)[("P", "Calc!E1")]
     assert row["value"] == "4.0"
     assert row["status"] != "ok", row
+
+
+def test_a_join_over_cells_a_spill_can_grow_into_is_read_per_policy(
+    make_book: Book, tmp_path: Path
+) -> None:
+    # Arr!A1 = 1/SEQUENCE(Inputs!B1) spills down column A; the workbook stored n = 2
+    # (A1:A2 = 1, 0.5), so A3:A5 are empty. Calc!B1 = TEXTJOIN(",",TRUE,Arr!A1:A5).
+    # n = 2: "1,0.5" in Excel and the engine alike. n = 3: the spill reaches A3 = 1/3,
+    # which Excel writes "0.333333333333333" (15 digits) and IronCalc 0.9.1 with 16,
+    # so the joined text differs from Excel's and must not come back ok.
+    book = make_book(
+        "spill_join",
+        {
+            "Inputs": {"B1": 2},
+            "Arr": {"A1": F("=1/_xlfn.SEQUENCE(Inputs!B1)", 1), "A2": 0},
+            "Calc": {"B1": F('=_xlfn.TEXTJOIN(",",TRUE,Arr!A1:A5)', "1,0.5")},
+        },
+    )
+    formula = "1/_xlfn.SEQUENCE(Inputs!B1)"
+    book = _arrays(book, "xl/worksheets/sheet2.xml", [("A1", "A1:A2", formula, {"A2": 0.5}, True)])
+    res = _run(tmp_path, book, "id,n\nP2,2\nP3,3\n", {"n": "Inputs!B1"}, ["Calc!B1"])
+    rows = _rows(res)
+    assert rows[("P2", "Calc!B1")]["value"] == "1,0.5"
+    assert rows[("P2", "Calc!B1")]["status"] == "ok", rows[("P2", "Calc!B1")]["reasons"]
+    p3 = rows[("P3", "Calc!B1")]
+    assert p3["value"].startswith("1,0.5,0.333333333333333"), p3
+    assert p3["status"] == "refused", p3
