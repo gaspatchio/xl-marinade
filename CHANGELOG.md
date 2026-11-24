@@ -149,6 +149,10 @@ schema is a versioned public contract.
   1900-01-01 placeholder date became 2), and Excel has no dates before 1900.
   `--check-against` table values keep their stored type: a stored `TRUE` was set as
   the text `"TRUE"`, which made a false mismatch and refused the output.
+- **`marinade values`: the stored row is labelled with the default id field.** With
+  `fields.id` mapped and no `id_field`, `values` labelled its row `stored` while `calc`
+  used the id, so the two files did not join; it now reads the same default (`id`). A
+  boolean id cell is written `TRUE`, as `calc` reads it, not `True`.
 
 ## [0.8.0] - 2026-11-24
 

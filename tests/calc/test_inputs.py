@@ -325,3 +325,43 @@ def test_check_table_values_keep_their_stored_type(make_book: Book, tmp_path: Pa
     assert report["check_against"]["mismatches"] == []
     row = _results(res)[("p", "Calc!B3")]
     assert (row["value"], row["status"]) == ("1.0", "ok")
+
+
+# -- values labels its row with the id field calc uses ------------------------------
+
+
+def _rows(path: Path) -> list[dict[str, str]]:
+    with path.open(encoding="utf-8", newline="") as fh:
+        return list(csv.DictReader(fh))
+
+
+@pytest.mark.parametrize("imap", [{}, {"id_field": "id"}])
+def test_values_and_calc_rows_share_keys_under_the_default_id_field(
+    make_book: Book, tmp_path: Path, imap: dict[str, object]
+) -> None:
+    # The id field defaults to "id" (guide): the stored input set's id is the value
+    # in its cell, 555, and calc labels the same input set 555 from policies.csv.
+    from xl_marinade.calc.values import ValuesRequest, values
+
+    book = make_book("vid", {"In": {"A1": 555, "A2": 3}, "Out": {"B1": F("=In!A2*2", 6)}})
+    variables = _write(tmp_path, "vars.json", json.dumps({"npv": {"cell": "Out!B1"}}))
+    full = {**imap, "fields": {"id": "In!A1", "n": "In!A2"}}
+    mp = _write(tmp_path, "vmap.json", json.dumps(full))
+    stored = _rows(values(ValuesRequest(book, variables, tmp_path / "v", input_map=mp)))
+    res = calc(_req(tmp_path, book, "id,n\n555,3\n", full, [], variables=variables))
+    assert res.rows_csv is not None
+    computed = _rows(res.rows_csv)
+    key = ("policy", "variable", "period", "value")
+    assert [tuple(r[k] for k in key) for r in stored] == [("555", "npv", "", "6.0")]
+    assert [tuple(r[k] for k in key) for r in computed] == [("555", "npv", "", "6.0")]
+
+
+def test_values_writes_a_boolean_id_as_calc_reads_it(make_book: Book, tmp_path: Path) -> None:
+    # A policies.csv id is text; a boolean id cell reads TRUE there, as Excel shows it.
+    from xl_marinade.calc.values import ValuesRequest, values
+
+    book = make_book("vbool", {"In": {"A1": True}, "Out": {"B1": F("=In!A1", True)}})
+    variables = _write(tmp_path, "vars.json", json.dumps({"x": {"cell": "Out!B1"}}))
+    mp = _write(tmp_path, "vmap.json", json.dumps({"fields": {"id": "In!A1"}}))
+    stored = _rows(values(ValuesRequest(book, variables, tmp_path / "v", input_map=mp)))
+    assert stored[0]["policy"] == "TRUE"

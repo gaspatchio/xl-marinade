@@ -241,8 +241,9 @@ All in the `-o` directory, UTF-8, `\n` line endings, no timestamps.
 | `run.json` | `ironcalc_version`, `marinade_version`, `workbook_sha256`, `tolerance`, `as_of`, `probe_cap`, `probes_unplaced`, and per variable its range, `period_start` and the cell period 0 falls on. |
 
 `marinade values` writes `rows.csv` and `run.json` (variables only). Its rows carry status
-`stored`, and the policy is `stored`, or the stored value of the id field when `--map`
-maps it.
+`stored`, and the policy is `stored`, or the stored value of the id field (`id_field`,
+default `id`) when `--map` maps it, written as `policies.csv` would hold it (`555`,
+`TRUE`), so its rows join `calc`'s rows for the same input set.
 
 In `reasons`, each entry reads `kind@root:detail`, joined by `; `, in a stable order. The
 root is the cell the problem starts at; it can be upstream of the output.
