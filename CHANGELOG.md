@@ -11,35 +11,38 @@ schema is a versioned public contract.
 - **`marinade calc`: defined names are read the way Excel reads them.** A formula reads
   its own sheet's definition of a name before the workbook's, so a sheet-scoped name
   that shadows a workbook name (common in sheets copied from another workbook) no
-  longer feeds the wrong cells to the probes, the implicit-intersection and sortedness
-  scans, or an `OFFSET` base, which could leave a wrong value marked `ok`. Names and
-  sheet names ignore case everywhere, including `check.json` sheets and the sheet in
-  an `INDIRECT` text. A sheet's own name can be a target, written `'Sheet'!Name`; a
-  bare name that a sheet also defines is refused as ambiguous instead of silently
-  setting the workbook's cell.
+  longer feeds the wrong cells to the implicit-intersection and sortedness scans or to
+  an `OFFSET` base, and a probe on it is left unplaced instead of reading the
+  workbook's definition; either could leave a wrong value marked `ok`. Names and sheet
+  names ignore case letter by letter, as in
+  Excel, in targets, `check.json` sheets and the sheet in an `INDIRECT` text; names
+  may start with a letter of any script. A sheet's own name can be a target, written
+  `'Sheet'!Name`; a bare name that a sheet also defines is refused as ambiguous
+  instead of silently setting the workbook's cell.
 - **`marinade calc`: names with a relative reference are refused.** A defined name
   written without `$` (such as `Calc!B5`) names different cells from each cell that
   uses it; IronCalc reads the stored reference as it is, so such a formula could come
   back `ok` with the wrong value. It is now a refused pattern (`name with a relative
   reference: <Name>`), and such a name is refused as a target or dropdown list.
 - **`marinade calc` / `marinade values`: targets that cover no cells are errors.** An
-  output, variable range or map field naming a defined name that holds a formula
-  (`OFFSET` dynamic ranges included), a constant, a broken reference or another
-  workbook's cells used to resolve to nothing and be dropped while the run exited 0;
-  it now stops with an error naming the target and the fix. Whole-column and
-  whole-row targets (`Calc!B:B`, and names over them) are accepted and cover the rows
-  the sheet uses. A single-cell use of a whole-column or whole-row name is refused as
-  implicit intersection, which an `IFERROR` around it used to hide (K9).
+  output or variable range naming a defined name that holds a formula (`OFFSET`
+  dynamic ranges included), a constant, a broken reference or another workbook's cells
+  used to resolve to nothing and be dropped while the run exited 0; it now stops with
+  an error naming the target and the fix, and every bad target is named at once.
+  Whole-column and whole-row targets (`Calc!B:B`, and names over them) are accepted and
+  cover the rows the sheet uses. A single-cell use of a whole-column or whole-row name
+  is refused as implicit intersection, which an `IFERROR` around it used to hide.
 - **`marinade calc` / `marinade values`: a variable range across two sheets is an
   error.** A `vars.json` range naming a defined name whose areas lie on two sheets
   passed the one-column check and its periods alternated between the sheets.
 - **`marinade calc`: data-validation lists are checked the way Excel checks them.** A
   list whose source is a defined name (a sheet's own name first), `=Name` or a whole
   column was never checked, so a value outside it came back `ok`; it is now read from
-  the cells the source covers. The check ignores case (`yes` against `Yes,No` is
-  accepted) and compares the converted value, so an ISO date matches a list of dates
-  (K21). Lists fed by a formula (`INDIRECT`, `OFFSET`, cascading dropdowns) are still
-  not checked; the guide now says so.
+  the cells the source covers. The check compares the value as entered in its cell:
+  text ignores case (`yes` against `Yes,No` is accepted), and a number (an ISO date
+  typed into a date cell is its serial) matches number items only, so `1` no longer
+  matches the text `001`. Lists fed by a formula (`INDIRECT`, `OFFSET`, cascading
+  dropdowns) are still not checked; the guide now says so.
 
 ## [0.8.0] - 2026-11-24
 

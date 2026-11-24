@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import sqlite3
 from bisect import bisect_left
@@ -125,10 +126,28 @@ def _parse_whole(text: str, default_sheet: str | None = None) -> _Rect | None:
     return (sheet, a, 1, b, _MAX_COL)
 
 
+def _address_hint(found: NameDef) -> str:
+    """How to write a name's cells as targets: its address, or each of its areas."""
+    if not found.areas:
+        return "its cells"
+    if len(found.areas) == 1:
+        return found.areas[0]
+    return f"each of its areas ({', '.join(found.areas)}) as its own target"
+
+
 def _spelled(defs: list[NameDef], name: str) -> NameDef:
     """The definition spelled exactly ``name`` (as formula text writes it), else the
     first: a file normally holds one spelling per name."""
     return next((d for d in defs if d.name == name), defs[0])
+
+
+def _list_item(text: str) -> float | str:
+    """A literal dropdown item as Excel reads it: a number when it is one, else text."""
+    try:
+        number = float(text)
+    except ValueError:
+        return text
+    return number if math.isfinite(number) else text
 
 
 def _convert(raw: str, data_type: str | None) -> StoredValue:
@@ -143,14 +162,6 @@ def _convert(raw: str, data_type: str | None) -> StoredValue:
         return float(raw)
     except ValueError:
         return raw
-
-
-def _text(value: StoredValue) -> str:
-    if isinstance(value, bool):
-        return "TRUE" if value else "FALSE"
-    if isinstance(value, float) and value.is_integer():
-        return str(int(value))
-    return str(value)
 
 
 class WorkbookGraph:
@@ -517,9 +528,13 @@ class WorkbookGraph:
                 return self._name_cells_target(own, target)
             if book is None and not owners:
                 return None
-            where = f"the workbook's {book.name!r} is written without a sheet" if book else ""
-            if owners:
-                where = "; ".join(filter(None, [where, self._sheet_names_hint(owners, name)]))
+            if book is None:
+                where = self._sheet_names_hint(owners, name)
+            elif owners:
+                # A bare name is ambiguous here, so point at the workbook's cells.
+                where = f"for the workbook's {book.name!r} give {_address_hint(book)}"
+            else:
+                where = f"the workbook's {book.name!r} is written without a sheet"
             raise CalcInputError(
                 f"target {target!r}: sheet {sheet!r} has no name {name!r} of its own ({where})"
             )
@@ -529,10 +544,9 @@ class WorkbookGraph:
                 raise CalcInputError(
                     f"target {target!r}: {name!r} is defined only for a sheet; {hint}"
                 )
-            address = ", ".join(book.areas) or "its address"
             raise CalcInputError(
                 f"target {target!r} is ambiguous: the workbook and a sheet each define "
-                f"{name!r}; {hint}, or {address} for the workbook's"
+                f"{name!r}; {hint}, or for the workbook's give {_address_hint(book)}"
             )
         if book is None:
             return None
@@ -591,13 +605,14 @@ class WorkbookGraph:
         options = " or ".join(f"{_quoted(s)}!{n}" for s, n in zip(owners, spelled, strict=True))
         return f"write {options}"
 
-    def allowed_values(self, cell: CellRef) -> list[str] | None:
+    def allowed_values(self, cell: CellRef) -> list[float | str | bool] | None:
         """List-validation values for the cell, or None when it has no list validation
         that can be read.
 
-        The list is the literal items, or the stored values of the source: a range, a
-        whole column or row (the cells it holds), or a defined name over cells, read
-        from the validation's sheet as a formula there would read it. A source that is
+        The list is the literal items (numbers where they read as one), or the typed
+        stored values of the source: a range, a whole column or row (the cells it
+        holds), or a defined name over cells, read from the validation's sheet as a
+        formula there would read it. A source that is
         a formula (``INDIRECT``, ``OFFSET``, a name holding one) is not read: its list
         can change with the inputs (ruling D8 leaves it unchecked in 0.8.1).
         """
@@ -608,12 +623,12 @@ class WorkbookGraph:
             ):
                 continue
             if literals is not None:
-                return literals
+                return [_list_item(v) for v in literals]
             source = self._list_source(str(f1 or ""), sheet)
             if source is None:
                 continue
             cells = [c for rect in source for c in self._cells_in_rect(rect)]
-            return [_text(self._stored[c]) for c in cells if c in self._stored]
+            return [v for c in cells if (v := self._stored.get(c)) is not None]
         return None
 
     def _list_source(self, formula1: str, sheet: str) -> list[_Rect] | None:

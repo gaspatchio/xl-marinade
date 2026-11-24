@@ -597,3 +597,87 @@ def test_names_that_differ_only_in_case_are_ambiguous(make_book: Book, ir_for: I
     for target in ("Rate", "rate", "RATE"):
         with pytest.raises(CalcInputError, match="'RATE'.*'Rate'"):
             g.resolve_target(target)
+
+
+# -- refusal advice and every bad target named -----------------------------------
+
+
+def test_advice_for_a_sheet_without_its_own_name(shadowed: Path, ir_for: IrFor) -> None:
+    # Other has no Rate of its own; Calc has one. The workbook's Rate is at Other!A1:
+    # the advice names that address, not a bare Rate (itself ambiguous).
+    g = WorkbookGraph.from_ir(ir_for(shadowed))
+    with pytest.raises(CalcInputError) as info:
+        g.resolve_target("Other!Rate")
+    message = str(info.value)
+    assert "Other!A1" in message
+    assert "without a sheet" not in message
+
+
+def test_advice_for_a_multi_area_workbook_name(make_book: Book, ir_for: IrFor) -> None:
+    book = make_book(
+        "pair",
+        {"S": {"A1": 1, "A2": 2, "A4": 4, "A5": 5}},
+        names={"Pair": "S!$A$1:$A$2,S!$A$4:$A$5"},
+        local_names={("S", "Pair"): "S!$A$1"},
+    )
+    g = WorkbookGraph.from_ir(ir_for(book))
+    with pytest.raises(CalcInputError, match=r"each of its areas \(S!A1:A2, S!A4:A5\)"):
+        g.resolve_target("Pair")
+
+
+def test_every_bad_target_is_named(lines: Path, tmp_path: Path) -> None:
+    vars_json = _write(
+        tmp_path, "vars.json", json.dumps({"c": {"range": "Const", "period_start": 1}})
+    )
+    with pytest.raises(CalcInputError) as info:
+        _run(
+            tmp_path,
+            lines,
+            "id,x\nP,3\n",
+            {"x": "In!A1"},
+            ["Dyn", "Calc!B1", "Net"],
+            variables=vars_json,
+        )
+    message = str(info.value)
+    for name in ("'Dyn'", "'Net'", "'Const'"):
+        assert name in message
+
+
+def test_a_one_sheet_union_runs_in_row_order(make_book: Book, tmp_path: Path) -> None:
+    # The extraction keeps a name's areas sorted, not in the order written, so a range
+    # over several areas of one sheet runs down the rows.
+    from xl_marinade.calc import ValuesRequest, values
+
+    book = make_book(
+        "rev",
+        {"S": {"A1": 1, "A2": 2, "A4": 4, "A5": 5}},
+        names={"Rev": "S!$A$4:$A$5,S!$A$1:$A$2"},
+    )
+    vars_json = _write(
+        tmp_path, "vars.json", json.dumps({"r": {"range": "Rev", "period_start": 1}})
+    )
+    rows = values(ValuesRequest(book, vars_json, tmp_path / "vout"))
+    with rows.open(encoding="utf-8", newline="") as fh:
+        got = [r["value"] for r in csv.DictReader(fh)]
+    assert got == ["1.0", "2.0", "4.0", "5.0"]
+
+
+def test_a_branch_nested_under_a_sheets_own_name_is_never_ok(
+    make_book: Book, tmp_path: Path
+) -> None:
+    # Calc!B2 = IF(Rate>0.05, IF(Inputs!B1>50,1,2), 3), Rate being Calc!A5 on Calc.
+    # P: 0.06 > 0.05, so Excel takes the outer TRUE arm and returns 2 (B1 = 40).
+    book = make_book(
+        "nested",
+        {
+            "Inputs": {"B1": 40},
+            "Other": {"A1": 0.04},
+            "Calc": {"A5": 0.03, "B2": F("=IF(Rate>0.05,IF(Inputs!B1>50,1,2),3)", 3)},
+        },
+        names=SHADOWED_NAMES,
+        local_names=SHADOWED_LOCAL,
+    )
+    res = _run(tmp_path, book, "id,rate\nP,0.06\n", {"rate": "Calc!A5"}, ["Calc!B2"])
+    row = _results(res)[("P", "Calc!B2")]
+    assert row["value"] == "2.0"
+    assert row["status"] != "ok"

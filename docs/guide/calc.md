@@ -40,9 +40,10 @@ You must give at least one of `--outputs` and `--variables`.
 
 ### Targets
 
-Every place that names cells (`map.json` fields, `--outputs`, `vars.json`, and the
-output, sheet and selector entries of `check.json`) takes a cell (`Inputs!C3`), a range
-(`Proj!C11:C130`) or a defined name. Sheet names and defined names ignore case letter by
+Every cell entry (`map.json` fields, `--outputs`, `vars.json`, and the output and
+selector entries of `check.json`) takes a cell (`Inputs!C3`), a range
+(`Proj!C11:C130`) or a defined name. The `sheet` entries of `check.json` take a sheet
+name, in any case. Sheet names and defined names ignore case letter by
 letter, as in Excel (`Straße` and `Strasse` stay two names), and names may use letters
 of any script (`Ärger`, `税率`). A file that defines two names differing only in case,
 which Excel itself does not allow, has a target naming them refused as ambiguous.
@@ -57,7 +58,7 @@ the sheet uses: up to the last row (or column) that holds a cell. A target that 
 no cells is an error that names it: a name that holds a formula (`OFFSET(...)` dynamic
 ranges included), a constant, a broken reference (`#REF!`) or cells in another workbook,
 and a whole column or row outside the range the sheet uses. Give such a target as a
-plain range instead.
+plain range instead. When several targets are wrong, the error names each of them.
 
 A name whose reference is relative (written without `$` on its row or column, such as
 `Calc!B5` or `Calc!$B5`) names different cells from each cell that uses it, so it is
@@ -84,9 +85,10 @@ data-validation list refuses that input set's outputs.
 
 The list is the validation's literal items, or the stored values of its source: a range,
 a whole column (the cells it holds) or a defined name over cells (the validation sheet's
-own name first, as in a formula). As in Excel, the check ignores case, and numbers and
-dates match by value: `2025-01-01` typed into a date cell matches a list holding that
-date. What is not checked:
+own name first, as in a formula). As in Excel, the check compares the value as it is
+entered in its cell: text ignores case, and a number matches number items only, so
+`2025-01-01` typed into a date cell matches a list holding that date, while `1` typed
+into a number cell does not match the text `001`. What is not checked:
 
 - A list fed by a formula (`INDIRECT`, `OFFSET`, a name holding one, as in cascading
   dropdowns) is not checked in this version: any value is accepted there.
@@ -106,7 +108,8 @@ date. What is not checked:
 ```
 
 A range runs down one column or across one row of one sheet; a 2-D range, or a name
-whose areas lie on more than one sheet, is an error.
+whose areas lie on more than one sheet, is an error. A name with several areas on one
+sheet runs in row order, whatever order its areas were written in.
 **`period_start` is required on every range and has no default**, because workbooks differ
 on whether periods count from 0 or 1. Periods count from it: the first cell of the range is
 period `period_start`, the next one `period_start + 1`. A single `cell` has no period (the

@@ -143,3 +143,39 @@ def test_list_validations(make_book: Book, tmp_path: Path) -> None:
     }
     want = {pid for pid, (_f, _v, ok) in CASES.items() if not ok}
     assert refused == want
+
+
+def test_numbers_match_number_items_only(make_book: Book, tmp_path: Path) -> None:
+    # Excel compares the number 1 with the list's items: a cell holding the number 1
+    # matches, the text "001" does not. A literal list "1,2" holds numbers.
+    book = make_book(
+        "numtext",
+        {
+            "In": {"B1": 1, "B2": 1, "B3": 1},
+            "Lists": {"A1": "001", "A2": "002", "B1": 1, "B2": 2},
+            "Out": {
+                "A1": F("=In!B1*10", 10),
+                "A2": F("=In!B2*10", 10),
+                "A3": F("=In!B3*10", 10),
+            },
+        },
+        list_sources=[
+            ("In!B1", "Lists!$A$1:$A$2"),
+            ("In!B2", "Lists!$B$1:$B$2"),
+            ("In!B3", '"1,2"'),
+        ],
+    )
+    policies = tmp_path / "policies.csv"
+    policies.write_text("id,t,n,l\ntext,1,1,1\nnum,001,2,2\n", encoding="utf-8")
+    imap = tmp_path / "map.json"
+    imap.write_text(
+        json.dumps({"fields": {"t": "In!B1", "n": "In!B2", "l": "In!B3"}}), encoding="utf-8"
+    )
+    res = calc(CalcRequest(book, policies, imap, tmp_path / "out", outputs=["Out!A1"]))
+    with res.results_csv.open(encoding="utf-8", newline="") as fh:
+        reasons = {r["policy_id"]: r["reasons"] for r in csv.DictReader(fh)}
+    # Policy "text": 1 against "001","002" -> refused; 1 against 1,2 and "1,2" -> fine.
+    assert "input_outside_allowed_values@In!B1" in reasons["text"]
+    assert "@In!B2" not in reasons["text"] and "@In!B3" not in reasons["text"]
+    # Policy "num": "001" typed into a number cell is the number 1 -> not "001" either.
+    assert "input_outside_allowed_values@In!B1" in reasons["num"]

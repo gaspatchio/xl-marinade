@@ -123,7 +123,8 @@ def test_allowed_values_from_range_source(make_book: Book, ir_for: IrFor) -> Non
     dv.add("B1")
     wb.save(path)
     g = WorkbookGraph.from_ir(ir_for(path))
-    assert g.allowed_values(CellRef("S", 1, 2)) == ["x", "y", "3"]
+    # Items keep their stored type: a number cell is a number item.
+    assert g.allowed_values(CellRef("S", 1, 2)) == ["x", "y", 3.0]
 
 
 def test_range_target_includes_empty_cells(make_book: Book, ir_for: IrFor) -> None:

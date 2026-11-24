@@ -174,18 +174,15 @@ def _as_text(value: StoredValue) -> str:
     return str(value)
 
 
-def _allowed(raw: str, value: float | str | bool | None, allowed: list[str]) -> bool:
-    """Excel's list check: the entry matches an item ignoring case, or by number.
-
-    ``value`` is the entry converted for its cell (None if it does not convert), so an
-    ISO date typed into a date cell matches a list of date serials.
-    """
-    folded = raw.lower()
-    if any(folded == item.lower() for item in allowed):
-        return True
-    numbers = {n for item in allowed if (n := _number(item)) is not None}
-    converted = value if isinstance(value, float) else None
-    return any(n is not None and n in numbers for n in (_number(raw), converted))
+def _allowed(raw: str, value: float | str | bool | None, allowed: list[float | str | bool]) -> bool:
+    """Excel's list check on the value entered: a number (an ISO date typed into a date
+    cell is its serial) matches a number item; text or a boolean matches a non-number
+    item ignoring case. ``value`` is ``raw`` converted for its cell, None if it does
+    not convert (then ``raw`` is compared as text)."""
+    if isinstance(value, float):
+        return any(isinstance(item, float) and item == value for item in allowed)
+    text = (_as_text(value) if value is not None else raw).lower()
+    return any(not isinstance(item, float) and _as_text(item).lower() == text for item in allowed)
 
 
 # -- resolving targets ---------------------------------------------------------
@@ -222,14 +219,61 @@ def _column(letters: str, what: str) -> int:
 def _output_cells(
     graph: WorkbookGraph, outputs: list[str], variables: list[VariableCells]
 ) -> list[CellRef]:
+    """The cells to report.
+
+    Raises:
+        CalcInputError: naming every output target that does not resolve, or when
+            nothing is asked for.
+    """
     cells: dict[CellRef, None] = {}
+    problems: list[str] = []
     for target in outputs:
-        cells.update(dict.fromkeys(graph.resolve_target(target)))
+        try:
+            cells.update(dict.fromkeys(graph.resolve_target(target)))
+        except CalcInputError as exc:
+            problems.append(str(exc))
+    if problems:
+        raise CalcInputError("; ".join(problems))
     for var in variables:
         cells.update(dict.fromkeys(var.cells))
     if not cells:
         raise CalcInputError("nothing to calculate: give --outputs or --variables")
     return list(cells)
+
+
+def _resolve_targets(
+    graph: WorkbookGraph,
+    specs: list[VariableSpec],
+    outputs: list[str],
+    fields: dict[str, str],
+) -> tuple[list[VariableCells], list[CellRef], dict[str, CellRef]]:
+    """Variables, output cells and mapped inputs, resolved together.
+
+    Raises:
+        CalcInputError: naming every bad target at once.
+    """
+    problems: list[str] = []
+    variables: list[VariableCells] = []
+    cells: list[CellRef] = []
+    inputs: dict[str, CellRef] = {}
+    try:
+        variables = expand_variables(specs, graph)
+    except CalcInputError as exc:
+        problems.append(str(exc))
+    try:
+        cells = _output_cells(graph, outputs, variables)
+    except CalcInputError as exc:
+        # With no --outputs, "nothing to calculate" only echoes the variables' errors.
+        if outputs or not problems:
+            problems.append(str(exc))
+    for name, target in fields.items():
+        try:
+            inputs[name] = _input_cell(graph, target, f"map field {name!r}")
+        except CalcInputError as exc:
+            problems.append(str(exc))
+    if problems:
+        raise CalcInputError("; ".join(problems))
+    return variables, cells, inputs
 
 
 # -- reports -------------------------------------------------------------------
@@ -540,7 +584,7 @@ def _policy_loop(
             if options is None or _allowed(raw, s.converted(cell, raw), options):
                 s.set_input(cell, raw, what)
                 continue
-            detail = f"{name}={raw!r} not in {options!r}"
+            detail = f"{name}={raw!r} not in {[_as_text(o) for o in options]!r}"
             outside.append(Reason(ReasonKind.input_outside_allowed_values, cell, detail))
             try:
                 s.set_input(cell, raw, what)
@@ -636,12 +680,7 @@ def calc(req: CalcRequest) -> CalcResult:
     with tempfile.TemporaryDirectory(prefix="marinade-calc-") as tmp:
         work = Path(tmp)
         graph = open_graph(req.workbook, req.ir, work / "ir")
-        variables = expand_variables(specs, graph)
-        outputs = _output_cells(graph, targets, variables)
-        inputs = {
-            name: _input_cell(graph, target, f"map field {name!r}")
-            for name, target in input_map.fields.items()
-        }
+        variables, outputs, inputs = _resolve_targets(graph, specs, targets, input_map.fields)
         prepared = prepare_engine_copy(req.workbook, work / "engine.xlsx", as_of=req.as_of)
         patterns = _merge_patterns(
             _with_unheld_externals(
