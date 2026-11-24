@@ -91,9 +91,10 @@ values and stay 0. Databases extracted before 0.7.1 have 0 everywhere.
 `is_spilled` is not populated yet and is always 0.
 
 `value` is the value Excel cached, as JSON text. A formula's text result
-(`data_type` `str`) is kept exactly, with any leading or trailing spaces, tabs
-or line breaks, and a formula whose result is the empty string has the value
-`""`; a formula Excel never calculated has no value. Databases extracted
+(`data_type` `str`, including the members of an array or spill range, which
+have no formula of their own) is kept exactly, with any leading or trailing
+spaces, tabs or line breaks, and a result that is the empty string has the
+value `""`; a formula Excel never calculated has no value. Databases extracted
 before 0.8.1 trimmed text results and stored nothing for `""`; re-extract to
 see them.
 
