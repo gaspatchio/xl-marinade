@@ -235,10 +235,14 @@ Details worth knowing:
   with `t` exactly `0` stays `ok`. Only sides that differ by more than nothing and at
   most about 1e-12 relative are `near_comparison`. The same holds for an approximate
   lookup whose value equals its matched key.
-- Branches are `IF`, `IFS`, `SWITCH`, `CHOOSE`, `IFERROR` and `IFNA`. A branch counts as
-  exercised if any cell in the same canonical formula family took it in the trust run.
-  Lookups count per family too, but the table's first row, last row and "beyond the end"
-  must each have been hit.
+- Branches are `IF`, `IFS`, `SWITCH`, `CHOOSE`, `IFERROR` and `IFNA`, and an `XLOOKUP`
+  with an `if_not_found` argument (outcomes `found` and `not_found`; the argument counts
+  only when nothing was found). A branch counts as exercised if any cell in the same
+  canonical formula family took it in the trust run. Lookups (`VLOOKUP`, `HLOOKUP`,
+  `MATCH`, `LOOKUP`, `XLOOKUP` and `XMATCH`, in every match and search mode calc accepts)
+  count per family too, but the table's first row, last row and "beyond the end" must
+  each have been hit. For `XLOOKUP` and `XMATCH` first and last are positions in the
+  lookup array, whichever way the search runs.
 - Only evidence that was checked counts. A cell that failed the trust run, or is a
   refused pattern, exercises nothing for its family. A branch or lookup inside an arm
   the formula did not evaluate (the `FALSE` arm of an `IF` that went `TRUE`) is not

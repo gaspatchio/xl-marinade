@@ -70,6 +70,13 @@ schema is a versioned public contract.
   probes, so every probe on it gave `#ERROR!` and its outputs were refused; probe
   references now quote such names, and names that read as a cell, an R1C1 reference or
   a boolean.
+- **`marinade calc`: `XLOOKUP` and `XMATCH` are path-checked like `MATCH`.** They had no
+  lookup-edge probe, so a policy landing on the table's first or last row, or beyond it,
+  came back `ok` where the same `VLOOKUP` or `MATCH` came back `unverified_path`; and
+  `XLOOKUP`'s `if_not_found` arm counted as checked although the trust run never used
+  it. Both now get the edge probe (exact, next smaller, next larger and wildcard
+  matches; first-to-last and last-to-first search), and `XLOOKUP` with `if_not_found`
+  gets a `found`/`not_found` branch that guards the probes inside that argument.
 
 ## [0.8.0] - 2026-11-24
 

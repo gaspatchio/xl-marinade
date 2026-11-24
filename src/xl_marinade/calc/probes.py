@@ -84,7 +84,11 @@ _ROUNDING: dict[str, str] = {
 _BRANCHES = frozenset({"IF", "IFS", "SWITCH", "CHOOSE", "IFERROR", "IFNA"})
 _ERROR = "error"
 _NONE = frozenset[str]()
-_LOOKUPS = frozenset({"VLOOKUP", "HLOOKUP", "MATCH", "LOOKUP"})
+_LOOKUPS = frozenset({"VLOOKUP", "HLOOKUP", "MATCH", "LOOKUP", "XLOOKUP", "XMATCH"})
+# XLOOKUP / XMATCH: positions of match_mode and search_mode.
+_X_MODES: dict[str, tuple[int, int]] = {"XLOOKUP": (4, 5), "XMATCH": (2, 3)}
+# XLOOKUP's if_not_found arm, guarded like IFERROR's error arm.
+_NOT_FOUND = "not_found"
 _DYNAMIC = frozenset({"OFFSET", "INDIRECT"})
 
 _REF = re.compile(rf"^(?:(?P<s1>{SHEET})!)?(?P<a>{END})(?::(?:(?P<s2>{SHEET})!)?(?P<b>{END}))?$")
@@ -428,7 +432,7 @@ class _Planner:
         self._probe_function(node, name, blocked)
         inner = blocked or name in ALWAYS_ARRAY
         conds = _condition_args(name, len(node.args))
-        arms = _arm_outcomes(name, len(node.args)) if name in _BRANCHES and node.args else {}
+        arms = _arm_outcomes(name, len(node.args)) if _is_branch(node, name) else {}
         outer = self.guards
         for i, arg in enumerate(node.args):
             arm = arms.get(i)
@@ -438,6 +442,9 @@ class _Planner:
             self.guards = outer
 
     def _probe_function(self, node: FunctionNode, name: str, scoped: bool) -> None:
+        if name == "XLOOKUP" and _is_branch(node, name):
+            # Found or not decides whether the if_not_found arm is used.
+            self.add(ProbeKind.branch, scoped, lambda: self._not_found(node))
         if name in _BRANCHES and node.args:
             self.add(ProbeKind.branch, scoped, lambda: self._branch(node, name))
         elif name in _LOOKUPS and len(node.args) >= 2:
@@ -475,9 +482,29 @@ class _Planner:
         # cell would swallow) is still seen; FALSE when it does not.
         return (f"IF(ISERROR({first}),{first},FALSE)",), meta
 
+    def _xmatch(self, node: FunctionNode, name: str) -> str:
+        """XMATCH text for an XLOOKUP / XMATCH: the position its own modes find."""
+        match_at, search_at = _X_MODES[name]
+        args = [self.lift(node.args[0]), self.lift(node.args[1])]
+        if len(node.args) > search_at:
+            mode = self.lift(node.args[match_at]) if len(node.args) > match_at else "0"
+            args += [mode, self.lift(node.args[search_at])]
+        elif len(node.args) > match_at:
+            args.append(self.lift(node.args[match_at]))
+        return f"XMATCH({','.join(args)})"
+
+    def _not_found(self, node: FunctionNode) -> tuple[tuple[str, ...], dict[str, str]]:
+        # #N/A is "nothing found"; any other error is the cell's error, read as such.
+        pos = self._xmatch(node, "XLOOKUP")
+        text = f'IF(ISNA({pos}),"{_NOT_FOUND}",IF(ISERROR({pos}),{pos},"found"))'
+        return (text,), {"function": "XLOOKUP"}
+
     def _keys(self, node: FunctionNode, name: str) -> tuple[str, str]:
         """Key vector and its length, as formula text."""
         table = self.lift(node.args[1])
+        if name in _X_MODES:
+            # The lookup array is one row or one column.
+            return table, f"ROWS({table})*COLUMNS({table})"
         if name == "VLOOKUP":
             return f"INDEX({table},0,1)", f"ROWS({table})"
         if name == "HLOOKUP":
@@ -490,6 +517,8 @@ class _Planner:
         return table, f"ROWS({table})*COLUMNS({table})"
 
     def _match(self, node: FunctionNode, name: str) -> str:
+        if name in _X_MODES:
+            return self._xmatch(node, name)
         keys, _size = self._keys(node, name)
         mode = _lookup_mode(node, name)
         if mode is None:
@@ -508,7 +537,11 @@ class _Planner:
         keys, _size = self._keys(node, name)
         key = f"INDEX({keys},{self._match(node, name)})"
         if _lookup_mode(node, name) is None:
-            if name in {"VLOOKUP", "HLOOKUP"}:
+            if name in _X_MODES:
+                # Only next smaller / next larger can match a key that differs.
+                mode = self.lift(node.args[_X_MODES[name][0]])
+                key = f"IF(ABS({mode})=1,{key},NA())"
+            elif name in {"VLOOKUP", "HLOOKUP"}:
                 key = f"IF({self.lift(node.args[3])},{key},NA())"
             else:
                 key = f"IF(({self.lift(node.args[2])})=0,NA(),{key})"
@@ -571,12 +604,21 @@ def _condition_args(name: str, n: int) -> set[int]:
     return set()
 
 
+def _is_branch(node: FunctionNode, name: str) -> bool:
+    """A function with a branch probe: the IF family, or an XLOOKUP with if_not_found."""
+    if name == "XLOOKUP":
+        return len(node.args) >= 4
+    return name in _BRANCHES and bool(node.args)
+
+
 def _arm_outcomes(name: str, n: int) -> dict[int, tuple[frozenset[str], frozenset[str]]]:
     """Per guarded argument of a branch: the outcomes that evaluate it, and those after
     which it may have been evaluated (an error from a condition before or at it).
 
     Arguments not listed are always evaluated (the first condition, the switch value).
     """
+    if name == "XLOOKUP":
+        return {3: (frozenset({_NOT_FOUND}), _NONE)}
     if name == "IF":
         return {1: (frozenset({"TRUE"}), _NONE), 2: (frozenset({"FALSE"}), _NONE)}
     if name == "CHOOSE":
@@ -607,9 +649,22 @@ def _arm_outcomes(name: str, n: int) -> dict[int, tuple[frozenset[str], frozense
 
 
 def _lookup_mode(node: FunctionNode, name: str) -> str | None:
-    """MATCH mode text: ``"1"``/``"-1"`` approximate, ``"0"`` exact, None when not literal."""
+    """MATCH mode text: ``"1"``/``"-1"`` approximate, ``"0"`` exact, None when not literal.
+
+    For XLOOKUP / XMATCH: ``"0"`` for exact and wildcard (2) matches, ``"1"``/``"-1"``
+    for next larger / next smaller.
+    """
     if name == "LOOKUP":
         return "1"
+    if name in _X_MODES:
+        at = _X_MODES[name][0]
+        if len(node.args) <= at:
+            return "0"
+        value = literal(node.args[at])
+        if value in (2, 2.0):
+            return "0"
+        s = sign(value)
+        return None if s is None else str(s)
     at = 3 if name in {"VLOOKUP", "HLOOKUP"} else 2
     if len(node.args) <= at:
         return "1"

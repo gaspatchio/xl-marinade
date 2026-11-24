@@ -222,7 +222,8 @@ marinade values book.xlsx --variables vars.json [--map map.json] -o stored/
   branch/lookup probe), `ok`. Only `ok` can be used as is; the `reasons` column
   names the root cell. `values` rows are `stored`.
 - Only reproduced cells vouch for their formula family's branches; branches inside
-  an arm not evaluated count for nothing. Probes go upstream of the requested
+  an arm not evaluated count for nothing. Lookups (`XLOOKUP`/`XMATCH` included) must
+  have hit the first row, last row and not-found in the trust run to be `ok` there. Probes go upstream of the requested
   outputs only, so fewer outputs can mean a more conservative status.
 - **Refused even when they reproduce:** approximate lookups on unsorted, mixed,
   whole-column or non-plain-text keys (and `XLOOKUP`/`XMATCH` binary search);
