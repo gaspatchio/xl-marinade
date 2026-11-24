@@ -222,9 +222,10 @@ marinade values book.xlsx --variables vars.json [--map map.json] -o stored/
   branch/lookup probe), `ok`. Only `ok` can be used as is; the `reasons` column
   names the root cell. `values` rows are `stored`.
 - Only reproduced cells vouch for their formula family's branches; branches inside
-  an arm not evaluated count for nothing. Lookups (`XLOOKUP`/`XMATCH` included) must
-  have hit the first row, last row and not-found in the trust run to be `ok` there. Probes go upstream of the requested
-  outputs only, so fewer outputs can mean a more conservative status.
+  an arm not evaluated count for nothing. Lookups (`XLOOKUP`/`XMATCH` included)
+  must have hit the first row, last row and not-found in the trust run to be `ok`
+  there. Probes go upstream of the requested outputs only, so fewer outputs can
+  mean a more conservative status.
 - **Refused even when they reproduce:** approximate lookups on unsorted, mixed,
   whole-column or non-plain-text keys (and `XLOOKUP`/`XMATCH` binary search);
   implicit intersection on a multi-cell name or on a range outside a function
@@ -238,9 +239,12 @@ marinade values book.xlsx --variables vars.json [--map map.json] -o stored/
   differs from keys` (text against numbers); an `INDIRECT` address off the grid
   (row 0) is `dynamic reference not checked`; number-to-text where the engine's
   text can differ from Excel's (`number-to-text at a decimal tie` for
-  `TEXT`/`FIXED`/`DOLLAR`, `… where Excel's 15-digit text differs` for `&`, `CONCAT`,
-  text functions, `criterion built with & from a non-integer number` for
-  `SUMIF`-family criteria; `number-to-text not checked` for unreadable formats).
+  `TEXT`/`FIXED`/`DOLLAR`; `… of a negative value that rounds to zero or one unit`
+  for `TEXT`; `… where Excel's 15-digit text differs` for `&`, `CONCAT`/`TEXTJOIN`
+  (ranges read cell by cell) and text functions; `criterion built with & from a
+  non-integer number` for `SUMIF`-family criteria). Static, for every policy:
+  `number-to-text not checked` (unreadable or non-literal `TEXT` format, a range
+  given to a text function, array formulas, `LET`, `--probe-cap`).
 - **Exit codes:** 0 ok, 1 error, 5 `[calc]` missing, 6 workbook refused outright
   (1904 dates, precision as displayed, Strict Open XML).
 - A pass on the stored inputs proves only the paths those inputs take; never

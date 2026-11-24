@@ -153,8 +153,53 @@ def test_general_conversion_beyond_15_digits_is_refused(make_book: Book, tmp_pat
     assert rows[("M7", "Calc!B7")]["value"] == "Year 3"
     assert rows[("M3", "Calc!B7")]["value"] == "Year 4"
     assert rows[("M3", "Calc!B7")]["status"] == "ok"
-    # A range handed to TEXTJOIN cannot be read cell by cell from one probe.
-    _refused(rows[("M3", "Calc!B8")], "Calc!B8", NOT_CHECKED)
+    # TEXTJOIN over constants that are integers (1, 2) converts nothing Excel would
+    # write differently: "1,2" for every policy.
+    for pid in ("M7", "M3"):
+        assert rows[(pid, "Calc!B8")]["value"] == "1,2"
+        assert rows[(pid, "Calc!B8")]["status"] == "ok", rows[(pid, "Calc!B8")]
+
+
+def test_more_conversion_sites(make_book: Book, tmp_path: Path) -> None:
+    # x stored 6 (x/12 = 0.5); M7 7/12, which Excel writes 0.583333333333333 and IronCalc
+    # 0.5833333333333334. Excel: RIGHT(7/12,1) "3" (IronCalc "4"); SUBSTITUTE(7/12,"3","")
+    # "0.58" (IronCalc "0.584"); MID(7/12,3,1) "5" and FIND("5",7/12) 3 agree, but are
+    # refused all the same (ruling D6). v stored 1.5: TEXT(308.625,"0.00") and
+    # TEXT(2.675,"0.00") are ties (Excel "308.63", "2.68"). TEXT(1.7E15,"0") shows 16
+    # digits: refused. SUMPRODUCT(LEN(TEXT(D1:D2,"0"))) is an array context: not checked.
+    x = "(Inputs!B1/12)"
+    book = make_book(
+        "more",
+        {
+            "Inputs": {"B1": 6, "B2": 1.5},
+            "Calc": {
+                "B1": F(f"=RIGHT({x},1)", "5"),
+                "B2": F(f'=SUBSTITUTE({x},"3","")', "0.5"),
+                "B3": F(f"=MID({x},3,1)", "5"),
+                "B4": F(f'=IFERROR(FIND("5",{x}),0)', 3.0),
+                "B5": F('=TEXT(Inputs!B2,"0.00")', "1.50"),
+                "B6": F('=TEXT(Inputs!B2*1E15,"0")', "1500000000000000"),
+                "B7": F('=SUMPRODUCT(LEN(TEXT(D1:D2,"0")))', 2.0),
+                "D1": 1,
+                "D2": 2,
+            },
+        },
+    )
+    outputs = [f"Calc!B{r}" for r in range(1, 8)]
+    res = _run(
+        tmp_path,
+        book,
+        "id,m,v\nM7,7,1.5\nT1,6,308.625\nT2,6,2.675\nB,6,1.7\n",
+        {"m": "Inputs!B1", "v": "Inputs!B2"},
+        outputs,
+    )
+    rows = _rows(res)
+    for out in ("Calc!B1", "Calc!B2", "Calc!B3", "Calc!B4"):
+        _refused(rows[("M7", out)], out, DIGITS)
+    for pid in ("T1", "T2"):
+        _refused(rows[(pid, "Calc!B5")], "Calc!B5", TIE)
+    _refused(rows[("B", "Calc!B6")], "Calc!B6", DIGITS)
+    _refused(rows[("B", "Calc!B7")], "Calc!B7", NOT_CHECKED)
 
 
 def test_criteria_built_from_a_non_integer_are_refused(make_book: Book, tmp_path: Path) -> None:

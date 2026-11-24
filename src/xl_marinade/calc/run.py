@@ -672,7 +672,10 @@ def calc(req: CalcRequest) -> CalcResult:
         upstream = [
             c for c in graph.upstream(outputs) if graph.formula(c) is not None and c not in patterns
         ]
-        plan = plan_probes(graph, upstream, cap=req.probe_cap, as_of=req.as_of)
+        moving = set(inputs.values())
+        if check is not None and check.selector is not None:
+            moving.add(_input_cell(graph, check.selector, "selector"))
+        plan = plan_probes(graph, upstream, cap=req.probe_cap, as_of=req.as_of, inputs=moving)
         place_probes(engine, plan)
         with quiet_native_output():
             engine.evaluate()
