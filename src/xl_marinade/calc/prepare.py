@@ -184,6 +184,12 @@ def count_external_refs(formula: str) -> int:
     return sum(1 for m in _ANY_EXT_RE.finditer(formula) if m.group("ext") is not None)
 
 
+def rewrite_clock(formula: str, as_of: date) -> str:
+    """``formula`` with every ``TODAY()``/``NOW()`` replaced by ``as_of``'s ``DATE``, as
+    the engine copy's cells and defined names are (string literals are left alone)."""
+    return _Rewriter(as_of, {}).rewrite(formula, shared=False)[0]
+
+
 class _Rewriter:
     """Rewrites formula text: TODAY/NOW and cached external references."""
 

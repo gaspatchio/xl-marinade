@@ -24,6 +24,7 @@ import math
 import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
+from datetime import date
 from enum import StrEnum
 from typing import Protocol
 
@@ -39,10 +40,12 @@ from xl_marinade.calc.formula_ast import (
     function_name,
     literal,
     parse_formula,
+    quote_sheet,
     sign,
 )
 from xl_marinade.calc.graph import NameDef, WorkbookGraph
 from xl_marinade.calc.models import CellRef, _col_to_number
+from xl_marinade.calc.prepare import rewrite_clock
 from xl_marinade.core.parser import (
     ASTNode,
     BinaryNode,
@@ -51,7 +54,6 @@ from xl_marinade.core.parser import (
     RefNode,
     UnaryNode,
 )
-from xl_marinade.core.ref_converter import quote_sheet_name
 
 PROBE_SHEET = "_marinade_probes"
 NEAR_TOLERANCE = 1e-12
@@ -244,7 +246,7 @@ def _anchor_ref(ref: str, sheet: str, names: NameScopes | None) -> str:
         raise ValueError(f"cannot lift reference {ref!r}")
     s1, s2, b = m.group("s1"), m.group("s2"), m.group("b")
     kind, a = _end(m.group("a"))
-    prefix = s1 if s1 is not None else quote_sheet_name(sheet)
+    prefix = s1 if s1 is not None else quote_sheet(sheet)
     if b is None:
         if kind == "cell":
             return f"{prefix}!{a}"
@@ -336,18 +338,27 @@ def _emit_function(node: FunctionNode, sheet: str, names: NameScopes | None) -> 
             raise ValueError("cannot lift INDIRECT with R1C1-style text")
         # Text without a sheet resolves against the formula's own sheet, not the probe's.
         text = args[0]
-        prefix = _text_literal(f"{quote_sheet_name(sheet)}!")
+        prefix = _text_literal(f"{quote_sheet(sheet)}!")
         args[0] = f'IF(ISERROR(FIND("!",{text})),{prefix}&({text}),{text})'
     return f"{node.name}({','.join(args)})"
 
 
-def anchor(node: ASTNode, sheet: str, *, names: NameScopes | None = None) -> str:
+def anchor(
+    node: ASTNode,
+    sheet: str,
+    *,
+    names: NameScopes | None = None,
+    as_of: date | None = None,
+) -> str:
     """Formula text for ``node`` that computes the same on the probe sheet.
 
-    Unqualified references are qualified with ``sheet`` (quoted like
-    :meth:`CellRef.a1`); every cell, column and row reference becomes absolute;
-    workbook-level names stay names. ``INDIRECT`` text without a sheet is prefixed
-    with ``sheet`` at run time.
+    Unqualified references are qualified with ``sheet`` (quoted by
+    :func:`quote_sheet`, so ``'2024'!``); every cell, column and row reference
+    becomes absolute; workbook-level names stay names. ``INDIRECT`` text without a
+    sheet is prefixed with ``sheet`` at run time. With ``as_of``, ``TODAY()`` and
+    ``NOW()`` become that date, as they are in the engine copy. Operands of binary
+    operators are always parenthesised when they are operations themselves, so the
+    text means what the parsed tree means.
 
     Raises:
         ValueError: (when ``names`` is given) for a formula name, a name with a
@@ -356,7 +367,8 @@ def anchor(node: ASTNode, sheet: str, *, names: NameScopes | None = None) -> str
             ``LET``/``LAMBDA`` and friends, a bare ``ROW()``/``COLUMN()``/``SHEET()``,
             ``CELL`` without a reference, or R1C1-style ``INDIRECT``.
     """
-    return _emit(node, sheet, names)
+    text = _emit(node, sheet, names)
+    return rewrite_clock(text, as_of) if as_of is not None else text
 
 
 # -- planning ------------------------------------------------------------------
@@ -369,6 +381,7 @@ Builder = Callable[[], tuple[tuple[str, ...], dict[str, str]]]
 class _Planner:
     graph: WorkbookGraph
     cap: int
+    as_of: date | None = None
     probes: list[Probe] = field(default_factory=list)
     unplaced: dict[CellRef, list[ProbeKind]] = field(default_factory=dict)
     cell: CellRef = CellRef("", 0, 0)
@@ -377,7 +390,7 @@ class _Planner:
     guards: tuple[Guard, ...] = ()
 
     def lift(self, node: ASTNode) -> str:
-        return anchor(node, self.cell.sheet, names=self.graph)
+        return anchor(node, self.cell.sheet, names=self.graph, as_of=self.as_of)
 
     def add(self, kind: ProbeKind, scoped: bool, build: Builder) -> None:
         ordinal = self.counters.get(kind, 0)
@@ -608,16 +621,19 @@ def _lookup_mode(node: FunctionNode, name: str) -> str | None:
     return str(s)
 
 
-def plan_probes(graph: WorkbookGraph, cells: Iterable[CellRef], *, cap: int) -> ProbePlan:
+def plan_probes(
+    graph: WorkbookGraph, cells: Iterable[CellRef], *, cap: int, as_of: date | None = None
+) -> ProbePlan:
     """Plan probes for the branch, lookup, rounding, comparison and dynamic-ref
-    nodes of each cell's formula; cells are taken in sorted order.
+    nodes of each cell's formula; cells are taken in sorted order. ``as_of`` is the
+    run's ``--as-of`` date, which lifted ``TODAY()``/``NOW()`` read.
 
     A node that :func:`anchor` cannot lift, any node beneath ``LET``/``LAMBDA``,
     every node of an array formula or inside an always-array function's arguments
     (``SUMPRODUCT``...), and every probe beyond ``cap`` is recorded in ``unplaced`` (one entry per probe).
     Unparseable formulas produce no probes (the pattern scan refuses them).
     """
-    planner = _Planner(graph, cap)
+    planner = _Planner(graph, cap, as_of)
     for cell in sorted(set(cells)):
         text = graph.formula(cell)
         if text is None:

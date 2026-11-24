@@ -58,6 +58,18 @@ schema is a versioned public contract.
   gives `#REF!`, so a policy just below a table's first row came back `ok` with 0. An
   address on row 0, below row 1,048,576 or right of column `XFD` now counts as an unread
   dynamic reference (`dynamic reference not checked`).
+- **`marinade calc`: probes compute what their cells compute.** Under `--as-of`, a
+  probe lifted from a formula holding `TODAY()` or `NOW()` read the machine clock while
+  the cell read the as-of date, so branch readings, `paths.csv` and statuses followed
+  the day the run happened (an arm the stored inputs never took could count as
+  exercised); probes now read the as-of date too. calc read `&` looser than the
+  comparisons, the reverse of Excel, so a probe of `IF(Sex&Smoker="MN",…)` computed
+  `Sex&(Smoker="MN")`, read "error" for every input set and let the untaken arm count as
+  exercised; calc now parses with Excel's precedence (the extractor's parser is
+  unchanged). A sheet whose name starts with a digit (`2024`, `1Q`) was not quoted in
+  probes, so every probe on it gave `#ERROR!` and its outputs were refused; probe
+  references now quote such names, and names that read as a cell, an R1C1 reference or
+  a boolean.
 
 ## [0.8.0] - 2026-11-24
 

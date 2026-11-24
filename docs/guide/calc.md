@@ -181,7 +181,11 @@ checked points, 100% came back `ok`, and all of them were correct.
    `--check-against` input set.
 5. Add probe cells on a hidden sheet that report which branch, lookup row, rounding
    input and dynamic reference each input set reaches. Probes go only into cells upstream
-   of the requested outputs, and never into a cell that is already refused.
+   of the requested outputs, and never into a cell that is already refused. A probe is
+   the part of the cell's formula it reports on, lifted onto that sheet so it computes
+   what the cell computes: references keep their sheet (quoted where Excel needs it,
+   as for `'2024'`), operators keep Excel's precedence (`A&B="x"` is `(A&B)="x"`), and
+   under `--as-of` `TODAY()` and `NOW()` read the as-of date, as the cells do.
 6. For each policy: reset, set the inputs, recalculate, read outputs and probes.
 7. Walk the graph from each output back to its roots and assign a status.
 
