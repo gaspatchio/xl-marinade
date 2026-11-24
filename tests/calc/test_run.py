@@ -701,3 +701,30 @@ def test_many_mismatching_sets_on_one_path_keep_a_bounded_list(
     )
     report = json.loads(res.trust_report.read_text(encoding="utf-8"))
     assert len(report["check_against"]["mismatches"]) == m
+
+
+def test_text_results_with_edge_spaces_and_empty_text_reproduce(
+    make_book: Book, tmp_path: Path
+) -> None:
+    # Hand values for age 70 (stored) and 75 (the policy), both over 60:
+    # " "&"old"&" " is " old " (LEN 5); IF(age>60,"",age) is ""; IF(""="",0,..) is 0.
+    sheets = {
+        "Inputs": {"B1": 70},
+        "Calc": {
+            "B1": F('=" "&IF(Inputs!B1>60,"old","young")&" "', " old "),
+            "B2": F('=IF(Inputs!B1>60,"",Inputs!B1)', ""),
+            "B3": F('=IF(Calc!B2="",0,Calc!B2*2)', 0),
+            "B4": F("=LEN(Calc!B1)", 5),
+        },
+    }
+    book = make_book("text", sheets)
+    imap = {"id_field": "id", "fields": {"age": "Inputs!B1"}}
+    res = calc(_req(tmp_path, book, "id,age\n1,75\n", outputs=["Calc!B1:B4"], imap=imap))
+    report = json.loads(res.trust_report.read_text(encoding="utf-8"))
+    assert report["failures"] == []
+    assert report["reproduced"] == report["checked"] == 4
+    got = _results(res)
+    assert [
+        (got[("1", f"Calc!B{r}")]["value"], got[("1", f"Calc!B{r}")]["status"])
+        for r in (1, 2, 3, 4)
+    ] == [(" old ", "ok"), ("", "ok"), ("0.0", "ok"), ("5.0", "ok")]

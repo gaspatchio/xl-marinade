@@ -568,8 +568,12 @@ def _values_numerically_equivalent(va_json: str | None, vb_json: str | None) -> 
 
 
 def _value_is_absent(value_json: str | None) -> bool:
-    """A cell has no cached value (no value blob / empty serialization)."""
-    return value_json is None or value_json in ("", '""', "null")
+    """A cell has no cached value (no value blob / empty serialization).
+
+    ``'""'`` is not absent: it is a formula's saved empty-text result (the
+    ``IF(t>Term,"",x)`` idiom), stored as a value since 0.8.1.
+    """
+    return value_json is None or value_json in ("", "null")
 
 
 def _is_recalc_value_gap(sa, sb) -> bool:
