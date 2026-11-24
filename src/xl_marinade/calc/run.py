@@ -261,6 +261,7 @@ def _trust_report(
     refused: list[str],
     held: dict[CellRef, list[str]],
     check: dict[str, Any] | None,
+    plan: ProbePlan | None = None,
 ) -> dict[str, Any]:
     failures = (
         sorted(
@@ -285,7 +286,13 @@ def _trust_report(
         "settings": _settings_record(settings, refused),
         "held_external_links": [{"cell": cell.a1(), "refs": refs} for cell, refs in held.items()],
         "check_against": check,
+        "probes_unplaced": _unplaced_count(plan),
+        "probes_over_cap": plan.over_cap if plan is not None else 0,
     }
+
+
+def _unplaced_count(plan: ProbePlan | None) -> int:
+    return sum(len(k) for k in plan.unplaced.values()) if plan is not None else 0
 
 
 def _run_record(
@@ -305,7 +312,7 @@ def _run_record(
         "tolerance": req.tolerance,
         "as_of": req.as_of.isoformat() if req.as_of else None,
         "probe_cap": req.probe_cap,
-        "probes_unplaced": sum(len(k) for k in plan.unplaced.values()) if plan else 0,
+        "probes_unplaced": _unplaced_count(plan),
         "variables": variables,
     }
 
@@ -825,6 +832,7 @@ def calc(req: CalcRequest) -> CalcResult:
             refused=[],
             held=prepared.held_externals,
             check=check_record,
+            plan=plan,
         ),
     )
     write_run(

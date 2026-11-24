@@ -112,7 +112,9 @@ schema is a versioned public contract.
   nothing had checked.
   An `INDIRECT` whose text names no sheet is not probed where it lands: a landing on
   formula cells gives `not_checked_path` (`not_checked_value` for their roundings and
-  comparisons), never `ok`. Books with `OFFSET` or `INDIRECT` get more probes, and
+  comparisons), never `ok`. Books with `OFFSET` or `INDIRECT` get more probes (a large
+  `OFFSET` projection can need a higher `--probe-cap`: `trust_report.json` now reports
+  `probes_unplaced` and `probes_over_cap`, and the command prints the cap needed), and
   `paths.csv` lists the cells each policy's references reached, not the stored inputs'
   landing cell.
 
