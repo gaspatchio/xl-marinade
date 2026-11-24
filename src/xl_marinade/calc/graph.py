@@ -317,9 +317,7 @@ class WorkbookGraph:
             literals = [str(v) for v in json.loads(lit)] if lit else None
             self._validations.append((rects, literals, f1, sheet))
 
-        self._add_argument_edges(max_row)
-
-    def _add_argument_edges(self, max_row: dict[str, int]) -> None:
+    def add_argument_edges(self) -> None:
         """Make every cell an ``OFFSET`` or ``INDIRECT`` argument reads a precedent.
 
         The extraction records only where the reference lands on the stored inputs, not
@@ -327,8 +325,11 @@ class WorkbookGraph:
         text), so a failure or an unexercised branch there would not reach the cell.
         The reference an ``OFFSET`` starts from is not one of them: where it lands is
         followed per policy by a probe. Each such cell also keeps what it reads apart
-        from where its references land (:meth:`read_precedents`).
+        from where its references land (:meth:`read_precedents`). Called once, after
+        :meth:`mark_relative`: a name with a relative reference names different cells
+        from each cell using it, so it gives no fixed cells here.
         """
+        max_row = {s: extent[0] for s, extent in self._extent.items()}
         for cell, text in self._formula.items():
             if DYNAMIC_HINT.search(text) is None:
                 continue
@@ -356,7 +357,11 @@ class WorkbookGraph:
         elif (whole := _parse_whole(ref, cell.sheet)) is not None:
             if (clipped := self._clip(whole)) is not None:
                 rects.append(clipped)
-        elif (found := self.lookup_name(ref, cell.sheet)) is not None and found.kind == "cells":
+        elif (
+            (found := self.lookup_name(ref, cell.sheet)) is not None
+            and found.kind == "cells"
+            and not found.relative
+        ):
             rects.extend(found.rects)
         out: list[_Rect] = []
         for written, r1, c1, r2, c2 in rects:
@@ -924,4 +929,5 @@ def open_graph(workbook: Path, ir: Path | None, tmp: Path) -> WorkbookGraph:
         tmp.mkdir(parents=True, exist_ok=True)
         graph = WorkbookGraph.from_ir(extract(workbook, tmp / "ir.db"))
     graph.mark_relative(relative_names(workbook))
+    graph.add_argument_edges()
     return graph

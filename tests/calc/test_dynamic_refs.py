@@ -599,3 +599,43 @@ def test_probes_past_the_cap_are_reported_with_the_cap_needed(
     stderr, report = cli(2 + over, "b")
     assert report["probes_over_cap"] == 0
     assert "--probe-cap" not in stderr
+
+
+def test_sheet_scoped_and_relative_names_stay_out_of_dynamic_paths(
+    make_book: Book, tmp_path: Path
+) -> None:
+    # A sheet's own name and a name with a relative reference cannot be read off the
+    # formula's own sheet (the probe sheet would read another definition, or other
+    # cells), so no dynamic-reference path may use them as fixed cells:
+    #   Calc!B1 = OFFSET(Local, k, 0), Local = Calc's own name for Data!$A$1: the OFFSET
+    #     reaches no landing region (its probe is unplaced, so it is refused);
+    #   Calc!B2 = OFFSET(Data!$A$1, Rel, 0), Rel = Calc!XFD2 written relative (one
+    #     column left of the cell using it): the stored text's cell is not among what
+    #     the OFFSET reads (the formula itself is refused for the relative name);
+    #   Calc!B3 = TEXTJOIN(",",TRUE,Local2), Local2 = Calc's own name for Data!$A$1:$A$2:
+    #     the join is not read cell by cell (refused per policy as not checked).
+    from xl_marinade.calc.probes import reach_sheets
+
+    book = make_book(
+        "names_dyn",
+        {
+            "Data": {"A1": 1, "A2": 2, "A3": 3},
+            "Calc": {
+                "A2": 1,
+                "B1": F("=OFFSET(Local,Inputs!B1,0)", 2),
+                "B2": F("=OFFSET(Data!$A$1,Rel,0)", 2),
+                "B3": F('=_xlfn.TEXTJOIN(",",TRUE,Local2)', "1,2"),
+                "XFD2": 7,
+            },
+            "Inputs": {"B1": 1},
+        },
+        names={"Rel": "Calc!XFD2"},
+        local_names={("Calc", "Local"): "Data!$A$1", ("Calc", "Local2"): "Data!$A$1:$A$2"},
+    )
+    graph = open_graph(book, None, tmp_path / "ir")
+    assert reach_sheets(graph, CellRef("Calc", 1, 2)) == set()
+    assert CellRef("Calc", 2, 16384) not in graph.read_precedents(CellRef("Calc", 2, 2))
+    plan = plan_probes(graph, [CellRef("Calc", 3, 2)], cap=100)
+    assert [(p.kind, p.meta.get("check")) for p in plan.probes] == [
+        (ProbeKind.number_text, "always")
+    ]

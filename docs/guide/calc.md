@@ -276,7 +276,9 @@ Details worth knowing:
   precedents of the cell, so a failure or an untried branch there reaches it.
   An `OFFSET` whose base is a sheet's own (sheet-scoped) name is always refused this
   way, and a branch, lookup, rounding or comparison on such a name is never `ok`: the
-  probe sheet cannot read the name as the formula's sheet does.
+  probe sheet cannot read the name as the formula's sheet does. Such an `OFFSET` brings
+  no sheet into the landing region below, and a name with a relative reference counts
+  as no fixed cells among the cells that decide where a reference points.
 - The cells a dynamic reference lands on are checked like cells upstream of an output.
   Every formula cell on the sheet an `OFFSET` starts from (or a built range lies on),
   or that an `INDIRECT` text names literally (`"Rates!B"&row`), is probed, with
@@ -429,7 +431,8 @@ never take `--probe-cap` room from a branch or lookup check; a join whose cells 
 fit under the cap is refused as `number-to-text not checked` for its own cell and what
 depends on it, nothing else. A function result joined as text (`XLOOKUP`, `INDEX`,
 `IF`) is read like a number when it is one value; when it is an array, or the join
-names a range with more than 1,000 cells to read, the join is refused as
+names a range with more than 1,000 cells to read, or a sheet's own name or a name with
+a relative reference, the join is refused as
 `number-to-text not checked` for the policies that evaluate it, not for those whose
 branch skips it.
 

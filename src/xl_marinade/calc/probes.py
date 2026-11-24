@@ -875,7 +875,10 @@ class _Planner:
             return None
         if m.group("b") is None:
             found = self.graph.lookup_name(node.ref, self.cell.sheet)
-            if found is None or found.kind != "cells":
+            if found is None or found.kind != "cells" or found.relative:
+                return None
+            if found.scope is not None or "!" in node.ref:
+                # A sheet's own name stays unplaced, as when it is lifted.
                 return None
             return self.graph.name_cells(node.ref, self.cell.sheet)
         s1, s2 = m.group("s1"), m.group("s2")
@@ -1125,6 +1128,9 @@ def _static_sheet(graph: WorkbookGraph, cell: CellRef, node: ASTNode) -> str:
         if found is None or found.kind != "cells" or found.whole or len(sheets) != 1:
             # A whole column or row would land on up to a million cells per reading.
             raise ValueError(f"name {node.ref!r} is not a bounded range on one sheet")
+        if found.relative or found.scope is not None or "!" in node.ref:
+            # Neither is read off the formula's own sheet (see :func:`_lift_name`).
+            raise ValueError(f"name {node.ref!r} cannot be read off its own sheet")
         return sheets.pop()
     s1 = m.group("s1")
     if s1 is None:
