@@ -94,6 +94,7 @@ nav:
       - Bindings & the graph: guide/bindings.md
       - Diffing workbooks: guide/diffing.md
       - VBA extraction: guide/vba.md
+      - Recalculating (experimental): guide/calc.md
   - Reference:
       - CLI: reference/cli.md
       - SQLite schema: reference/schema.md

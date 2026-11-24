@@ -7,6 +7,45 @@ schema is a versioned public contract.
 
 ## [Unreleased]
 
+### Added
+- **`marinade calc` and `marinade values` (experimental).** `calc` recalculates a
+  workbook for new input sets with IronCalc (the optional `xl-marinade[calc]` extra),
+  first proving itself against the workbook's own stored values, and puts a status
+  (`refused`, `uncertain`, `unverified_path`, `ok`) on every output value. It writes
+  `results.csv`, `rows.csv`, `paths.csv`, `trust_report.json` and `run.json`. `values`
+  writes the stored values in the same variable/period row shape and needs no extra.
+  Experimental: outside the SemVer contract until it settles. See `docs/guide/calc.md`;
+  synthetic reproductions of the IronCalc 0.9.1 gaps are in `ref/calc/upstream/`.
+  - **Refusals.** Formulas that match Excel only by luck are refused (approximate
+    lookups on unsorted, mixed, whole-column or non-plain-text keys, implicit
+    intersection, names holding a formula or constant, `RAND*`, unheld external
+    references and names pointing into another workbook, approximate lookups on
+    input-dependent keys, and others). An engine-only error code (`#N/IMPL!` and the
+    like) or an approximate lookup matching a key of another type refuses that policy's
+    outputs. A `#NAME?` downstream of a VBA UDF is reported as `macro_function`, rooted
+    at the UDF cell. Exit code 5 means the extra is missing, 6 that the workbook is
+    refused outright (1904 dates, precision as displayed, Strict Open XML).
+  - **Exercised paths.** Only cells that reproduced vouch for their formula family's
+    branches and lookup edges.
+  - **`--check-against`** recalculates input sets whose results the workbook already
+    holds (such as a batch-results sheet) and compares them. A mismatch refuses an
+    output only for policies that took the mismatching set's path to it (the same
+    outcome at every branch and lookup-edge probe upstream); an unplaced or unsure probe
+    counts as the same path, and an output with no such probes is refused for every
+    policy. Mismatches in `trust_report.json` carry `stored`, `computed` and
+    `relative_difference`.
+  - **What `ok` means.** Every formula and path behind the value was checked against
+    Excel's stored values. It does not promise a new value is within the tolerance of
+    what Excel would compute: cancellation can amplify floating-point differences past
+    1e-9. The calc guide explains why `--check-against` is effectively required when a
+    workbook stores results for one input set only.
+  - **Memory.** Results are streamed to disk one policy at a time, and each
+    `--check-against` set is folded in as it finishes, so memory does not grow with the
+    number of policies or check sets (448 MB peak on lifelib BasicTerm_SE with 9,949
+    check points). A run that stops part-way deletes its partial CSVs.
+  - **`policies.csv`** may have unnamed columns, such as the empty trailing columns
+    spreadsheet exports leave; they are ignored.
+
 ## [0.7.1] - 2026-11-11
 
 Two fixes to the agent-facing views, both found by agents tracing models.
