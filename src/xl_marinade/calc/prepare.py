@@ -20,7 +20,7 @@ from pathlib import Path
 
 from loguru import logger
 
-from xl_marinade.calc.models import CellRef, _col_to_number
+from xl_marinade.calc.models import ArrayRange, CellRef, _col_to_number
 from xl_marinade.errors import CalcInputError
 
 _NS = {
@@ -66,6 +66,8 @@ class PreparedCopy:
     stripped: int
     data_table_cells: list[CellRef] = field(default_factory=list)
     held_externals: dict[CellRef, list[str]] = field(default_factory=dict)
+    arrays: list[ArrayRange] = field(default_factory=list)
+    """Every array formula's range, anchors sorted."""
 
 
 def _xml_unescape(text: str) -> str:
@@ -220,6 +222,7 @@ class _SheetResult:
     stripped: int
     data_table_cells: list[CellRef]
     held: dict[CellRef, list[str]]
+    arrays: list[ArrayRange]
 
 
 def _rect_cells(sheet: str, ref: str) -> list[CellRef]:
@@ -241,18 +244,39 @@ def _cell_pos(attrs: str) -> tuple[int, int] | None:
     return None
 
 
+def _array_ranges(xml: str, sheet: str) -> list[ArrayRange]:
+    """The range of every array formula on the sheet: ``<f t="array" ref="...">`` on its
+    top-left cell, for legacy and dynamic arrays alike. A dynamic array (one that
+    spills) carries cell metadata (``cm``) on that cell."""
+    if 't="array"' not in xml:
+        return []
+    out: list[ArrayRange] = []
+    for m in _C_RE.finditer(xml):
+        body = m.group(3)
+        if body is None or "<f" not in body:
+            continue
+        f = _F_RE.search(body)
+        attrs = dict(_ATTR_RE.findall(f.group(1))) if f is not None else {}
+        cells = _rect_cells(sheet, attrs.get("ref", "")) if attrs.get("t") == "array" else []
+        if not cells:
+            continue
+        cell_attrs = dict(_ATTR_RE.findall(m.group(1)))
+        first, last = cells[0], cells[-1]
+        out.append(ArrayRange(first, last.row, last.col, dynamic="cm" in cell_attrs))
+    return out
+
+
 def _prepare_sheet(xml: str, sheet: str, rewriter: _Rewriter) -> _SheetResult:
     # Pass 1: data-table rectangles, and array/spill rectangles. Only an array's anchor
     # holds the <f>; its other cells hold Excel's results as bare <v>, which the engine
     # would otherwise load as constants.
     table_cells: set[CellRef] = set()
-    array_cells: set[CellRef] = set()
     for f_attrs, _ in _F_RE.findall(xml):
         attrs = dict(_ATTR_RE.findall(f_attrs))
         if attrs.get("t") == "dataTable" and "ref" in attrs:
             table_cells.update(_rect_cells(sheet, attrs["ref"]))
-        if attrs.get("t") == "array" and "ref" in attrs:
-            array_cells.update(_rect_cells(sheet, attrs["ref"]))
+    arrays = _array_ranges(xml, sheet)
+    array_cells = {cell for array in arrays for cell in array.cells()}
 
     stripped = 0
     held: dict[CellRef, list[str]] = {}
@@ -302,7 +326,7 @@ def _prepare_sheet(xml: str, sheet: str, rewriter: _Rewriter) -> _SheetResult:
     for si, refs in shared_held.items():
         for child in shared_children.get(si, []):
             held.setdefault(child, list(refs))
-    return _SheetResult(out, stripped, sorted(table_cells), held)
+    return _SheetResult(out, stripped, sorted(table_cells), held, arrays)
 
 
 _DEFINED_NAME_RE = re.compile(r"(<definedName\b[^>]*>)(.*?)(</definedName>)", re.S)
@@ -341,6 +365,7 @@ def prepare_engine_copy(src: Path, dst: Path, *, as_of: date | None) -> Prepared
     stripped = 0
     table_cells: list[CellRef] = []
     held: dict[CellRef, list[str]] = {}
+    arrays: list[ArrayRange] = []
     with zin, zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zout:
         try:
             sheets, link_parts = _workbook_parts(zin)
@@ -358,6 +383,7 @@ def prepare_engine_copy(src: Path, dst: Path, *, as_of: date | None) -> Prepared
                 stripped += res.stripped
                 table_cells.extend(res.data_table_cells)
                 held.update(res.held)
+                arrays.extend(res.arrays)
             zout.writestr(item, data)
     logger.debug(
         "engine copy {}: {} formula cells stripped, {} data-table cells, {} held externals",
@@ -366,4 +392,10 @@ def prepare_engine_copy(src: Path, dst: Path, *, as_of: date | None) -> Prepared
         len(table_cells),
         len(held),
     )
-    return PreparedCopy(dst, stripped, sorted(table_cells), dict(sorted(held.items())))
+    return PreparedCopy(
+        dst,
+        stripped,
+        sorted(table_cells),
+        dict(sorted(held.items())),
+        sorted(arrays, key=lambda a: a.anchor),
+    )

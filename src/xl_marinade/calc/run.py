@@ -29,6 +29,7 @@ from xl_marinade.calc.config import (
 from xl_marinade.calc.engine import Engine, EngineValue, engine_version, quiet_native_output
 from xl_marinade.calc.graph import StoredValue, WorkbookGraph, open_graph
 from xl_marinade.calc.models import (
+    ArrayRange,
     CellRef,
     CheckAgainst,
     Policy,
@@ -87,6 +88,8 @@ _COLUMN = re.compile(r"^[A-Za-z]{1,3}$")
 _EXCEL_EPOCH = date(1899, 12, 30)
 _TRUE, _FALSE = "TRUE", "FALSE"
 _NAME_ERROR = "#NAME?"
+_MAX_ROW = 1_048_576
+_MAX_COL = 16_384
 
 
 @dataclass(slots=True)
@@ -199,6 +202,13 @@ def _input_cell(graph: WorkbookGraph, target: str, what: str) -> CellRef:
     cell = _single(graph, target, what)
     if graph.formula(cell) is not None:
         raise CalcInputError(f"{what} {target!r} maps onto formula cell {cell.a1()}")
+    anchor = graph.array_anchor(cell)
+    if anchor is not None:
+        # Excel computes every cell of an array formula's range; none takes a constant.
+        raise CalcInputError(
+            f"{what} {target!r} maps onto formula cell {cell.a1()} "
+            f"(in the array formula at {anchor.a1()})"
+        )
     return cell
 
 
@@ -311,6 +321,8 @@ class _Session:
     resets: list[CellRef]
     stored_name_errors: frozenset[CellRef] = frozenset()
     """Outputs that are ``#NAME?`` in the trust run (on the stored inputs)."""
+    spills: list[ArrayRange] = field(default_factory=list)
+    """Dynamic arrays, whose spill can grow past the range the workbook stored."""
 
     def reset(self) -> None:
         """Put every mapped input (and the selector) back to its stored value."""
@@ -517,6 +529,35 @@ def _paths(
     return records
 
 
+def _spill_growth(s: _Session) -> dict[CellRef, list[CellRef]]:
+    """Cells a dynamic array spilled into, for this policy, beyond the range the workbook
+    stored, each mapped to its anchor: they read the anchor as its stored cells do.
+
+    A spill grows right and down from its anchor, so a larger one fills the cell below
+    the stored range in the anchor's column, or right of it in the anchor's row. A cell
+    the workbook holds something in cannot be part of the spill.
+    """
+    grown: dict[CellRef, list[CellRef]] = {}
+    for array in s.spills:
+        anchor = array.anchor
+        sheet, top, left = anchor
+
+        def filled(cell: CellRef) -> bool:
+            return not s.graph.holds(cell) and s.engine.value(cell) is not None
+
+        rows = array.last_row
+        while rows < _MAX_ROW and filled(CellRef(sheet, rows + 1, left)):
+            rows += 1
+        cols = array.last_col
+        while cols < _MAX_COL and filled(CellRef(sheet, top, cols + 1)):
+            cols += 1
+        for r in range(top, rows + 1):
+            for c in range(left, cols + 1):
+                if r > array.last_row or c > array.last_col:
+                    grown.setdefault(CellRef(sheet, r, c), []).append(anchor)
+    return grown
+
+
 def _policy_loop(
     s: _Session,
     policies: list[Policy],
@@ -561,7 +602,10 @@ def _policy_loop(
             bucket = roots.setdefault(cell, [])
             if reason not in bucket:
                 bucket.append(reason)
-        assigned = assign(s.graph, outputs, roots, readings.dynamic_refs, static=static)
+        dynamic = dict(readings.dynamic_refs)
+        for cell, anchors in _spill_growth(s).items():
+            dynamic[cell] = sorted({*dynamic.get(cell, ()), *anchors})
+        assigned = assign(s.graph, outputs, roots, dynamic, static=static)
         computed: dict[CellRef, tuple[EngineValue, Status, list[Reason]]] = {}
         results: list[OutputValue] = []
         for cell in outputs:
@@ -650,13 +694,14 @@ def calc(req: CalcRequest) -> CalcResult:
     with tempfile.TemporaryDirectory(prefix="marinade-calc-") as tmp:
         work = Path(tmp)
         graph = open_graph(req.workbook, req.ir, work / "ir")
+        prepared = prepare_engine_copy(req.workbook, work / "engine.xlsx", as_of=req.as_of)
+        graph.add_arrays(prepared.arrays)
         variables = expand_variables(specs, graph)
         outputs = _output_cells(graph, targets, variables)
         inputs = {
             name: _input_cell(graph, target, f"map field {name!r}")
             for name, target in input_map.fields.items()
         }
-        prepared = prepare_engine_copy(req.workbook, work / "engine.xlsx", as_of=req.as_of)
         patterns = _merge_patterns(
             _with_unheld_externals(
                 graph,
@@ -679,11 +724,13 @@ def calc(req: CalcRequest) -> CalcResult:
         place_probes(engine, plan)
         with quiet_native_output():
             engine.evaluate()
+        # A refused array formula refuses every cell of its range: none is checked.
+        refused_cells = set(patterns) | {m for a in patterns for m in graph.array_members(a)}
         trust = run_trust(
             engine,
             graph,
             tolerance=req.tolerance,
-            skip=set(patterns) | set(prepared.data_table_cells),
+            skip=refused_cells | set(prepared.data_table_cells),
         )
         failing = {f.cell for f in trust.failures}
         evidence = ExercisedBuilder(plan, exclude=failing | set(patterns))
@@ -694,7 +741,14 @@ def calc(req: CalcRequest) -> CalcResult:
             resets.append(_input_cell(graph, check.selector, "selector"))
         stored_names = frozenset(c for c in outputs if engine.value(c) == _NAME_ERROR)
         session = _Session(
-            req, graph, engine, plan, inputs, list(dict.fromkeys(resets)), stored_names
+            req,
+            graph,
+            engine,
+            plan,
+            inputs,
+            list(dict.fromkeys(resets)),
+            stored_names,
+            [a for a in graph.arrays() if a.dynamic],
         )
         mismatches: dict[CellRef, _Mismatches] = {}
         check_record: dict[str, Any] | None = None

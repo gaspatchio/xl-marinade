@@ -82,6 +82,17 @@ schema is a versioned public contract.
   read is `number-to-text not checked`. Integers and short decimals off a tie stay
   `ok`. Correcting the value
   instead of refusing it is planned for 0.9.
+- **`marinade calc`: every cell of an array formula is a formula cell.** Excel stores an
+  array formula (a legacy Ctrl+Shift+Enter block or a dynamic-array spill) only on its
+  top-left cell; calc treated the other cells as constants. They were never compared in
+  the trust run, a refusal, failure or unplaced probe of the formula did not reach them
+  or the cells reading them, and a map field or selector on one was accepted and
+  silently ignored. So a cell of a refused array came back `ok`, and a wrong value in a
+  non-anchor cell on the stored inputs came back `ok` too. Each such cell now reads its
+  array's formula in the graph, is compared in the trust run (so `formula_cells`,
+  `checked` and `share` in `trust_report.json` count them), and is an error as an input
+  target. A dynamic array that spills past the range the workbook stored, for a policy,
+  carries its formula's status to the cells it spills into.
 
 ## [0.8.0] - 2026-11-24
 
