@@ -30,13 +30,15 @@ pip install 'xl-marinade[calc]'
 | Option | File | What it holds |
 |---|---|---|
 | `WORKBOOK` | `.xlsx` / `.xlsm` | The model, saved by Excel so it carries stored values. |
-| `--policies` | `policies.csv` | One row per input set. An id column plus one column per mapped field. UTF-8 (save from Excel as "CSV UTF-8"). Ids stay text; a blank value, a duplicate id or a duplicate column name is an error. Columns with no name (the empty trailing columns some exports add) are ignored. |
+| `--policies` | `policies.csv` | One row per input set. An id column plus one column per mapped field. UTF-8 (save from Excel as "CSV UTF-8"). Ids stay text; a blank value, a duplicate id, a duplicate column name or a row with more values than the header has names (an unquoted `250,000`) is an error. Columns with no name (the empty trailing columns some exports add) are ignored, and so are empty values past the last column. |
 | `--map` | `map.json` | Which cell or defined name each field sets. |
 | `--outputs` | repeatable | Output cells, ranges or defined names (`'Results!B5:B64'`). Ranges expand to cells. |
 | `--variables` | `vars.json` | Optional. Named output variables for `rows.csv`. |
 | `--check-against` | `check.json` | Optional. Stored results for other input sets, to widen the trust run. |
 
-You must give at least one of `--outputs` and `--variables`.
+You must give at least one of `--outputs` and `--variables`. A key repeated in the same
+object of `map.json`, `vars.json` or `check.json` is an error: JSON would keep only the
+last one.
 
 ### Targets
 
@@ -80,7 +82,9 @@ sheet's definition of a name first, and the workbook's only when the sheet has n
 in `fields`, so the id is written into a workbook cell as well. Each target must be a cell
 or defined name that holds a constant; mapping onto a formula is an error, and so is
 mapping onto any cell of an array formula's range (Excel cannot hold a constant there).
-The same holds for a `check.json` selector. Before each
+The same holds for a `check.json` selector. Mapping two fields onto one cell (by
+address, by name, or one of each), the id field included, is an error too, since the
+cell can hold only one of their values. Before each
 input set, every mapped input is reset to its stored value. Values are converted to the
 target cell's stored type, and ISO dates become Excel serials. A value outside the cell's
 data-validation list refuses that input set's outputs.
@@ -136,9 +140,10 @@ batch-results sheet, so the trust run can recalculate those input sets too and c
 ```
 
 `results.outputs` maps an output cell to the results-sheet column holding its stored value
-per input set. `inputs` has exactly one of `table` (a column per `map.json` field) or
-`selector` (a single cell, e.g. `"Control!C4"`, that picks the input set by id). Only input
-sets the engine reproduced count towards the exercised paths.
+per input set; two outputs that resolve to one cell are an error. `inputs` has exactly one
+of `table` (a column per `map.json` field) or `selector` (a single cell, e.g.
+`"Control!C4"`, that picks the input set by id; it may be a mapped field's cell too). Only
+input sets the engine reproduced count towards the exercised paths.
 
 A **mismatch** (an input set whose recalculated output differs from the stored one by more
 than `--tolerance`) refuses that output only for policies that took the same path to it:

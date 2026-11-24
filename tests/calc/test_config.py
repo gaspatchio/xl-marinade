@@ -217,3 +217,73 @@ def test_json_not_utf8_is_input_error(tmp_path: Path) -> None:
     p.write_bytes('{"fields": {"n\xe9": "S!B1"}}'.encode("cp1252"))
     with pytest.raises(CalcInputError, match="UTF-8"):
         load_input_map(p)
+
+
+# -- a value the file holds is never dropped ------------------------------------
+
+
+def test_policies_wide_row_is_input_error(tmp_path: Path) -> None:
+    # "250,000" unquoted splits into two fields under a three-name header: the row has
+    # one field more than the header, and DictReader would file "000" under no column.
+    p = tmp_path / "p.csv"
+    p.write_text("id,term,sa\nA,20,250,000\nB,1,5\n", encoding="utf-8")
+    with pytest.raises(CalcInputError, match=r"policy 'A'.*line 2.*4 fields.*3"):
+        load_policies(p, InputMap(fields={"term": "S!B1", "sa": "S!B2"}, id_field=None))
+
+
+def test_policies_wide_row_names_its_own_line(tmp_path: Path) -> None:
+    p = tmp_path / "p.csv"
+    p.write_text("id,sa\n1,5\n2,1,0,0\n", encoding="utf-8")
+    with pytest.raises(CalcInputError, match=r"policy '2'.*line 3"):
+        load_policies(p, InputMap(fields={"sa": "S!B2"}, id_field=None))
+
+
+def test_policies_wide_row_with_only_empty_extra_fields_is_accepted(tmp_path: Path) -> None:
+    # A trailing comma (or a run of them) adds empty fields: nothing is dropped.
+    p = tmp_path / "p.csv"
+    p.write_text("id,age\n1,40,\n2,41,, \n", encoding="utf-8")
+    policies = load_policies(p, InputMap(fields={"age": "S!B1"}, id_field=None))
+    assert policies == [
+        Policy(id="1", values={"age": "40"}),
+        Policy(id="2", values={"age": "41"}),
+    ]
+
+
+def _raw(path: Path, text: str) -> Path:
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def test_map_duplicate_field_key_is_input_error(tmp_path: Path) -> None:
+    # JSON keeps the last of two equal keys; one of the two targets would be dropped.
+    m = _raw(tmp_path / "m.json", '{"fields": {"age": "S!B1", "age": "S!B2"}}')
+    with pytest.raises(CalcInputError, match=r"duplicate key 'age'"):
+        load_input_map(m)
+
+
+def test_map_duplicate_top_level_key_is_input_error(tmp_path: Path) -> None:
+    m = _raw(tmp_path / "m.json", '{"id_field": "a", "id_field": "b", "fields": {"a": "S!B1"}}')
+    with pytest.raises(CalcInputError, match=r"duplicate key 'id_field'"):
+        load_input_map(m)
+
+
+def test_vars_duplicate_variable_is_input_error(tmp_path: Path) -> None:
+    v = _raw(tmp_path / "v.json", '{"v": {"cell": "S!B1"}, "v": {"cell": "S!B2"}}')
+    with pytest.raises(CalcInputError, match=r"duplicate key 'v'"):
+        load_variables(v)
+
+
+def test_check_duplicate_keys_are_input_errors(tmp_path: Path) -> None:
+    res = '"results": {"sheet": "Res", "id_column": "A", "first_row": 2, "outputs": %s}'
+    one = res % '{"S!B13": "C"}'
+    tab = '{"sheet": "In", "id_column": "A", "first_row": 2, "fields": {"age": "B", "age": "C"}}'
+    sel = '"inputs": {"selector": "C!A1"}'
+    cases = {
+        "S!B13": "{" + (res % '{"S!B13": "C", "S!B13": "D"}') + ", " + sel + "}",
+        "age": "{" + one + ', "inputs": {"table": ' + tab + "}}",
+        "inputs": "{" + one + ", " + sel + ", " + sel + "}",
+    }
+    for key, text in cases.items():
+        c = _raw(tmp_path / "c.json", text)
+        with pytest.raises(CalcInputError, match=rf"duplicate key '{key}'"):
+            load_check_against(c)

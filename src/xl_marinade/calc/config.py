@@ -34,9 +34,31 @@ from xl_marinade.calc.models import (
 from xl_marinade.errors import CalcInputError
 
 
+class _DuplicateKey(ValueError):
+    """A JSON object holds the same key twice; ``json`` would keep only the last."""
+
+    def __init__(self, key: str) -> None:
+        super().__init__(key)
+        self.key: str = key
+
+
+def _unique_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in out:
+            raise _DuplicateKey(key)
+        out[key] = value
+    return out
+
+
 def _read_json(path: Path) -> Any:
+    """Parse a JSON file, refusing an object that repeats a key (at any depth)."""
     try:
-        return json.loads(path.read_text(encoding="utf-8-sig"))
+        return json.loads(path.read_text(encoding="utf-8-sig"), object_pairs_hook=_unique_keys)
+    except _DuplicateKey as exc:
+        raise CalcInputError(
+            f"{path} has a duplicate key {exc.key!r}: JSON would keep only the last value"
+        ) from exc
     except OSError as exc:
         raise CalcInputError(f"cannot read {path}: {exc}") from exc
     except UnicodeDecodeError as exc:
@@ -67,6 +89,23 @@ def load_input_map(path: Path) -> InputMap:
     return InputMap(fields=fields, id_field=id_field)
 
 
+def _no_extra_fields(
+    row: dict[str | Any, Any], pid: str, path: Path, line: int, width: int
+) -> None:
+    """Refuse a row with more non-empty fields than the header has names.
+
+    ``DictReader`` files the extra fields under the key None, where nothing reads them:
+    ``P1,40,250,000`` under ``id,age,sa`` would set sa to 250. Empty extra fields (a
+    trailing comma) drop nothing and are accepted.
+    """
+    extra: list[str] = row.get(None) or []
+    if any(v.strip() for v in extra):
+        raise CalcInputError(
+            f"policy {pid!r} ({path} line {line}) has {width + len(extra)} fields but the "
+            f"header names {width}: quote a value that holds a comma"
+        )
+
+
 def load_policies(path: Path, input_map: InputMap) -> list[Policy]:
     """Load ``policies.csv``; ids stay text, and every mapped field must be filled."""
     id_col = input_map.id_field or "id"
@@ -91,6 +130,7 @@ def load_policies(path: Path, input_map: InputMap) -> list[Policy]:
                 pid = (row[id_col] or "").strip()
                 if not pid:
                     raise CalcInputError(f"{path} has a row with a blank {id_col!r}")
+                _no_extra_fields(row, pid, path, reader.line_num, len(header))
                 if pid in seen:
                     raise CalcInputError(f"duplicate policy id {pid!r} in {path}")
                 seen.add(pid)

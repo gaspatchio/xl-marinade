@@ -128,6 +128,15 @@ schema is a versioned public contract.
   `probes_unplaced` and `probes_over_cap`, and the command prints the cap needed), and
   `paths.csv` lists the cells each policy's references reached, not the stored inputs'
   landing cell.
+- **`marinade calc`: an input file can no longer drop a value without a word.** A
+  `policies.csv` row with more values than the header has names (an unquoted
+  `250,000`) set the field to the first part and filed the rest under no column, so the
+  output came back `ok` with the wrong number; it is now an error naming the policy
+  and the line (empty values past the last column are still accepted). A key repeated
+  in `map.json`, `vars.json` or `check.json` kept only its last value; it is now an
+  error naming the key. Two map fields that resolve to one cell (by address or by name)
+  and two `check.json` outputs on one cell are errors too: one value or one comparison
+  was dropped, and which one depended on key order.
 
 ## [0.8.0] - 2026-11-24
 

@@ -305,9 +305,23 @@ def _resolve_targets(
             inputs[name] = _input_cell(graph, target, f"map field {name!r}")
         except CalcInputError as exc:
             problems.append(str(exc))
+    problems.extend(_shared_cells(inputs, "map fields"))
     if problems:
         raise CalcInputError("; ".join(problems))
     return variables, cells, inputs
+
+
+def _shared_cells(entries: dict[str, CellRef], what: str) -> list[str]:
+    """One problem per cell that two entries resolve to: a cell holds one value, so
+    one entry would be dropped without a word."""
+    by_cell: dict[CellRef, list[str]] = {}
+    for name, cell in entries.items():
+        by_cell.setdefault(cell, []).append(name)
+    return [
+        f"{what} {' and '.join(repr(n) for n in sorted(names))} both resolve to {cell.a1()}"
+        for cell, names in sorted(by_cell.items())
+        if len(names) > 1
+    ]
 
 
 # -- reports -------------------------------------------------------------------
@@ -502,8 +516,12 @@ def _check_against(
     results = _id_rows(
         graph, results_sheet, _column(check.id_column, "results.id_column"), check.first_row
     )
+    resolved = {target: _single(graph, target, "check output") for target in check.outputs}
+    shared = _shared_cells(resolved, "check outputs")
+    if shared:
+        raise CalcInputError("; ".join(shared))
     outputs = {
-        _single(graph, target, "check output"): _column(col, f"results column for {target}")
+        resolved[target]: _column(col, f"results column for {target}")
         for target, col in check.outputs.items()
     }
     table_rows: dict[str, int] = {}
