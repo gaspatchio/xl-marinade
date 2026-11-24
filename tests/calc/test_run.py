@@ -728,3 +728,48 @@ def test_text_results_with_edge_spaces_and_empty_text_reproduce(
         (got[("1", f"Calc!B{r}")]["value"], got[("1", f"Calc!B{r}")]["status"])
         for r in (1, 2, 3, 4)
     ] == [(" old ", "ok"), ("", "ok"), ("0.0", "ok"), ("5.0", "ok")]
+
+
+def test_check_against_id_column_walks_past_an_empty_text_id(
+    make_book: Book, tmp_path: Path
+) -> None:
+    # A results id column built by a formula that returns "" for unused rows. "" is a
+    # value, not a blank cell (ISBLANK is FALSE), so the walk does not stop there: the
+    # set below the gap is read too. Hand values: age 40 -> 2, age 80 -> 1.
+    sheets: dict[str, dict[str, object]] = {
+        "In": {"A1": 70},
+        "Calc": {"B2": F("=IF(In!A1>60,1,2)", 1)},
+        "Sets": {"A2": 1, "B2": 40, "A3": 2, "B3": 80},
+        "Results": {
+            "A2": 1,
+            "B2": 2,
+            "A3": F('=IF(FALSE,0,"")', ""),
+            "A4": 2,
+            "B4": 1,
+        },
+    }
+    book = make_book("idgap", sheets)
+    check = {
+        "results": {
+            "sheet": "Results",
+            "id_column": "A",
+            "first_row": 2,
+            "outputs": {"Calc!B2": "B"},
+        },
+        "inputs": {
+            "table": {"sheet": "Sets", "id_column": "A", "first_row": 2, "fields": {"age": "B"}}
+        },
+    }
+    imap = {"id_field": "id", "fields": {"age": "In!A1"}}
+    res = calc(
+        _req(
+            tmp_path,
+            book,
+            "id,age\nP,30\n",
+            imap=imap,
+            outputs=["Calc!B2"],
+            check_against=_write(tmp_path, "check.json", json.dumps(check)),
+        )
+    )
+    report = json.loads(res.trust_report.read_text(encoding="utf-8"))
+    assert report["check_against"] == {"input_sets": 2, "mismatches": []}
