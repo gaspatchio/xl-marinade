@@ -1080,9 +1080,14 @@ class _Planner:
         start = RefNode(start_text)
         sheet = self._static_sheet(start)
         end = FunctionNode(function, node.args)
+        end_sheet: str | None = None
         if function_name(function) in {"OFFSET", "INDEX"} and node.args:
-            if self._static_sheet(node.args[0]) != sheet:
-                raise ValueError(f"range {node.name!r} spans two sheets")
+            end_sheet = self._static_sheet(node.args[0])
+        elif function_name(function) == "INDIRECT" and node.args:
+            end_sheet = _text_sheet(self.graph, node.args[0])
+        if end_sheet is not None and end_sheet != sheet:
+            # Excel's ``:`` cannot join references on two sheets (``#VALUE!``).
+            raise ValueError(f"range {node.name!r} spans two sheets")
         formulas: list[str] = []
         for ref in (self.lift(start), self.lift(end)):
             corner = f"OFFSET({ref},0,0,1,1)"
@@ -1149,7 +1154,7 @@ def _text_sheet(graph: WorkbookGraph, text: ASTNode) -> str | None:
 
 def reach_sheets(graph: WorkbookGraph, cell: CellRef) -> set[str]:
     """The sheets the dynamic references in ``cell``'s formula can land on, where that
-    is known without running them (ruling D1): an ``OFFSET``'s starting sheet, the sheet
+    is known without running them: an ``OFFSET``'s starting sheet, the sheet
     an ``INDIRECT`` text names literally, a built range's sheet. Other ``INDIRECT``
     texts can land anywhere; they are not listed."""
     text = graph.formula(cell)

@@ -253,9 +253,12 @@ Details worth knowing:
   `refused`.
 - `OFFSET` and `INDIRECT` are followed to where they point for each input set; if that
   cannot be read, the outputs behind it are refused (`dynamic reference not checked`).
-  So is a range whose end is a call, such as `SUM(C5:OFFSET(C5,Term-1,0))`,
-  `B1:INDIRECT(...)` or `A1:INDEX(...)`: it covers the smallest rectangle holding both
-  ends, read per input set. The cells that decide where a reference points (`OFFSET`'s
+  So is a range whose end is a call, such as `SUM(C5:OFFSET(C5,Term-1,0))` or
+  `B1:INDIRECT(...)`: it covers the smallest rectangle holding both ends, read per input
+  set; one whose ends lie on two sheets is refused (Excel gives `#VALUE!` there).
+  IronCalc 0.9.1 answers `#VALUE!` for a range ending in `INDEX` (`A1:INDEX(...)`) and
+  `#ERROR!` for one whose start names its sheet (`Proj!C5:OFFSET(...)`), so the trust
+  run refuses those. The cells that decide where a reference points (`OFFSET`'s
   rows, columns, height and width, the cells `INDIRECT`'s text is built from) are
   precedents of the cell, so a failure or an untried branch there reaches it.
 - The cells a dynamic reference lands on are checked like cells upstream of an output.
@@ -334,9 +337,9 @@ the sheet uses.
 
 The files on disk do grow with the policies. `paths.csv` has one row per policy per
 branch or lookup probe it reached, which for an actuarial projection can be over a
-thousand rows per policy (more when an `OFFSET` sums over a projection, since every
-row it covers fed the output) (about 1.2 million rows and 126 MB for 1,000 lifelib BasicTerm_S
-policies). Leave room in `-o` for it.
+thousand rows per policy: about 1.2 million rows and 126 MB for 1,000 lifelib
+BasicTerm_S policies. An `OFFSET` that sums over a projection adds more, since every row
+it covers fed the output. Leave room in `-o` for it.
 
 ### `--probe-cap`
 

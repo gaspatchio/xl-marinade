@@ -200,20 +200,121 @@ def test_range_ends_built_by_offset_and_indirect_are_followed(
 
 
 def test_a_range_end_that_cannot_be_read_is_refused(make_book: Book, tmp_path: Path) -> None:
-    # A sheet on the called function is not something calc can lift: refused by name.
+    # A range from S!A1 to a cell on another sheet is not a range Excel can build (it
+    # gives #VALUE!): calc cannot say which cells it covers, so its probe is unplaced
+    # and the outputs behind it are refused. B1 and B2 build such a range through an
+    # OFFSET starting on another sheet and through an INDIRECT naming one; B3 builds
+    # an ordinary one, which gets its probe.
     book = make_book(
         "unread",
-        {"S": {"A1": 1, "A2": 2, "B1": F("=SUM(A1:OFFSET(A1,1,0))", 3)}},
+        {
+            "S": {
+                "A1": 1,
+                "A2": 2,
+                "B1": F("=SUM(A1:OFFSET(T!A1,1,0))", "#VALUE!"),
+                "B2": F('=SUM(A1:INDIRECT("T!A2"))', "#VALUE!"),
+                "B3": F("=SUM(A1:OFFSET(A1,1,0))", 3),
+            },
+            "T": {"A1": 1, "A2": 2},
+        },
     )
     graph = open_graph(book, None, tmp_path / "ir")
-    cell = CellRef("S", 1, 2)
-    graph._formula[cell] = "SUM(A1:S!OFFSET(A1,1,0))"  # as the parser would hand it over
-    plan = plan_probes(graph, [cell], cap=100)
-    assert plan.unplaced.get(cell) == [ProbeKind.dynamic_ref]
-    graph._formula[cell] = "SUM(A1:OFFSET(A1,1,0))"
+    for row in (1, 2):
+        cell = CellRef("S", row, 2)
+        plan = plan_probes(graph, [cell], cap=100)
+        assert plan.unplaced.get(cell) == [ProbeKind.dynamic_ref], cell
+    cell = CellRef("S", 3, 2)
     plan = plan_probes(graph, [cell], cap=100)
     assert [p.kind for p in plan.probes] == [ProbeKind.dynamic_ref]
     assert plan.probes[0].meta["function"] == "range"
+
+
+def test_sweep_cells_pinned(make_book: Book, tmp_path: Path) -> None:
+    # Cells of the sweep verified by script, pinned here. Stored k = 1, x = 5, n = 1,
+    # t = "RngA". Policy k = 2, x = 500, n = 2, t = "RngB".
+    #   Data2!A2 = DATE(1900,1,1): Excel 1, IronCalc 2, so it fails the trust run.
+    #   Lvl!A2 = OFFSET(Data2!A1, k-1, 0); Out!B4 = OFFSET(Lvl!A1, IF(x>1,1,0), 0):
+    #     OFFSET to OFFSET to the failed cell. Excel 1.
+    #   Out!I1 = SUM(D1:INDEX(D1:D5, n)) over 10..50: Excel 30 (IronCalc #VALUE!).
+    #   Out!C1 = SUM(CHOOSE(k, Calc!A1:A2, Calc!B1:B2)), B2 = IF(x>100, DATE(1900,1,1), 7):
+    #     Excel 1 + 1 = 2; B2's TRUE arm is untried.
+    #   Out!N1 = SUM(INDIRECT(t)): names RngA = Calc!A1:A2, RngB = Calc!B1:B2. Excel 2.
+    book = make_book(
+        "pins",
+        {
+            "Inputs": {"B1": 1, "B2": 5, "B3": 1, "B4": "RngA"},
+            "Data2": {"A1": 5, "A2": F("=DATE(1900,1,1)", 1)},
+            "Lvl": {"A1": 3, "A2": F("=OFFSET(Data2!$A$1,Inputs!$B$1-1,0)", 5)},
+            "Calc": {
+                "A1": 1,
+                "A2": 2,
+                "B1": 1,
+                "B2": F("=IF(Inputs!$B$2>100,DATE(1900,1,1),7)", 7),
+                "D1": 10,
+                "D2": 20,
+                "D3": 30,
+                "D4": 40,
+                "D5": 50,
+            },
+            "Out": {
+                "B4": F("=OFFSET(Lvl!$A$1,IF(Inputs!$B$2>1,1,0),0)", 5),
+                "I1": F("=SUM(Calc!D1:INDEX(Calc!D1:D5,Inputs!$B$3))", 10),
+                "C1": F("=SUM(CHOOSE(Inputs!$B$1,Calc!A1:A2,Calc!B1:B2))", 3),
+                "N1": F("=SUM(INDIRECT(Inputs!$B$4))", 3),
+            },
+        },
+        names={"RngA": "Calc!$A$1:$A$2", "RngB": "Calc!$B$1:$B$2"},
+    )
+    fields = {"k": "Inputs!B1", "x": "Inputs!B2", "n": "Inputs!B3", "t": "Inputs!B4"}
+    outputs = ["Out!B4", "Out!I1", "Out!C1", "Out!N1"]
+    rows = _rows(_run(tmp_path, book, "id,k,x,n,t\nP,2,500,2,RngB\n", fields, outputs))
+    assert rows[("P", "Out!B4")]["status"] == "refused"
+    assert "silently_wrong@Data2!A2" in rows[("P", "Out!B4")]["reasons"]
+    assert rows[("P", "Out!I1")]["status"] == "refused"
+    assert rows[("P", "Out!C1")]["status"] == "unverified_path"
+    assert "unexercised_branch@Calc!B2" in rows[("P", "Out!C1")]["reasons"]
+    assert rows[("P", "Out!N1")]["status"] != "ok"
+
+
+def test_a_landing_region_past_the_cap_is_never_ok(make_book: Book, tmp_path: Path) -> None:
+    # Out!B1 = OFFSET(Calc!A1, k-1, 0); Out!B2 = IF(x>1, 1, 2) takes the cap first.
+    # Policies land on Calc!A2 (P: its untried arm, Excel 1; Q: the stored arm, 40). For
+    # every cap the region's probes may not fit, and a landing they miss is not ok.
+    book = make_book(
+        "capped",
+        {
+            "Inputs": {"B1": 1, "B2": 5},
+            "Calc": {
+                "A1": F("=IF(Inputs!$B$2>1,10,20)", 10),
+                "A2": F("=IF(Inputs!$B$2>100,DATE(1900,1,1),40)", 40),
+            },
+            "Out": {
+                "B1": F("=OFFSET(Calc!$A$1,Inputs!$B$1-1,0)", 10),
+                "B2": F("=IF(Inputs!$B$2>1,1,2)", 1),
+            },
+        },
+    )
+    fields = {"k": "Inputs!B1", "x": "Inputs!B2"}
+    for cap in (1, 2, 3, 4, 5):
+        (tmp_path / "p.csv").write_text("id,k,x\nP,2,500\nQ,2,5\n", encoding="utf-8")
+        (tmp_path / "m.json").write_text(json.dumps({"fields": fields}), encoding="utf-8")
+        res = calc(
+            CalcRequest(
+                workbook=book,
+                policies=tmp_path / "p.csv",
+                input_map=tmp_path / "m.json",
+                out_dir=tmp_path / f"c{cap}",
+                outputs=["Out!B1", "Out!B2"],
+                probe_cap=cap,
+            )
+        )
+        rows = _rows(res)
+        assert rows[("P", "Out!B1")]["status"] != "ok", cap
+        report = json.loads(res.trust_report.read_text(encoding="utf-8"))
+        if report["probes_over_cap"] == 0:
+            continue
+        # Something did not fit: Q's landing is not vouched for either.
+        assert rows[("Q", "Out!B1")]["status"] != "ok", (cap, rows[("Q", "Out!B1")])
 
 
 # -- (c) landing cells ----------------------------------------------------------
