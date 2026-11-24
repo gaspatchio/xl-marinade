@@ -425,3 +425,40 @@ def test_paths_list_only_where_the_policy_landed(make_book: Book, tmp_path: Path
     with res.paths_csv.open(encoding="utf-8", newline="") as fh:
         cells = {r["cell"] for r in csv.DictReader(fh)}
     assert "Calc!A1" not in cells
+
+
+def test_unprobed_landings_are_walked_once_per_cell(make_book: Book, tmp_path: Path) -> None:
+    # A recursive projection P!B2:D41 (each row reads the row above), summed through an
+    # INDIRECT naming no sheet, so none of it is probed. Landing on every row of D must
+    # look at each upstream cell once, and plan each formula's probes once per run, not
+    # once per landed cell (which grows as rows squared).
+    from xl_marinade.calc.probes import probe_kinds
+    from xl_marinade.calc.status import LandingCheck
+
+    rows = 40
+    sheet: dict[str, object] = {}
+    for r in range(2, rows + 2):
+        for col, left in (("B", None), ("C", "B"), ("D", "C")):
+            prev = f"{col}{r - 1}" if r > 2 else "1"
+            extra = f"+{left}{r}" if left else ""
+            sheet[f"{col}{r}"] = F(f"={prev}*2+IF(A1>0,1,0){extra}", 0)
+    sheet["A1"] = 1
+    book = make_book("chain", {"P": sheet})
+    graph = open_graph(book, None, tmp_path / "ir")
+    planned: list[CellRef] = []
+
+    def kinds(cell: CellRef) -> list[ProbeKind]:
+        planned.append(cell)
+        return probe_kinds(graph, cell)
+
+    check = LandingCheck(graph, frozenset(), kinds)
+    landed = {CellRef("P", 1, 9): [CellRef("P", r, 4) for r in range(2, rows + 2)]}
+    first = check.roots(landed)
+    assert len(planned) == len(set(planned)) == 3 * rows
+    assert check.visits <= 3 * rows + 1  # each formula cell once, plus A1
+    again = check.roots(landed)
+    assert again == first
+    assert len(planned) == 3 * rows  # memoised across policies
+    for r in range(2, rows + 2):
+        reasons = first[CellRef("P", r, 2)]
+        assert {x.kind.value for x in reasons} == {"not_checked_path", "not_checked_value"}
