@@ -237,7 +237,11 @@ marinade values book.xlsx --variables vars.json [--map map.json] -o stored/
   keys; a call to a function IronCalc lacks (`AGGREGATE`, `BAHTTEXT`, the `CUBE…`
   functions and a few more; the detail names it). Per policy: `lookup value type
   differs from keys` (text against numbers); an `INDIRECT` address off the grid
-  (row 0) is `dynamic reference not checked`.
+  (row 0) is `dynamic reference not checked`; number-to-text where the engine's
+  text can differ from Excel's (`number-to-text at a decimal tie` for
+  `TEXT`/`FIXED`/`DOLLAR`, `… where Excel's 15-digit text differs` for `&`, `CONCAT`,
+  text functions, `criterion built with & from a non-integer number` for
+  `SUMIF`-family criteria; `number-to-text not checked` for unreadable formats).
 - **Exit codes:** 0 ok, 1 error, 5 `[calc]` missing, 6 workbook refused outright
   (1904 dates, precision as displayed, Strict Open XML).
 - A pass on the stored inputs proves only the paths those inputs take; never

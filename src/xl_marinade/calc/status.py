@@ -23,7 +23,12 @@ from dataclasses import dataclass
 
 from xl_marinade.calc.graph import WorkbookGraph
 from xl_marinade.calc.models import SEVERITY, CellRef, Reason, ReasonKind, Status
-from xl_marinade.calc.probes import ProbeKind, ProbePlan, ProbeReadings
+from xl_marinade.calc.probes import (
+    NUMBER_TEXT_NOT_CHECKED,
+    ProbeKind,
+    ProbePlan,
+    ProbeReadings,
+)
 
 MAX_REASONS_PER_KIND = 5
 DYNAMIC_NOT_CHECKED = "dynamic reference not checked"
@@ -43,6 +48,7 @@ _UNPLACED: dict[ProbeKind, tuple[ReasonKind, str]] = {
     ProbeKind.rounding: (ReasonKind.not_checked_value, "rounding not checked"),
     ProbeKind.comparison: (ReasonKind.not_checked_value, "comparison not checked"),
     ProbeKind.dynamic_ref: (ReasonKind.refused_pattern, DYNAMIC_NOT_CHECKED),
+    ProbeKind.number_text: (ReasonKind.refused_pattern, NUMBER_TEXT_NOT_CHECKED),
 }
 
 Label = dict[ReasonKind, tuple[Reason, ...]]
@@ -275,6 +281,9 @@ def policy_roots(
         _add(roots, cell, Reason(ReasonKind.engine_error, cell, engine_error_detail(code)))
     for cell in readings.type_mismatch:
         _add(roots, cell, Reason(ReasonKind.refused_pattern, cell, LOOKUP_TYPE))
+    for cell, details in readings.number_text.items():
+        for detail in sorted(details):
+            _add(roots, cell, Reason(ReasonKind.refused_pattern, cell, detail))
     if include_unplaced:
         for cell, reasons in unplaced_roots(plan).items():
             for reason in reasons:

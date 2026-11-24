@@ -25,6 +25,7 @@ import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import date
+from decimal import Decimal
 from enum import StrEnum
 from typing import Protocol
 
@@ -37,6 +38,7 @@ from xl_marinade.calc.formula_ast import (
     ERROR_CODES,
     EXTERNAL,
     SHEET,
+    UNKNOWN,
     function_name,
     literal,
     parse_formula,
@@ -95,6 +97,73 @@ _REF = re.compile(rf"^(?:(?P<s1>{SHEET})!)?(?P<a>{END})(?::(?:(?P<s2>{SHEET})!)?
 _CELL_END = re.compile(r"^\$?(?P<col>[A-Za-z]{1,3})\$?(?P<row>[0-9]+)$")
 _COL_END = re.compile(r"^\$?(?P<col>[A-Za-z]{1,3})$")
 _ROW_END = re.compile(r"^\$?(?P<row>[0-9]+)$")
+
+# -- number to text (ruling D6) --
+NUMBER_TEXT_TIE = "number-to-text at a decimal tie"
+NUMBER_TEXT_DIGITS = "number-to-text where Excel's 15-digit text differs"
+NUMBER_TEXT_CRITERION = "criterion built with & from a non-integer number"
+NUMBER_TEXT_NOT_CHECKED = "number-to-text not checked"
+# Functions that round a number to a format's decimals: TEXT(x, format),
+# FIXED(x, [decimals=2], ...), DOLLAR(x, [decimals=2]).
+_FORMATTERS = frozenset({"TEXT", "FIXED", "DOLLAR"})
+# Joins, and the first argument each joins as text (TEXTJOIN's delimiter and
+# ignore_empty come first).
+_JOINS: dict[str, int] = {"CONCAT": 0, "CONCATENATE": 0, "TEXTJOIN": 2}
+# Text functions, and the arguments at which a number given to them becomes text.
+_TEXT_ARGS: dict[str, tuple[int, ...]] = {
+    "LEN": (0,),
+    "LENB": (0,),
+    "LEFT": (0,),
+    "LEFTB": (0,),
+    "RIGHT": (0,),
+    "RIGHTB": (0,),
+    "MID": (0,),
+    "MIDB": (0,),
+    "UPPER": (0,),
+    "LOWER": (0,),
+    "PROPER": (0,),
+    "TRIM": (0,),
+    "CLEAN": (0,),
+    "CODE": (0,),
+    "UNICODE": (0,),
+    "REPT": (0,),
+    "SUBSTITUTE": (0, 1, 2),
+    "REPLACE": (0, 3),
+    "EXACT": (0, 1),
+    "FIND": (0, 1),
+    "FINDB": (0, 1),
+    "SEARCH": (0, 1),
+    "SEARCHB": (0, 1),
+    "TEXTBEFORE": (0, 1),
+    "TEXTAFTER": (0, 1),
+}
+# Functions whose result is text: an operand that is one of them converts no number.
+_TEXT_RESULT = frozenset(
+    {"TEXT", "FIXED", "DOLLAR", "CONCAT", "CONCATENATE", "TEXTJOIN", "LEFT", "LEFTB"}
+    | {"RIGHT", "RIGHTB", "MID", "MIDB", "UPPER", "LOWER", "PROPER", "TRIM", "CLEAN"}
+    | {"REPT", "SUBSTITUTE", "REPLACE", "TEXTBEFORE", "TEXTAFTER", "CHAR", "UNICHAR", "T"}
+    | {"ADDRESS", "FORMULATEXT"}
+)
+# Functions that can return a reference or an array: joined, more than one value.
+_MULTI_RESULT = frozenset(
+    {"OFFSET", "INDIRECT", "INDEX", "XLOOKUP", "FILTER", "SORT", "SORTBY", "UNIQUE"}
+    | {"SEQUENCE", "TRANSPOSE", "TAKE", "DROP", "CHOOSECOLS", "CHOOSEROWS", "VSTACK"}
+    | {"HSTACK", "TOCOL", "TOROW", "EXPAND"}
+)
+# Branches return one of their arguments: more than one value only if an argument is.
+_PASS_THROUGH = frozenset({"IF", "IFS", "SWITCH", "CHOOSE", "IFERROR", "IFNA"})
+# Excel writes a number as text positionally, with at most 15 significant digits, at
+# least in this range; outside it, it may switch to scientific notation.
+_GENERAL_MIN = 1e-4
+_GENERAL_MAX = 1e15
+_FORMAT_TOKEN = re.compile(r'"[^"]*"|\\.|_.|\*.|\[[^\]]*\]|;|[^"\\_*\[;]+', re.S)
+_BRACKET_OK = re.compile(r"^\[(?:\$[^\]]*|[A-Za-z]+|Color[0-9]+)\]$", re.I)
+_ELAPSED = re.compile(r"^\[(?:h+|m+|s+)\]$", re.I)
+_DATE_CODE = re.compile(r"AM/PM|A/P|[yYmMdDhHsS]")
+_PLACEHOLDER = re.compile(r"[0#?]")
+_TRAILING_COMMAS = re.compile(r"[0#?](,+)[^0#?]*$")
+_POINT_COMMAS = re.compile(r"[0#?](,+)\.")
+
 _TEXT_REF = re.compile(
     rf"^(?:(?P<sheet>{SHEET})!)?\$?(?P<c1>[A-Za-z]{{1,3}})\$?(?P<r1>[0-9]+)"
     r"(?::\$?(?P<c2>[A-Za-z]{1,3})\$?(?P<r2>[0-9]+))?$"
@@ -114,6 +183,7 @@ class ProbeKind(StrEnum):
     rounding = "rounding"
     comparison = "comparison"
     dynamic_ref = "dynamic_ref"
+    number_text = "number_text"
 
 
 @dataclass(slots=True)
@@ -165,6 +235,8 @@ class ProbeReadings:
     """Cells whose probe computed an error code Excel does not have."""
     type_mismatch: set[CellRef] = field(default_factory=set)
     """Cells with an approximate lookup whose value and matched key differ in type."""
+    number_text: dict[CellRef, set[str]] = field(default_factory=dict)
+    """Cells that turned a number into text where Excel's text may differ, and why."""
 
 
 class NameScopes(Protocol):
@@ -224,6 +296,156 @@ def near_flip(fn: str, x: float, arg: float | None) -> bool:
         return sig != 0 and _whole(x / sig)
     except OverflowError:
         return False
+
+
+# -- number to text --------------------------------------------------------------
+
+
+def _format_sections(fmt: str) -> list[str]:
+    """The sections of a number format, with quoted text, escapes, fills, colours and
+    locales blanked out: what is left decides how a number is shown.
+
+    Raises:
+        ValueError: for a condition (``[>100]``), more than four sections, or text the
+            scan does not read.
+    """
+    tokens = _FORMAT_TOKEN.findall(fmt)
+    if "".join(tokens) != fmt:
+        raise ValueError(f"cannot read number format {fmt!r}")
+    sections: list[list[str]] = [[]]
+    for token in tokens:
+        if token == ";":
+            sections.append([])
+        elif token[0] in '"\\_*':
+            sections[-1].append(" ")
+        elif token.startswith("["):
+            if _ELAPSED.match(token):
+                sections[-1].append("h")
+            elif not _BRACKET_OK.match(token):
+                raise ValueError(f"format condition {token!r}")
+        else:
+            sections[-1].append(token)
+    if len(sections) > 4:
+        raise ValueError(f"cannot read number format {fmt!r}")
+    return ["".join(s) for s in sections]
+
+
+def number_format_rounding(fmt: str) -> tuple[int, float] | None:
+    """``(decimals, scale)`` for a ``TEXT`` format: the number shown is ``x * scale``
+    rounded to ``decimals`` places (``%`` multiplies by 100, a comma after the last
+    digit placeholder divides by 1,000). None when the format shows no number: a date,
+    a time, or only literal text.
+
+    Raises:
+        ValueError: for a format whose rounding the scan does not read: ``General``,
+            ``@``, scientific, fractions, fractional seconds, conditions, sections that
+            round differently, or letters that are not format codes.
+    """
+    found: set[tuple[int, float]] = set()
+    for section in _format_sections(fmt)[:3]:
+        upper = section.upper()
+        if "GENERAL" in upper or "@" in section:
+            raise ValueError(f"cannot read number format {fmt!r}")
+        if "E+" in upper or "E-" in upper:
+            raise ValueError(f"scientific format {fmt!r}")
+        if _DATE_CODE.search(section):
+            if re.search(r"[sS]\.0", section):
+                raise ValueError(f"fractional seconds in {fmt!r}")
+            continue
+        if re.search(r"[A-Za-z]", section):
+            raise ValueError(f"cannot read number format {fmt!r}")
+        if not _PLACEHOLDER.search(section):
+            continue
+        if "/" in section:
+            raise ValueError(f"fraction format {fmt!r}")
+        point = section.find(".")
+        decimals = len(_PLACEHOLDER.findall(section[point + 1 :])) if point >= 0 else 0
+        m = _TRAILING_COMMAS.search(section) or _POINT_COMMAS.search(section)
+        commas = len(m.group(1)) if m is not None else 0
+        found.add((decimals, 100.0 ** section.count("%") / 1000.0**commas))
+    if len(found) > 1:
+        raise ValueError(f"sections of {fmt!r} round differently")
+    return found.pop() if found else None
+
+
+def excel_general_text(x: float) -> str | None:
+    """The text Excel makes of ``x`` (``&``, ``CONCAT``, ``LEN``): at most 15
+    significant digits. None outside 0.0001 to 1e15, where Excel may write scientific
+    notation."""
+    if x == 0:
+        return "0"
+    if not (math.isfinite(x) and _GENERAL_MIN <= abs(x) < _GENERAL_MAX):
+        return None
+    text = format(Decimal(format(x, ".15g")), "f")
+    return text.rstrip("0").rstrip(".") if "." in text else text
+
+
+def _shows_digits(fmt: ASTNode) -> bool:
+    """False for a literal ``TEXT`` format that shows no number (a date, a time, only
+    text); True otherwise, unreadable and non-literal formats included."""
+    text = literal(fmt)
+    if not isinstance(text, str):
+        return True
+    try:
+        return number_format_rounding(text) is not None
+    except ValueError:
+        return True
+
+
+def _maybe_number(node: ASTNode) -> bool:
+    """False when ``node`` cannot be a computed number: a literal, or text."""
+    if literal(node) is not UNKNOWN:
+        return False
+    if isinstance(node, BinaryNode) and node.operator == "&":
+        return False
+    return not (isinstance(node, FunctionNode) and function_name(node.name) in _TEXT_RESULT)
+
+
+def _criteria_args(name: str, n: int) -> range:
+    """Positions of the criteria of a SUMIF-family function with ``n`` arguments."""
+    if name in {"SUMIF", "COUNTIF", "AVERAGEIF"}:
+        return range(1, min(n, 2))
+    if name == "COUNTIFS":
+        return range(1, n, 2)
+    if name in {"SUMIFS", "AVERAGEIFS", "MAXIFS", "MINIFS"}:
+        return range(2, n, 2)
+    return range(0)
+
+
+def _joined(node: ASTNode) -> list[ASTNode]:
+    """The parts a criterion joins into text: the operands of ``&`` and ``CONCAT``."""
+    if isinstance(node, BinaryNode) and node.operator == "&":
+        return [*_joined(node.left), *_joined(node.right)]
+    if isinstance(node, FunctionNode) and function_name(node.name) in _JOINS:
+        return [part for arg in node.args for part in _joined(arg)]
+    return [node]
+
+
+def _number_text_reason(probe: Probe, values: list[EngineValue]) -> str | None:
+    """Why the engine's text for this conversion may not be Excel's; None when it is."""
+    x = values[0]
+    if not isinstance(x, float):
+        return None
+    if probe.meta["check"] == "tie":
+        if "decimals" in probe.meta:
+            decimals, scale = int(probe.meta["decimals"]), float(probe.meta["scale"])
+        else:
+            given = values[1] if len(values) > 1 else 2.0
+            if not isinstance(given, float):
+                return None
+            decimals, scale = math.trunc(given), 1.0
+        y = x * scale
+        if not math.isfinite(y) or abs(y) * 10.0 ** min(decimals, 300) >= _GENERAL_MAX:
+            # Excel shows 15 significant digits and pads with zeros; the engine does not.
+            return NUMBER_TEXT_DIGITS
+        return NUMBER_TEXT_TIE if near_flip("ROUND", y, decimals) else None
+    text = values[1]
+    if not isinstance(text, str):
+        return None
+    differs = excel_general_text(x) != text
+    if probe.meta["check"] == "criterion" and (differs or x != math.floor(x)):
+        return NUMBER_TEXT_CRITERION
+    return NUMBER_TEXT_DIGITS if differs else None
 
 
 # -- anchoring -----------------------------------------------------------------
@@ -392,6 +614,8 @@ class _Planner:
     family: str = ""
     counters: dict[ProbeKind, int] = field(default_factory=dict)
     guards: tuple[Guard, ...] = ()
+    criteria: set[int] = field(default_factory=set)
+    """``id`` of the nodes a SUMIF-family criterion joins as text, in this cell."""
 
     def lift(self, node: ASTNode) -> str:
         return anchor(node, self.cell.sheet, names=self.graph, as_of=self.as_of)
@@ -418,6 +642,9 @@ class _Planner:
         if isinstance(node, BinaryNode):
             if in_cond and node.operator in _COMPARISONS:
                 self.add(ProbeKind.comparison, blocked, lambda: self._comparison(node))
+            if node.operator == "&":
+                for operand in (node.left, node.right):
+                    self._to_text(operand, blocked, joins=False)
             self.visit(node.left, in_cond, blocked)
             self.visit(node.right, in_cond, blocked)
             return
@@ -455,8 +682,79 @@ class _Planner:
             self.add(ProbeKind.rounding, scoped, lambda: self._rounding(node, name))
         elif name in _DYNAMIC and node.args:
             self.add(ProbeKind.dynamic_ref, scoped, lambda: self._dynamic(node, name))
+        self._probe_text(node, name, scoped)
+
+    def _probe_text(self, node: FunctionNode, name: str, scoped: bool) -> None:
+        """Number-to-text probes: a formatter's rounding, a join's or a text function's
+        conversion; and, first, which parts a SUMIF-family criterion joins."""
+        args = node.args
+        for i in _criteria_args(name, len(args)):
+            self.criteria.update(id(part) for part in _joined(args[i]))
+        if name in _FORMATTERS and args and _maybe_number(args[0]):
+            if name != "TEXT" or (len(args) >= 2 and _shows_digits(args[1])):
+                self.add(ProbeKind.number_text, scoped, lambda: self._formatter(node, name))
+        elif name in _JOINS:
+            for arg in args[_JOINS[name] :]:
+                self._to_text(arg, scoped, joins=True)
+        elif name in _TEXT_ARGS:
+            for i in _TEXT_ARGS[name]:
+                if i < len(args):
+                    self._to_text(args[i], scoped, joins=False)
+
+    def _to_text(self, node: ASTNode, scoped: bool, *, joins: bool) -> None:
+        """Probe ``node``'s conversion to text, unless it cannot be a number."""
+        if not _maybe_number(node):
+            return
+        check = "criterion" if id(node) in self.criteria else "general"
+        self.add(ProbeKind.number_text, scoped, lambda: self._general(node, check, joins))
 
     # -- builders --
+
+    def _formatter(self, node: FunctionNode, name: str) -> tuple[tuple[str, ...], dict[str, str]]:
+        x = self.lift(node.args[0])
+        if name == "TEXT":
+            fmt = literal(node.args[1])
+            if not isinstance(fmt, str):
+                raise ValueError("TEXT format is not literal text")
+            rounding = number_format_rounding(fmt)  # raises for an unreadable format
+            if rounding is None:
+                raise ValueError(f"format {fmt!r} shows no number")
+            decimals, scale = rounding
+            meta = {"check": "tie", "function": name, "decimals": str(decimals)}
+            return (x,), {**meta, "scale": repr(scale)}
+        meta = {"check": "tie", "function": name}
+        if len(node.args) < 2:
+            return (x,), meta
+        return (x, self.lift(node.args[1])), meta
+
+    def _general(
+        self, node: ASTNode, check: str, joins: bool
+    ) -> tuple[tuple[str, ...], dict[str, str]]:
+        if self._multi(node, joins):
+            raise ValueError("a range or array converted to text")
+        x = self.lift(node)
+        return (x, f'({x})&""'), {"check": check}
+
+    def _multi(self, node: ASTNode, joins: bool) -> bool:
+        """True when ``node`` may hold more than one value: a range, a multi-cell name
+        or, as a joined argument, a function that can return a reference or an array."""
+        if isinstance(node, FunctionNode):
+            name = function_name(node.name)
+            if name in _PASS_THROUGH:
+                return any(self._multi(arg, joins) for arg in node.args[1:])
+            return joins and name in _MULTI_RESULT
+        if not isinstance(node, RefNode):
+            return False
+        m = _REF.match(node.ref)
+        if m is None or m.group("b") is not None:
+            return True
+        if _end(m.group("a"))[0] != "name":
+            return False
+        found = self.graph.lookup_name(node.ref, self.cell.sheet)
+        if found is None or found.kind != "cells":
+            return found is not None
+        cells = sum((r2 - r1 + 1) * (c2 - c1 + 1) for _s, r1, c1, r2, c2 in found.rects)
+        return found.whole or cells > 1
 
     def _comparison(self, node: BinaryNode) -> tuple[tuple[str, ...], dict[str, str]]:
         return (self.lift(node.left), self.lift(node.right)), {"operator": node.operator}
@@ -700,6 +998,7 @@ def plan_probes(
         planner.cell = cell
         planner.family = graph.family(cell)
         planner.counters = {}
+        planner.criteria = set()
         planner.visit(root, False, graph.is_array_formula(cell))
     return ProbePlan(
         planner.probes, planner.unplaced, {name.lower(): name for name in graph.sheets()}
@@ -895,6 +1194,10 @@ def read_probes(engine: Engine, plan: ProbePlan) -> ProbeReadings:
                 readings.near_comparison.add(probe.cell)
             if _types_differ(probe, values):
                 readings.type_mismatch.add(probe.cell)
+        elif probe.kind is ProbeKind.number_text:
+            detail = _number_text_reason(probe, values)
+            if detail is not None:
+                readings.number_text.setdefault(probe.cell, set()).add(detail)
         else:
             landed = _dynamic_cells(probe, values, plan.sheets)
             dynamic.setdefault(probe.cell, set()).update(landed or ())
