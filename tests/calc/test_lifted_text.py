@@ -124,6 +124,51 @@ def test_clock_in_a_dynamic_reference_lands_on_the_as_of_row(
     assert row["status"] == "ok", row
 
 
+def test_clock_in_every_probe_kind_reads_the_as_of_date(make_book: Book, tmp_path: Path) -> None:
+    # As of 2000-01-01 (36526). Maturity stored 36600, z stored 1, r stored 0.5.
+    #   B3 IF(TODAY()>=m, IF(z>0,1,2), 3): stored 3; P (m 36000) takes TRUE and then the
+    #      inner IF's TRUE -- an inner arm the trust run never evaluated.
+    #   B4 ROUND(m*TODAY()/36526/2, 0): W (m 37001) gives 18500.5, a tie.
+    #   B5 IF(TODAY()/36526*r>0.3, 1, 0): R (r 0.30000000000000004) is within 1e-12 of 0.3.
+    #   B6 IFS / B7 CHOOSE on TODAY()>=m: P takes the arm the stored inputs did not.
+    #   B9 INDEX/MATCH on YEAR(TODAY())+z-1 over the years 2000..2059 in E: stored 2000,
+    #      the first row; Z2 (z 2) lands on 2001, an interior row never exercised.
+    calc_cells: dict[str, object] = {
+        "B3": F("=IF(TODAY()>=Inputs!B1,IF(Inputs!B2>0,1,2),3)", 3.0),
+        "B4": F("=ROUND(Inputs!B1*TODAY()/36526/2,0)", 18300.0),
+        "B5": F("=IF(TODAY()/36526*Inputs!B3>0.3,1,0)", 1.0),
+        "B6": F("=_xlfn.IFS(TODAY()>=Inputs!B1,0,TRUE,1000)", 1000.0),
+        "B7": F("=CHOOSE(1+(TODAY()>=Inputs!B1),1000,0)", 1000.0),
+        "B9": F("=INDEX(E1:E60,MATCH(YEAR(TODAY())+Inputs!B2-1,E1:E60,0))", 2000.0),
+    }
+    calc_cells.update({f"E{r}": 1999 + r for r in range(1, 61)})
+    book = make_book(
+        "clockkinds", {"Inputs": {"B1": 36600, "B2": 1, "B3": 0.5}, "Calc": calc_cells}
+    )
+    res = _run(
+        tmp_path,
+        book,
+        "id,m,z,r\nP,36000,1,0.5\nW,37001,1,0.5\nR,37000,1,0.30000000000000004\nZ2,37000,2,0.5\n",
+        {"m": "Inputs!B1", "z": "Inputs!B2", "r": "Inputs!B3"},
+        ["Calc!B3", "Calc!B4", "Calc!B5", "Calc!B6", "Calc!B7", "Calc!B9"],
+        as_of=_AS_OF,
+    )
+    rows = _rows(res)
+    assert rows[("P", "Calc!B3")]["value"] == "1.0"
+    assert "IF #1 took 'TRUE'" in rows[("P", "Calc!B3")]["reasons"]
+    assert rows[("W", "Calc!B4")]["status"] == "uncertain"
+    assert "near_rounding_flip@Calc!B4" in rows[("W", "Calc!B4")]["reasons"]
+    assert rows[("R", "Calc!B5")]["status"] == "uncertain"
+    assert "near_comparison@Calc!B5" in rows[("R", "Calc!B5")]["reasons"]
+    for out in ("Calc!B6", "Calc!B7"):
+        assert rows[("P", out)]["value"] == "0.0"
+        assert rows[("P", out)]["status"] == "unverified_path", out
+    assert rows[("Z2", "Calc!B9")]["value"] == "2001.0"
+    assert "landed interior" in rows[("Z2", "Calc!B9")]["reasons"]
+    for out in ("Calc!B4", "Calc!B5", "Calc!B9"):
+        assert rows[("P", out)]["status"] == "ok", (out, rows[("P", out)])
+
+
 def test_lifted_clock_text_is_the_as_of_date() -> None:
     root = parse_formula('IF(TODAY()-NOW()>A1,"TODAY()",now())')
     assert root is not None
@@ -178,10 +223,12 @@ def test_concatenated_condition_reads_its_real_outcome(make_book: Book, tmp_path
                 "B4": F('=IF(Inputs!B2=Inputs!B3&"",1,2)', 2.0),
                 "B5": F(f'=IF((Inputs!B2&Inputs!B3)="MN",{sa}*0.001,{sa}*0.002)', 100.0),
                 "B6": F(f"=_xlfn.IFS({cond},1,TRUE,2)", 1.0),
+                # CHOOSE(1+TRUE) is the second choice: stored 100; F,N takes the first.
+                "B7": F(f"=CHOOSE(1+({cond}),{sa}*0.002,{sa}*0.001)", 100.0),
             },
         },
     )
-    outputs = [f"Calc!B{r}" for r in range(2, 7)]
+    outputs = [f"Calc!B{r}" for r in range(2, 8)]
     res = _run(
         tmp_path,
         book,
@@ -203,6 +250,10 @@ def test_concatenated_condition_reads_its_real_outcome(make_book: Book, tmp_path
         assert rows[("FN", out)]["status"] == "unverified_path", out
     assert rows[("FN", "Calc!B6")]["value"] == "2.0"
     assert rows[("FN", "Calc!B6")]["status"] == "unverified_path"
+    assert paths[("MN", "Calc!B7")] == "2"
+    assert rows[("FN", "Calc!B7")]["value"] == "200.0"
+    assert rows[("FN", "Calc!B7")]["status"] == "unverified_path"
+    assert "CHOOSE #0 took '1'" in rows[("FN", "Calc!B7")]["reasons"]
     assert rows[("FN", "Calc!B4")]["status"] == "ok"
     assert rows[("NN", "Calc!B4")]["value"] == "1.0"
     assert rows[("NN", "Calc!B4")]["status"] == "unverified_path"
@@ -255,10 +306,18 @@ def test_probes_on_sheets_that_need_quotes_compute(
                 "B1": 1,
                 "C2": F("=IF(B1>5,B1*2,0)", 0.0),
                 "D2": F('=INDIRECT("A"&B1)', 10.0),
-            }
+            },
+            # Another sheet reading C2: 1 stored, 1 for P3 (C2 = 0 again).
+            "Other": {"B1": F(f"={q}!C2+1", 1.0)},
         },
     )
-    res = _run(tmp_path, book, "id,x\nP3,3\nP7,7\n", {"x": f"{q}!B1"}, [f"{q}!C2", f"{q}!D2"])
+    res = _run(
+        tmp_path,
+        book,
+        "id,x\nP3,3\nP7,7\n",
+        {"x": f"{q}!B1"},
+        [f"{q}!C2", f"{q}!D2", "Other!B1"],
+    )
     rows = {(pid, out.rpartition("!")[2]): r for (pid, out), r in _rows(res).items()}
     assert rows[("P3", "C2")]["status"] == "ok", rows[("P3", "C2")]
     assert rows[("P3", "D2")]["value"] == "30.0"
@@ -266,3 +325,4 @@ def test_probes_on_sheets_that_need_quotes_compute(
     assert rows[("P7", "C2")]["value"] == "14.0"
     assert rows[("P7", "C2")]["status"] == "unverified_path"
     assert "engine_error" not in rows[("P7", "C2")]["reasons"]
+    assert rows[("P3", "B1")]["status"] == "ok", rows[("P3", "B1")]
