@@ -67,6 +67,16 @@ schema is a versioned public contract.
   it. Both now get the edge probe (exact, next smaller, next larger and wildcard
   matches; first-to-last and last-to-first search), and `XLOOKUP` with `if_not_found`
   gets a `found`/`not_found` branch that guards the probes inside that argument.
+- **`marinade calc`: number-to-text conversions are refused where Excel's text can
+  differ.** IronCalc 0.9.1 rounds `TEXT`, `FIXED` and `DOLLAR` ties the other way
+  (`TEXT(1234.5,"#,##0")` gives `1,234`, Excel `1,235`; `FIXED(1.005,2)` gives `1.00`,
+  Excel `1.01`) and writes numbers turned into text with up to 17 significant digits
+  where Excel writes 15 (`"t="&(7/12)`), and these came back `ok`. Per policy, a value
+  is now refused (`number-to-text at a decimal tie`, `number-to-text where Excel's
+  15-digit text differs`, and `criterion built with & from a non-integer number` for
+  `SUMIF`-family criteria); a `TEXT` format calc cannot read is `number-to-text not
+  checked`. Integers and short decimals off a tie stay `ok`. Correcting the value
+  instead of refusing it is planned for 0.9.
 
 ## [0.8.0] - 2026-11-24
 

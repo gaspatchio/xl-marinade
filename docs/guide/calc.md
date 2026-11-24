@@ -240,7 +240,8 @@ Details worth knowing:
   any requested output is not probed, so it cannot vouch for the branches it took.
 - A probe that cannot be placed (cap hit, or inside `LET`/`LAMBDA`/an array context)
   never yields `ok`: a branch or lookup probe gives `unverified_path`, a rounding or
-  comparison probe `uncertain`, and a dynamic-reference probe `refused`.
+  comparison probe `uncertain`, and a dynamic-reference or number-to-text probe
+  `refused`.
 - `OFFSET` and `INDIRECT` are followed to where they point for each input set; if that
   cannot be read, the outputs behind it are refused (`dynamic reference not checked`).
   An `INDIRECT` text that addresses a cell off the grid (row 0, below row 1,048,576 or
@@ -327,9 +328,22 @@ the next. They are refused even when the trust run reproduces them. The `detail`
 | `approximate lookup on input-dependent keys` | An approximate lookup whose key cells change with a mapped input (an input cell, or a formula that depends on one). The keys may be sorted for the stored inputs and not for the next policy. |
 | `function IronCalc does not implement: NAME` | The formula calls an Excel function IronCalc 0.9.1 does not have: `AGGREGATE`, `BAHTTEXT`, `CALL`, the `CUBE…` functions, `DBCS`, `DETECTLANGUAGE`, `EUROCONVERT`, `FIELDVALUE`, `FILTERXML`, `GETPIVOTDATA`, `GROUPBY`, `IMAGE`, `JIS`, `PHONETIC`, `PIVOTBY`, `REGISTER.ID`, `RTD`, `SQL.REQUEST`, `STOCKHISTORY`, `TRANSLATE`, `WEBSERVICE`. The engine answers `#NAME?`, an Excel error code, so an `IFERROR`, `ISERROR` or `ISNUMBER` around the call would turn it into a plausible value. |
 
-One more refusal is per policy, read from the probes: `lookup value type differs from
-keys`, when an approximate lookup matches a key of a different type than its lookup value
-(text against numbers). Excel finds nothing there (`#N/A`); IronCalc 0.9.1 returns a row.
+Some refusals are per policy, read from the probes:
+
+| Detail | What triggers it |
+|---|---|
+| `lookup value type differs from keys` | An approximate lookup matches a key of a different type than its lookup value (text against numbers). Excel finds nothing there (`#N/A`); IronCalc 0.9.1 returns a row. |
+| `number-to-text at a decimal tie` | `TEXT`, `FIXED` or `DOLLAR` rounds a number that sits within about 1e-12 of a tie at the format's decimals: `TEXT(1234.5,"#,##0")`, `TEXT(0.0125,"0.0%")`, `FIXED(1.005,2)`. Excel rounds the tie away from zero on the 15-digit value (`1,235`); IronCalc 0.9.1 rounds the binary value, to even (`1,234`). At an exact binary tie `FIXED` and `DOLLAR` happen to agree with Excel; they are refused all the same. |
+| `number-to-text where Excel's 15-digit text differs` | A number becomes text through `&`, `CONCAT`, `CONCATENATE`, `TEXTJOIN` or a text function (`LEN`, `LEFT`, `MID`, `SUBSTITUTE`, `EXACT`, `FIND` and the like), and its text needs more than 15 significant digits (`7/12`, `0.1+0.2`) or the number lies outside 0.0001 to 1e15, where Excel may write scientific notation. Excel writes at most 15 significant digits; IronCalc up to 17. Also `TEXT`, `FIXED` or `DOLLAR` showing more than 15 digits. |
+| `criterion built with & from a non-integer number` | A `SUMIF`, `SUMIFS`, `COUNTIF`, `COUNTIFS`, `AVERAGEIF`, `AVERAGEIFS`, `MAXIFS` or `MINIFS` criterion such as `"<="&x` where `x` is not a whole number. Excel compares against the 15-digit text it wrote. |
+
+Integers, and decimals with up to 15 significant digits that sit on no tie, stay `ok`.
+`TEXT` with a date or time format needs no check. A conversion calc cannot check is
+refused for every policy as `number-to-text not checked`: a `TEXT` format that is not
+literal text, or that calc cannot read (`General`, `@`, scientific, fractions,
+conditions, sections that round differently); a range or array handed to `CONCAT`,
+`TEXTJOIN` or a text function; or a conversion inside an array formula or beyond
+`--probe-cap`.
 
 ## Fixed points
 
