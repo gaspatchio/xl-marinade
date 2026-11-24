@@ -6,7 +6,7 @@ import hashlib
 import json
 import re
 import sqlite3
-from bisect import bisect_left
+from bisect import bisect_left, insort
 from collections import defaultdict, deque
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
@@ -14,9 +14,10 @@ from pathlib import Path
 from typing import Literal
 
 from xl_marinade.calc.formula_ast import SHEET
-from xl_marinade.calc.models import CellRef, _col_to_number
+from xl_marinade.calc.models import ArrayRange, CellRef, _col_to_number
 from xl_marinade.calc.prepare import relative_names
 from xl_marinade.core.db_uri import connect_read_only
+from xl_marinade.core.new_arch.cell_identity import unpack as unpack_cell_id
 from xl_marinade.errors import CalcInputError
 
 StoredValue = float | str | bool | None
@@ -185,6 +186,9 @@ class WorkbookGraph:
         self._sheet_key: dict[str, str] = {}
         self._extent: dict[str, tuple[int, int]] = {}
         self._array_cells: set[CellRef] = set()
+        # Array formulas: anchor -> its range, and each other cell of a range -> anchor.
+        self._arrays: dict[CellRef, ArrayRange] = {}
+        self._member_anchor: dict[CellRef, CellRef] = {}
         self._validations: list[tuple[list[_Rect], list[str] | None, str | None, str]] = []
         self._sheets: set[str] = set()
 
@@ -237,9 +241,14 @@ class WorkbookGraph:
         }
 
         for frm, to in conn.execute("SELECT from_cell_id, to_cell_id FROM cell_edges_internal"):
-            if frm in by_id and to in by_id:
-                self._direct[by_id[frm]].add(by_id[to])
-                self._direct_rev[by_id[to]].add(by_id[frm])
+            if frm not in by_id:
+                continue
+            # A reference to an empty cell has no row in ``cells``: its id still encodes
+            # the position, and a value can land there (an input, a spill).
+            target = by_id.get(to) or self._decode(to, sheet_names)
+            if target is not None:
+                self._direct[by_id[frm]].add(target)
+                self._direct_rev[target].add(by_id[frm])
 
         # Whole columns/rows are stored to row 1048576 / column 16384; index only the
         # extent a sheet uses, or one entry per bucket would fill memory.
@@ -291,6 +300,40 @@ class WorkbookGraph:
             ]
             literals = [str(v) for v in json.loads(lit)] if lit else None
             self._validations.append((rects, literals, f1, sheet))
+
+    @staticmethod
+    def _decode(cell_id: int, sheet_names: dict[int, str]) -> CellRef | None:
+        sheet_id, row, col = unpack_cell_id(int(cell_id))
+        sheet = sheet_names.get(sheet_id)
+        if sheet is None or not (1 <= row <= _MAX_ROW and 1 <= col <= _MAX_COL):
+            return None
+        return CellRef(sheet, row, col)
+
+    def add_arrays(self, arrays: Iterable[ArrayRange]) -> None:
+        """Make every cell of each array formula's range a formula cell.
+
+        The extraction records only the anchor (the top-left cell, which holds the
+        formula); Excel computes the other cells with it, so each gets an edge from its
+        anchor and the anchor's family. A cell that holds a formula of its own is left
+        alone.
+        """
+        for array in arrays:
+            anchor = array.anchor
+            if anchor not in self._formula:
+                continue
+            self._arrays[anchor] = array
+            for cell in array.cells()[1:]:
+                if cell in self._formula or cell in self._member_anchor:
+                    continue
+                self._member_anchor[cell] = anchor
+                self._family[cell] = self._family[anchor]
+                self._direct[cell].add(anchor)
+                self._direct_rev[anchor].add(cell)
+                cells = self._cells_by_sheet.setdefault(cell.sheet, [])
+                pos = (cell.row, cell.col)
+                i = bisect_left(cells, pos)
+                if i == len(cells) or cells[i] != pos:
+                    insort(cells, pos)
 
     def _name_def(
         self, name: str, owner: str | None, raw: tuple[str, ...], external: bool
@@ -349,8 +392,25 @@ class WorkbookGraph:
         return self._formula.get(cell)
 
     def formula_cells(self) -> list[CellRef]:
-        """Every formula cell, sorted."""
-        return sorted(self._formula)
+        """Every formula cell, sorted: cells holding a formula, and every other cell of
+        an array formula's range (see :meth:`add_arrays`)."""
+        return sorted([*self._formula, *self._member_anchor])
+
+    def array_anchor(self, cell: CellRef) -> CellRef | None:
+        """The anchor of the array formula whose range holds ``cell`` (not itself the
+        anchor); None for any other cell."""
+        return self._member_anchor.get(cell)
+
+    def array_members(self, anchor: CellRef) -> list[CellRef]:
+        """The cells of an array formula's range other than its anchor, sorted."""
+        array = self._arrays.get(anchor)
+        if array is None:
+            return []
+        return [c for c in array.cells()[1:] if self._member_anchor.get(c) == anchor]
+
+    def arrays(self) -> list[ArrayRange]:
+        """Every array formula's range, by anchor."""
+        return [self._arrays[a] for a in sorted(self._arrays)]
 
     def stored(self, cell: CellRef) -> StoredValue:
         """The cached value Excel stored (errors as ``#CODE`` text); None when absent."""
@@ -359,6 +419,11 @@ class WorkbookGraph:
     def has_stored(self, cell: CellRef) -> bool:
         """True when the IR holds a stored value for the cell."""
         return cell in self._has_stored
+
+    def holds(self, cell: CellRef) -> bool:
+        """True when the workbook keeps something in the cell: a stored value, a
+        formula, or a place in an array formula's range."""
+        return cell in self._has_stored or cell in self._formula or cell in self._member_anchor
 
     def family(self, cell: CellRef) -> str:
         """Sheet plus relative (R1C1) formula: copied formulas share a family."""

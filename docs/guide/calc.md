@@ -78,7 +78,9 @@ sheet's definition of a name first, and the workbook's only when the sheet has n
 
 `id_field` names the policies column that holds the id (default `id`). It may also appear
 in `fields`, so the id is written into a workbook cell as well. Each target must be a cell
-or defined name that holds a constant; mapping onto a formula is an error. Before each
+or defined name that holds a constant; mapping onto a formula is an error, and so is
+mapping onto any cell of an array formula's range (Excel cannot hold a constant there).
+The same holds for a `check.json` selector. Before each
 input set, every mapped input is reset to its stored value. Values are converted to the
 target cell's stored type, and ISO dates become Excel serials. A value outside the cell's
 data-validation list refuses that input set's outputs.
@@ -271,6 +273,14 @@ Details worth knowing:
   trust run had none in that cell, is an `engine_error`. Excel's `#NAME?` comes from
   the formula's text, not its inputs, so one only a new policy reaches is a function
   the engine lacks on an arm the trust run never took.
+- Every cell of an array formula's range is a formula cell, whether a legacy
+  (Ctrl+Shift+Enter) array or a dynamic array that spills. Excel stores the formula on
+  the range's top-left cell only; calc reads the other cells as computed by it. Each is
+  compared in the trust run (and counted in `formula_cells`), and each carries the
+  formula's status: a refusal, failure or probe that could not be placed (every probe
+  inside an array formula) reaches it and every cell reading it. When a policy makes a
+  dynamic array spill past the range the workbook stored (`SEQUENCE(n)` with a larger
+  `n`), the cells it spills into carry the formula's status too.
 - A passing trust run proves only the paths the stored inputs take. That is what
   `unverified_path` and `--check-against` are for.
 

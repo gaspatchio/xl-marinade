@@ -119,6 +119,31 @@ SEVERITY: dict[ReasonKind, Status] = {
 
 
 @dataclass(slots=True, frozen=True)
+class ArrayRange:
+    """The cells one array formula fills, as the workbook stored them.
+
+    ``anchor`` is the top-left cell, the only one holding the formula text; the range
+    runs to ``last_row`` / ``last_col``. ``dynamic`` marks an Excel 365 dynamic array
+    (a spill), whose size can change with the inputs; a legacy (Ctrl+Shift+Enter)
+    array keeps its size.
+    """
+
+    anchor: CellRef
+    last_row: int
+    last_col: int
+    dynamic: bool
+
+    def cells(self) -> list[CellRef]:
+        """Every cell of the range, row by row, the anchor first."""
+        a = self.anchor
+        return [
+            CellRef(a.sheet, r, c)
+            for r in range(a.row, self.last_row + 1)
+            for c in range(a.col, self.last_col + 1)
+        ]
+
+
+@dataclass(slots=True, frozen=True)
 class InputMap:
     """Maps policy-file field names to raw workbook targets (``Sheet!A1`` or a name)."""
 
