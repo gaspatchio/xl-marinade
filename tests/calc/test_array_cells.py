@@ -315,3 +315,25 @@ def test_a_spill_grown_from_an_unprobed_formula_is_not_ok(make_book: Book, tmp_p
     assert row["value"] == "10.0"
     assert row["status"] != "ok", row
     assert "not_checked_path@Calc!B1:" in row["reasons"], row
+
+
+def test_an_input_beside_a_spill_is_not_spill_growth(make_book: Book, tmp_path: Path) -> None:
+    # Inputs!B1:B3 = SEQUENCE(3) + Data!A1 (Data!A1 = TODAY()*0, refused without
+    # --as-of). A map field sets the empty cell below the spill, Inputs!B4 = 7; the spill
+    # stays three cells, so Calc!C1 = B4*2 = 14 owes nothing to the refused formula.
+    book = make_book(
+        "beside",
+        {
+            "Data": {"A1": F("=TODAY()*0", 0)},
+            "Inputs": {"B1": F("=_xlfn.SEQUENCE(3)+Data!A1", 1), "B2": 0, "B3": 0},
+            "Calc": {"C1": F("=Inputs!B4*2", 0), "C2": F("=Inputs!B5*2", 0)},
+        },
+    )
+    formula = "_xlfn.SEQUENCE(3)+Data!A1"
+    book = _arrays(
+        book, "xl/worksheets/sheet2.xml", [("B1", "B1:B3", formula, {"B2": 2.0, "B3": 3.0}, True)]
+    )
+    res = _run(tmp_path, book, "id,v\nP,7\n", {"v": "Inputs!B4"}, ["Calc!C1"])
+    row = _rows(res)[("P", "Calc!C1")]
+    assert row["value"] == "14.0"
+    assert row["status"] == "ok", row

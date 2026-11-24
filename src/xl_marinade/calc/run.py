@@ -652,15 +652,19 @@ def _spill_growth(s: _Session) -> dict[CellRef, list[CellRef]]:
 
     A spill grows right and down from its anchor, so a larger one fills the cell below
     the stored range in the anchor's column, or right of it in the anchor's row. A cell
-    the workbook holds something in cannot be part of the spill.
+    the workbook holds something in, or one calc writes an input into, holds a value of
+    its own: it cannot be part of the spill (Excel would show ``#SPILL!``).
     """
     grown: dict[CellRef, list[CellRef]] = {}
+    written = set(s.resets)
     for array in s.spills:
         anchor = array.anchor
         sheet, top, left = anchor
 
         def filled(cell: CellRef) -> bool:
-            return not s.graph.holds(cell) and s.engine.value(cell) is not None
+            if cell in written or s.graph.holds(cell):
+                return False
+            return s.engine.value(cell) is not None
 
         rows = array.last_row
         while rows < _MAX_ROW and filled(CellRef(sheet, rows + 1, left)):
