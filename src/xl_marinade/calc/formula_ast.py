@@ -111,6 +111,54 @@ _SKIPPED = re.compile(r"\"(?:[^\"]|\"\")*\"|'(?:[^']|'')*'|\[[^\]]*\]")
 UNKNOWN = object()
 """Sentinel returned by :func:`literal` for a non-literal argument."""
 
+# A sheet name that needs no quotes: an identifier that reads as neither a cell (A1,
+# XFD9), an R1C1 reference (R, C, RC, R1C1, R2C, RC3) nor a boolean.
+_PLAIN_SHEET = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*$")
+_CELL_LIKE = re.compile(r"^[A-Za-z]{1,3}[0-9]+$")
+_R1C1_LIKE = re.compile(r"^(?:[Rr][0-9]*(?:[Cc][0-9]*)?|[Cc][0-9]*)$")
+
+
+class ExcelFormulaParser(FormulaParser):
+    """The core parser with Excel's operator precedence.
+
+    Excel binds ``&`` tighter than the comparisons (``A&B="x"`` is ``(A&B)="x"``,
+    ``A=B&C`` is ``A=(B&C)``); the core parser has them the other way round. Lifted
+    probe text must compute what its cell computes, so calc parses with this one.
+    """
+
+    PRECEDENCE = {
+        "=": 1,
+        "<>": 1,
+        "<": 1,
+        ">": 1,
+        "<=": 1,
+        ">=": 1,
+        "&": 2,
+        "+": 3,
+        "-": 3,
+        "*": 4,
+        "/": 4,
+        "^": 5,
+    }
+
+
+def quote_sheet(sheet: str) -> str:
+    """``sheet`` as a formula must write it before ``!``, quoted when Excel needs it.
+
+    Unlike core's ``quote_sheet_name`` this also quotes names that start with a digit
+    (``'2024'``) or read as a cell, an R1C1 reference or a boolean.
+    """
+    plain = (
+        _PLAIN_SHEET.match(sheet)
+        and not _CELL_LIKE.match(sheet)
+        and not _R1C1_LIKE.match(sheet)
+        and sheet.upper() not in {"TRUE", "FALSE"}
+    )
+    if plain:
+        return sheet
+    escaped = sheet.replace("'", "''")
+    return f"'{escaped}'"
+
 
 def function_name(raw: str) -> str:
     """Upper-case name with ``_xlfn.`` / ``_xlws.`` / ``_xll.`` prefixes removed."""
@@ -156,7 +204,7 @@ def parse_formula(text: str) -> ASTNode | None:
     """
     if _SPLIT_ERROR.search(_SKIPPED.sub("", text)):
         return None
-    parser = FormulaParser()
+    parser = ExcelFormulaParser()
     try:
         root = parser.parse(text)
     except (ValueError, IndexError, RecursionError):
