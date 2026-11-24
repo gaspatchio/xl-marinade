@@ -336,14 +336,9 @@ def test_a_zero_section_with_other_decimals_stays_ok(make_book: Book, tmp_path: 
     _ok(rows[("B", "Calc!B1")])
 
 
-# -- B1 (closed in PR-P part 2): array-formula cells are not constants ----------------
+# -- B1: array-formula cells are not constants -----------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="closed by the array-cells commit (PR-P part 2): a CSE block's non-anchor "
-    "cells hold bare values the engine recomputes, so a join must read them per policy",
-)
 def test_join_over_array_formula_cells_is_read_per_policy(make_book: Book, tmp_path: Path) -> None:
     # Arr!A1:A2 = {=Inputs!B1*Arr!B1:B2}, B1 = 1, B2 = 1/12. Stored x = 6: A1 6, A2 0.5.
     # Policy M7: A1 7, A2 7/12, which Excel writes 0.583333333333333, so

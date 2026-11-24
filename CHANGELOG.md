@@ -100,8 +100,8 @@ schema is a versioned public contract.
   silently ignored. So a cell of a refused array came back `ok`, and a wrong value in a
   non-anchor cell on the stored inputs came back `ok` too. Each such cell now reads its
   array's formula in the graph, is compared in the trust run (so `formula_cells`,
-  `checked` and `share` in `trust_report.json` count them), and is an error as an input
-  target. A dynamic array that spills past the range the workbook stored, for a policy,
+  `checked` and `share` in `trust_report.json` count them), is read per policy when a
+  `TEXTJOIN` or `CONCAT` joins it, and is an error as an input target. A dynamic array that spills past the range the workbook stored, for a policy,
   carries its formula's status to the cells it spills into.
 - **`marinade calc`: dynamic references are followed through their arguments, built
   range ends and landing cells.** Three gaps let a value come back `ok` where Excel

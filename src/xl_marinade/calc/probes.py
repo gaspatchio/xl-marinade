@@ -884,8 +884,11 @@ class _Planner:
 
     def _plain_constant(self, cell: CellRef) -> bool:
         """A cell no policy changes whose text Excel writes as the engine does: blank,
-        text, a boolean, or a number that needs at most 15 significant digits."""
+        text, a boolean, or a number that needs at most 15 significant digits. A cell of
+        an array formula's range is computed, however its stored value looks."""
         if cell in self.inputs or self.graph.formula(cell) is not None:
+            return False
+        if self.graph.array_anchor(cell) is not None:
             return False
         if not self.graph.has_stored(cell):
             return True

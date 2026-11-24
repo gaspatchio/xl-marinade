@@ -389,8 +389,9 @@ Integers, and decimals with up to 15 significant digits that sit on no tie, stay
 `TEXT` with a date or time format needs no check, and a format's third section (shown
 only for an exact zero) does not decide the rounding. A range joined by `TEXTJOIN`,
 `CONCAT` or `CONCATENATE` is read cell by cell: constants that are text, booleans,
-blanks or numbers Excel writes as the engine does need nothing; formula cells, mapped
-inputs and other numbers are read per policy. Each such cell is probed once, however
+blanks or numbers Excel writes as the engine does need nothing; formula cells (every
+cell of an array formula's range among them), mapped inputs and other numbers are read
+per policy. Each such cell is probed once, however
 many joins read it, and these probes are planned after every other probe, so they
 never take `--probe-cap` room from a branch or lookup check; a join whose cells did not
 fit under the cap is refused as `number-to-text not checked` for its own cell and what
