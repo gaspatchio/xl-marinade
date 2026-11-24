@@ -334,3 +334,179 @@ def test_a_zero_section_with_other_decimals_stays_ok(make_book: Book, tmp_path: 
     _ok(rows[("A", "Calc!B1")])
     assert rows[("B", "Calc!B1")]["value"] == "-1234.40"
     _ok(rows[("B", "Calc!B1")])
+
+
+# -- B1 (closed in PR-P part 2): array-formula cells are not constants ----------------
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="closed by the array-cells commit (PR-P part 2): a CSE block's non-anchor "
+    "cells hold bare values the engine recomputes, so a join must read them per policy",
+)
+def test_join_over_array_formula_cells_is_read_per_policy(make_book: Book, tmp_path: Path) -> None:
+    # Arr!A1:A2 = {=Inputs!B1*Arr!B1:B2}, B1 = 1, B2 = 1/12. Stored x = 6: A1 6, A2 0.5.
+    # Policy M7: A1 7, A2 7/12, which Excel writes 0.583333333333333, so
+    # TEXTJOIN(",",TRUE,Arr!A1:A2) is "7,0.583333333333333"; the engine writes
+    # 0.5833333333333334 -- the value must not come back ok.
+    from openpyxl.worksheet.formula import ArrayFormula
+
+    book = make_book(
+        "arr",
+        {
+            "Inputs": {"B1": 6},
+            "Arr": {
+                "B1": 1,
+                "B2": 1 / 12,
+                "A1": F(ArrayFormula("A1:A2", "=Inputs!B1*Arr!B1:B2"), 6.0),
+                "A2": 0.5,
+            },
+            "Calc": {"B1": F('=_xlfn.TEXTJOIN(",",TRUE,Arr!A1:A2)', "6,0.5")},
+        },
+    )
+    rows = _rows(_run(tmp_path, book, "id,x\nM7,7\n", {"x": "Inputs!B1"}, ["Calc!B1"]))
+    assert rows[("M7", "Calc!B1")]["status"] == "refused", rows[("M7", "Calc!B1")]
+
+
+# -- I4: join sources share probes and never displace other probes ---------------------
+
+
+def _run_capped(
+    tmp: Path, book: Path, policies: str, fields: dict[str, str], outputs: list[str], cap: int
+) -> tuple[dict[tuple[str, str], dict[str, str]], dict[str, object]]:
+    (tmp / "p.csv").write_text(policies, encoding="utf-8")
+    (tmp / "m.json").write_text(json.dumps({"id_field": "id", "fields": fields}), encoding="utf-8")
+    res = calc(
+        CalcRequest(
+            workbook=book,
+            policies=tmp / "p.csv",
+            input_map=tmp / "m.json",
+            out_dir=tmp / "out",
+            outputs=outputs,
+            probe_cap=cap,
+        )
+    )
+    return _rows(res), json.loads(res.run_json.read_text(encoding="utf-8"))
+
+
+def test_a_source_joined_by_many_cells_is_probed_once(make_book: Book, tmp_path: Path) -> None:
+    # Data!A1:A20 = Inputs!B1 + r: integers at every policy (6+r stored; 7+r for P7).
+    # Calc!B1:B5 each join all 20. Z!B1 = IF(Inputs!B1>10,1,2): both policies take the
+    # stored FALSE arm (2). With a cap of 50, 20 shared source probes and Z's branch and
+    # comparison probes all fit: every output is ok and nothing goes unplaced.
+    data = {f"A{r}": F(f"=Inputs!B1+{r}", 6.0 + r) for r in range(1, 21)}
+    joined = ",".join(str(6 + r) for r in range(1, 21))
+    calc_cells = {
+        f"B{r}": F('=_xlfn.TEXTJOIN(",",TRUE,Data!$A$1:$A$20)', joined) for r in range(1, 6)
+    }
+    book = make_book(
+        "shared",
+        {
+            "Inputs": {"B1": 6},
+            "Data": data,
+            "Calc": calc_cells,
+            "Z": {"B1": F("=IF(Inputs!B1>10,1,2)", 2.0)},
+        },
+    )
+    outputs = [f"Calc!B{r}" for r in range(1, 6)] + ["Z!B1"]
+    rows, run = _run_capped(tmp_path, book, "id,x\nP6,6\nP7,7\n", {"x": "Inputs!B1"}, outputs, 50)
+    assert run["probes_unplaced"] == 0
+    for pid in ("P6", "P7"):
+        for out in outputs:
+            _ok(rows[(pid, out)])
+    assert rows[("P7", "Calc!B1")]["value"] == ",".join(str(7 + r) for r in range(1, 21))
+
+
+def test_a_copied_down_join_past_the_cap_refuses_only_its_own_rows(
+    make_book: Book, tmp_path: Path
+) -> None:
+    # The 12,000-row shape scaled to 200 rows: Rec!F{r} = CONCAT(Rec!A{r}:E{r}) over five
+    # formula fields (Inputs!B1 + ROW(): integers), 1,000 source cells against a cap of
+    # 600. Z!B1 (an IF on the input, its own two probes) keeps its probes and stays ok;
+    # the first rows' joins are checked and ok; the joins whose sources did not fit are
+    # refused, and nothing else is.
+    rec: dict[str, object] = {}
+    for r in range(1, 201):
+        for c in "ABCDE":
+            rec[f"{c}{r}"] = F("=Inputs!$B$1+ROW()", 6.0 + r)
+        rec[f"F{r}"] = F(f"=_xlfn.CONCAT(Rec!A{r}:E{r})", str(6 + r) * 5)
+    book = make_book(
+        "copied",
+        {"Inputs": {"B1": 6}, "Rec": rec, "Z": {"B1": F("=IF(Inputs!B1>10,1,2)", 2.0)}},
+    )
+    rows, _run_record = _run_capped(
+        tmp_path, book, "id,x\nP6,6\nP7,7\n", {"x": "Inputs!B1"}, ["Rec!F:F", "Z!B1"], 600
+    )
+    for pid in ("P6", "P7"):
+        _ok(rows[(pid, "Z!B1")])
+        _ok(rows[(pid, "Rec!F1")])
+        _refused(rows[(pid, "Rec!F200")], "Rec!F200", NOT_CHECKED)
+    statuses = {r["status"] for (pid, out), r in rows.items() if out.startswith("Rec!")}
+    assert statuses == {"ok", "refused"}
+    refused = [out for (pid, out), r in rows.items() if pid == "P6" and r["status"] == "refused"]
+    assert all(
+        f"refused_pattern@{out}:{NOT_CHECKED}" in rows[("P6", out)]["reasons"] for out in refused
+    )
+
+
+def test_a_range_resolved_once_for_every_cell_joining_it(
+    make_book: Book, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 30 cells join Codes!A:A (text): the whole column is resolved once, not 30 times.
+    from xl_marinade.calc.graph import WorkbookGraph
+
+    calls: list[str] = []
+    real = WorkbookGraph.resolve_target
+
+    def counting(self: WorkbookGraph, target: str) -> list[object]:
+        calls.append(target)
+        return real(self, target)  # type: ignore[return-value]
+
+    monkeypatch.setattr(WorkbookGraph, "resolve_target", counting)
+    codes = {f"A{r}": f"c{r}" for r in range(1, 11)}
+    joined = ",".join(f"c{r}" for r in range(1, 11))
+    calc_cells = {f"B{r}": F('=_xlfn.TEXTJOIN(",",TRUE,Codes!A:A)', joined) for r in range(1, 31)}
+    book = make_book("col", {"Inputs": {"B1": 1}, "Codes": codes, "Calc": calc_cells})
+    rows = _rows(_run(tmp_path, book, "id,x\nP,2\n", {"x": "Inputs!B1"}, ["Calc!B1:B30"]))
+    assert all(r["status"] == "ok" for r in rows.values())
+    assert sum(1 for t in calls if "A:" in t or "$A:" in t) == 1
+
+
+# -- M9: a single value from a function, joined -----------------------------------------
+
+
+def test_a_single_value_from_a_function_is_read_like_any_number(
+    make_book: Book, tmp_path: Path
+) -> None:
+    # Rates for ages 20..22: 0.01, 0.02 and 1/3 (Excel writes 0.333333333333333).
+    #   B1 CONCATENATE("Rate ", XLOOKUP(age, ages, rates)): stored age 21 -> "Rate 0.02";
+    #      age 22 -> the 1/3 rate, whose text Excel and the engine write differently.
+    #   B2 CONCAT(IF(Inputs!B2>0, Codes!A1:A2, "x")): a range when B2 > 0 (stored 0).
+    book = make_book(
+        "single",
+        {
+            "Inputs": {"B1": 21, "B2": 0},
+            "Rates": {"A1": 20, "A2": 21, "A3": 22, "B1": 0.01, "B2": 0.02, "B3": 1 / 3},
+            "Codes": {"A1": "p", "A2": "q"},
+            "Calc": {
+                "B1": F(
+                    '=CONCATENATE("Rate ",_xlfn.XLOOKUP(Inputs!B1,Rates!A1:A3,Rates!B1:B3))',
+                    "Rate 0.02",
+                ),
+                "B2": F('=_xlfn.CONCAT(IF(Inputs!B2>0,Codes!A1:A2,"x"))', "x"),
+            },
+        },
+    )
+    rows = _rows(
+        _run(
+            tmp_path,
+            book,
+            "id,age,s\nA21,21,0\nA22,22,0\nS1,21,1\n",
+            {"age": "Inputs!B1", "s": "Inputs!B2"},
+            ["Calc!B1", "Calc!B2"],
+        )
+    )
+    _ok(rows[("A21", "Calc!B1")])
+    _ok(rows[("A21", "Calc!B2")])
+    _refused(rows[("A22", "Calc!B1")], "Calc!B1", DIGITS)
+    _refused(rows[("S1", "Calc!B2")], "Calc!B2", NOT_CHECKED)

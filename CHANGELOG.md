@@ -77,7 +77,8 @@ schema is a versioned public contract.
   negative value that rounds to zero or one unit`, `number-to-text where Excel's
   15-digit text differs`, and `criterion built with & from a non-integer number` for
   `SUMIF`-family criteria). A range joined by `TEXTJOIN` or `CONCAT` is read cell by
-  cell, so a range of text or integer constants stays `ok`. A `TEXT` format calc cannot
+  cell, each cell probed once and after every other probe, so a range of text or
+  integer constants stays `ok` and joins never crowd branch checks out of the cap. A `TEXT` format calc cannot
   read is `number-to-text not checked`. Integers and short decimals off a tie stay
   `ok`. Correcting the value
   instead of refusing it is planned for 0.9.
