@@ -612,3 +612,114 @@ def test_values_refuses_an_old_ir_too(
     variables = _write(tmp_path, "vars.json", json.dumps({"v": {"cell": "Calc!B1"}}))
     with pytest.raises(CalcInputError, match="re-extract"):
         values(ValuesRequest(book, variables, tmp_path / "v", ir=ir))
+
+
+# -- a map field no formula reads (ruling D5) ----------------------------------------
+
+_READ = {
+    "Inputs": {"A1": "age", "B1": 40, "A2": "term", "B2": 10, "A3": "id", "B3": 1},
+    "Calc": {"B1": F("=Inputs!B1*2", 80), "B2": F("=Inputs!B2+1", 11)},
+}
+
+
+def _run_json(res: CalcResult) -> dict[str, object]:
+    data: dict[str, object] = json.loads(res.run_json.read_text(encoding="utf-8"))
+    return data
+
+
+def test_a_field_no_formula_reads_is_refused_naming_it(make_book: Book, tmp_path: Path) -> None:
+    # V2: age aimed at the label cell beside the input; every policy got the stored
+    # answer (80) with ok, where 50 and 140 were meant.
+    book = make_book("unread", _READ)
+    imap = {"fields": {"age": "Inputs!A1", "term": "Inputs!B2"}}
+    with pytest.raises(CalcInputError, match=r"map field 'age'.*Inputs!A1.*no formula reads"):
+        calc(_req(tmp_path, book, "id,age,term\np,25,5\n", imap, ["Calc!B1"]))
+
+
+def test_the_id_field_on_a_display_cell_is_accepted(make_book: Book, tmp_path: Path) -> None:
+    # Writing the id into a cell for the record is a documented use (guide: map.json).
+    book = make_book("idcell", _READ)
+    imap = {"id_field": "pid", "fields": {"pid": "Inputs!B3", "age": "Inputs!B1"}}
+    res = calc(_req(tmp_path, book, "pid,age\n7,25\n", imap, ["Calc!B1"]))
+    assert _results(res)[("7", "Calc!B1")]["value"] == "50.0"
+    assert _run_json(res)["inputs"] == {
+        "pid": {"target": "Inputs!B3", "read_by_requested_outputs": False},
+        "age": {"target": "Inputs!B1", "read_by_requested_outputs": True},
+    }
+
+
+def test_a_field_read_only_by_outputs_not_requested_is_accepted_and_recorded(
+    make_book: Book, tmp_path: Path
+) -> None:
+    # One map.json reused across output subsets: term feeds Calc!B2 only.
+    book = make_book("subset", _READ)
+    imap = {"fields": {"age": "Inputs!B1", "term": "Inputs!B2"}}
+    res = calc(_req(tmp_path, book, "id,age,term\np,25,5\n", imap, ["Calc!B1"]))
+    assert _results(res)[("p", "Calc!B1")]["value"] == "50.0"
+    inputs = _run_json(res)["inputs"]
+    assert inputs == {
+        "age": {"target": "Inputs!B1", "read_by_requested_outputs": True},
+        "term": {"target": "Inputs!B2", "read_by_requested_outputs": False},
+    }
+
+
+@pytest.mark.parametrize(
+    ("formula", "cached"),
+    [
+        ("=Rate*2", 80),  # a workbook name over the cell
+        ("=SUM(Inputs!B:B)*2", 102),  # a whole column
+        ("=SUMPRODUCT(Inputs!B1:B3)*2", 102),  # a range
+    ],
+)
+def test_a_field_read_through_a_name_or_range_is_accepted(
+    make_book: Book, tmp_path: Path, formula: str, cached: float
+) -> None:
+    sheets = {"Inputs": _READ["Inputs"], "Calc": {"B1": F(formula, cached)}}
+    book = make_book("reads", sheets, names={"Rate": "Inputs!$B$1"})
+    res = calc(
+        _req(tmp_path, book, "id,age\np,25\n", {"fields": {"age": "Inputs!B1"}}, ["Calc!B1"])
+    )
+    assert _run_json(res)["inputs"] == {
+        "age": {"target": "Inputs!B1", "read_by_requested_outputs": True}
+    }
+
+
+@pytest.mark.parametrize(
+    ("formula", "field"),
+    [
+        # The graph sees a literal INDIRECT's cell and an OFFSET's stored landing cell,
+        # not the other cells a dynamic reference can reach on its sheet.
+        ('=INDIRECT("Inputs!B1")*2', "Inputs!B2"),  # INDIRECT text with a literal sheet
+        ('=INDIRECT("B1")*2', "Calc!B9"),  # literal text, the formula's own sheet
+        ("=OFFSET(Inputs!A1,0,1)*2", "Inputs!B2"),  # OFFSET lands anywhere on its sheet
+        ("=OFFSET(Inputs!A1,Other!C1,1)*2", "Other!C1"),  # an argument cell: no edge yet
+        ('=INDIRECT(Inputs!C1&"!B1")*2', "Other!B1"),  # text not literal: every sheet
+    ],
+)
+def test_a_field_on_a_sheet_a_dynamic_reference_reaches_is_accepted(
+    make_book: Book, tmp_path: Path, formula: str, field: str
+) -> None:
+    sheets = {
+        "Inputs": {"A1": "age", "B1": 40, "B2": 0, "C1": "Inputs"},
+        "Calc": {"B1": F(formula, 80), "B9": 40},
+        "Other": {"B1": 40, "C1": 0},
+    }
+    book = make_book("dyn", sheets)
+    res = calc(_req(tmp_path, book, "id,age\np,25\n", {"fields": {"age": field}}, ["Calc!B1"]))
+    assert _run_json(res)["inputs"] == {
+        "age": {"target": field, "read_by_requested_outputs": False}
+    }
+
+
+def test_a_dynamic_reference_with_a_literal_sheet_exempts_only_that_sheet(
+    make_book: Book, tmp_path: Path
+) -> None:
+    sheets = {
+        "Inputs": {"A1": "age", "B1": 40},
+        "Calc": {"B1": F('=INDIRECT("Inputs!B1")*2', 80)},
+        "Other": {"B1": 40},
+    }
+    book = make_book("dyn2", sheets)
+    imap = {"fields": {"age": "Other!B1"}}
+    with pytest.raises(CalcInputError, match=r"map field 'age'.*Other!B1"):
+        calc(_req(tmp_path, book, "id,age\np,25\n", imap, ["Calc!B1"]))

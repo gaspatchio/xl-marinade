@@ -170,6 +170,14 @@ schema is a versioned public contract.
   an IR is now refused, naming its version and the floor, with "re-extract with
   marinade extract". The version is the one the extracting install stamped; an IR
   stamped with the running install's own version is always accepted.
+- **`marinade calc`: a map field that no formula reads is an error.** A field aimed one
+  cell off (at the label beside the input) was accepted, so every policy got the stored
+  inputs' answer reported `ok` and nothing recorded that the field had no effect. It is
+  now an error naming the field and its cell. The id field is exempt (it may be written
+  into a display cell), and so are cells on sheets an `INDIRECT` text or an `OFFSET` can
+  reach, or that hold a cell read inside the arguments of those or of `CELL`, `INFO`
+  and `GETPIVOTDATA` (the formula graph has no edge for those reads). `run.json` gains `inputs`: per field, the
+  cell it sets and whether a requested output reads it.
 
 ## [0.8.0] - 2026-11-24
 

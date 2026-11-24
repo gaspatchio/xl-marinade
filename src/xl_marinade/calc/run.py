@@ -28,6 +28,7 @@ from xl_marinade.calc.config import (
     parse_outputs,
 )
 from xl_marinade.calc.engine import Engine, EngineValue, engine_version, quiet_native_output
+from xl_marinade.calc.formula_ast import SHEET, function_name, iter_nodes, parse_formula
 from xl_marinade.calc.graph import ListItems, StoredValue, WorkbookGraph, open_graph
 from xl_marinade.calc.models import (
     ArrayRange,
@@ -91,6 +92,7 @@ from xl_marinade.calc.status import (
     unplaced_roots,
 )
 from xl_marinade.calc.trust import TrustResult, run_trust, same
+from xl_marinade.core.parser import ConstNode, FunctionNode, RefNode
 from xl_marinade.errors import CalcError, CalcInputError, WorkbookRefused
 
 _ISO_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
@@ -433,6 +435,115 @@ def _shared_cells(entries: dict[str, CellRef], what: str) -> list[str]:
     ]
 
 
+def _input_use(
+    graph: WorkbookGraph, inputs: dict[str, CellRef], reach: frozenset[CellRef], id_field: str
+) -> dict[str, dict[str, object]]:
+    """Per map field, the cell it sets and whether a requested output reads it (as the
+    formula graph sees it), for ``run.json``.
+
+    Raises:
+        CalcInputError: naming every field whose cell no formula reads (ruling D5): its
+            value would change nothing, so each policy would get the stored inputs'
+            answer as ``ok``. The id field is exempt (writing the id into a display cell
+            is a documented use), and so is a cell on a sheet where the graph cannot see
+            every read (:func:`_dynamic_sheets`).
+    """
+    dynamic: set[str] | None = set()
+    problems: list[str] = []
+    for name, cell in inputs.items():
+        if name == id_field or graph.dependents(cell):
+            continue
+        if dynamic is not None and not dynamic:
+            dynamic = _dynamic_sheets(graph)
+        if dynamic is None or cell.sheet in dynamic:
+            continue
+        problems.append(
+            f"map field {name!r} sets {cell.a1()}, which no formula reads, so its value "
+            "would change nothing; map the field onto the input cell the formulas read"
+        )
+    if problems:
+        raise CalcInputError("; ".join(problems))
+    return {
+        name: {"target": cell.a1(), "read_by_requested_outputs": cell in reach}
+        for name, cell in inputs.items()
+    }
+
+
+_A1_TEXT = re.compile(r"\$?[A-Za-z]{1,3}\$?[0-9]+(?::\$?[A-Za-z]{1,3}\$?[0-9]+)?")
+_SHEET_PREFIX = re.compile(rf"^({SHEET})!")
+
+
+# Functions whose arguments the extractor records no edge for (an address-computing
+# call is a black box to it): a cell read only inside one looks unread to the graph.
+_OPAQUE = ("INDIRECT", "OFFSET", "CELL", "INFO", "GETPIVOTDATA")
+
+
+def _dynamic_sheets(graph: WorkbookGraph) -> set[str] | None:
+    """Sheets the graph cannot see every read on: where an ``INDIRECT`` text or an
+    ``OFFSET`` can land, and the sheets of cells read inside the arguments of those and
+    of ``CELL``, ``INFO`` and ``GETPIVOTDATA``. None for every sheet (a text, base or
+    reference whose sheet cannot be told, or such a formula that does not parse)."""
+    sheets: set[str] = set()
+    for cell in graph.formula_cells():
+        text = graph.formula(cell) or ""
+        upper = text.upper()
+        if not any(name in upper for name in _OPAQUE):
+            continue
+        root = parse_formula(text)
+        if root is None:
+            return None
+        for node in iter_nodes(root):
+            if not isinstance(node, FunctionNode):
+                continue
+            name = function_name(node.name)
+            if name not in _OPAQUE:
+                continue
+            first = node.args[0] if node.args else None
+            found: set[str] | None = set()
+            if name == "INDIRECT":
+                found = (
+                    _reached_sheet(graph, first.value, cell.sheet)
+                    if isinstance(first, ConstNode) and isinstance(first.value, str)
+                    else None
+                )
+            elif name == "OFFSET":
+                found = (
+                    _reached_sheet(graph, first.ref, cell.sheet)
+                    if isinstance(first, RefNode)
+                    else None
+                )
+            if found is None:
+                return None
+            sheets.update(found)
+            for arg in node.args:
+                for inner in iter_nodes(arg):
+                    if isinstance(inner, RefNode):
+                        found = _reached_sheet(graph, inner.ref, cell.sheet)
+                        if found is None:
+                            return None
+                        sheets.update(found)
+    return sheets
+
+
+def _reached_sheet(graph: WorkbookGraph, ref: str, own: str) -> set[str] | None:
+    """The sheets a reference (or ``INDIRECT`` text) written in a formula on ``own``
+    points into; None when that cannot be told."""
+    ref = ref.strip()
+    m = _SHEET_PREFIX.match(ref)
+    if m is not None:
+        written = m.group(1)
+        if written.startswith("'") and written.endswith("'") and len(written) >= 2:
+            written = written[1:-1].replace("''", "'")
+        sheet = graph.sheet(written)
+        return {sheet} if sheet is not None else set()  # an unknown sheet reads #REF!
+    if _A1_TEXT.fullmatch(ref):
+        return {own}
+    found = graph.lookup_name(ref, own)
+    if found is None or found.kind != "cells" or not found.rects:
+        return None
+    return {rect[0] for rect in found.rects}
+
+
 # -- reports -------------------------------------------------------------------
 
 
@@ -492,6 +603,7 @@ def _run_record(
     ironcalc: str | None,
     plan: ProbePlan | None,
     variables: dict[str, dict[str, object]],
+    inputs: dict[str, dict[str, object]] | None = None,
 ) -> dict[str, Any]:
     from xl_marinade import __version__
 
@@ -504,6 +616,7 @@ def _run_record(
         "probe_cap": req.probe_cap,
         "probes_unplaced": _unplaced_count(plan),
         "variables": variables,
+        "inputs": inputs or {},
     }
 
 
@@ -966,6 +1079,8 @@ def calc(req: CalcRequest) -> CalcResult:
         prepared = prepare_engine_copy(req.workbook, work / "engine.xlsx", as_of=req.as_of)
         graph.add_arrays(prepared.arrays)
         variables, outputs, inputs = _resolve_targets(graph, specs, targets, input_map.fields)
+        static_up = frozenset(graph.upstream(outputs))
+        input_use = _input_use(graph, inputs, static_up, input_map.id_field or "id")
         patterns = _merge_patterns(
             _with_unheld_externals(
                 graph,
@@ -979,7 +1094,6 @@ def calc(req: CalcRequest) -> CalcResult:
             engine = Engine.load(prepared.path, req.workbook)
         # Refused cells refuse their dependants anyway: probing them would only use up
         # the cap (and their readings vouch for nothing).
-        static_up = frozenset(graph.upstream(outputs))
         upstream = [c for c in static_up if graph.formula(c) is not None and c not in patterns]
         moving = set(inputs.values())
         if check is not None and check.selector is not None:
@@ -1052,6 +1166,7 @@ def calc(req: CalcRequest) -> CalcResult:
             ironcalc=engine.version,
             plan=plan,
             variables=variables_record(specs, variables),
+            inputs=input_use,
         ),
     )
     return CalcResult(

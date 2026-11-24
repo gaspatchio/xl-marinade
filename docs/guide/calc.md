@@ -84,7 +84,16 @@ or defined name that holds a constant; mapping onto a formula is an error, and s
 mapping onto any cell of an array formula's range (Excel cannot hold a constant there).
 The same holds for a `check.json` selector. Mapping two fields onto one cell (by
 address, by name, or one of each), the id field included, is an error too, since the
-cell can hold only one of their values. Before each
+cell can hold only one of their values. A field whose cell no
+formula reads is an error too: its value would change nothing, and every policy would get
+the stored inputs' answer as `ok` (a map one cell off, on the label beside the input, is
+the usual cause). Two exceptions: the id field, which may be written into a display
+cell; and a cell on a sheet that an `INDIRECT` text or an `OFFSET` can reach, or on the
+sheet of a cell read inside the arguments of those or of `CELL`, `INFO` and
+`GETPIVOTDATA`, since the formula graph does not see those reads (an `INDIRECT` whose
+text is not written out, with its sheet, exempts every sheet). A field read only by
+outputs you did not request is accepted. `run.json` records, under `inputs`, the cell
+each field sets and whether a requested output reads it. Before each
 input set, every mapped input is reset to its stored value. A value outside the cell's
 data-validation list refuses that input set's outputs.
 
@@ -247,7 +256,7 @@ All in the `-o` directory, UTF-8, `\n` line endings, no timestamps.
 | `rows.csv` | With `--variables`: `policy`, `variable`, `period`, `value`, `status`, `reasons`. |
 | `paths.csv` | `policy_id`, `cell`, `family`, `kind`, `ordinal`, `outcome`, `exercised`. The branch or lookup edge each policy took, in the cells that fed its outputs: through the cells its dynamic references landed on for that policy, not the cell an `OFFSET` starts from or where it landed with the stored inputs; `ordinal` tells apart several probes of one kind in one cell; `exercised` is `true` when the trust run took it too. |
 | `trust_report.json` | `formula_cells`, `checked`, `reproduced`, `share`, `failures`, `refused_patterns`, `settings` (with `settings.refused`), `held_external_links`, `check_against` (`input_sets`, and `mismatches` with `input_set`, `cell`, `detail`, `stored`, `computed`, `relative_difference`), `probes_unplaced` (probes that could not be placed, for any reason) and `probes_over_cap` (those left out only because `--probe-cap` was reached). |
-| `run.json` | `ironcalc_version`, `marinade_version`, `workbook_sha256`, `tolerance`, `as_of`, `probe_cap`, `probes_unplaced`, and per variable its range, `period_start` and the cell period 0 falls on. |
+| `run.json` | `ironcalc_version`, `marinade_version`, `workbook_sha256`, `tolerance`, `as_of`, `probe_cap`, `probes_unplaced`, per variable its range, `period_start` and the cell period 0 falls on, and per map field (`inputs`) the cell it sets (`target`) and whether a requested output reads it (`read_by_requested_outputs`, as the formula graph sees it: a read through `INDIRECT` or `OFFSET` counts only where the graph has the edge). |
 
 `marinade values` writes `rows.csv` and `run.json` (variables only). Its rows carry status
 `stored`, and the policy is `stored`, or the stored value of the id field (`id_field`,
