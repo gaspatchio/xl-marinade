@@ -36,7 +36,8 @@ schema is a versioned public contract.
     result: those members were empty cells and are now cells with that
     value. Re-extracting can add cells, and add, resize or remove the
     constant bindings around them (`BINDING_ADDED`, `BINDING_RESIZED`,
-    `BINDING_REMOVED`, with their binding edges).
+    `BINDING_REMOVED`, with their binding edges). A constant binding that
+    grows to take in the new members can also get a different label.
 
   Re-extract a workbook to pick this up, and pass `marinade calc --ir` only a
   database extracted with this version. `marinade diff` between a database
@@ -48,7 +49,8 @@ schema is a versioned public contract.
     before: it counts as a recalculation gap, like any other cached value that
     appears on an unchanged formula. An array or spill member has no formula,
     so its new `""` or whitespace-only value is reported as `VALUE_CHANGED`
-    and `DTYPE_CHANGED`;
+    and `DTYPE_CHANGED` when the older database already had a row for that
+    cell, and only through `BINDING_ADDED` when it did not;
   - reports `BINDING_METADATA_CHANGED` (layer `ir_inference`) on every binding
     whose label scan quotes a changed cell.
 
