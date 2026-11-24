@@ -193,7 +193,7 @@ def test_every_array_cell_is_compared_in_the_trust_run(make_book: Book, tmp_path
         {
             "S": {
                 "A1": 3,
-                "B1": 1,
+                "B1": "id",
                 "E1": F("=S!A1:A2*2", 6),
                 "E2": 0,
                 "E3": 0,
@@ -203,7 +203,8 @@ def test_every_array_cell_is_compared_in_the_trust_run(make_book: Book, tmp_path
     )
     spec = ("E1", "E1:E3", "S!A1:A2*2", {"E2": 0.0, "E3": "#N/A"}, False)
     book = _arrays(book, "xl/worksheets/sheet1.xml", [spec])
-    res = _run(tmp_path, book, "id,b\nP,2\n", {"b": "S!B1"}, ["S!E1:E3", "S!H1"])
+    # The id goes into S!B1, which nothing reads (a map field nothing reads is refused).
+    res = _run(tmp_path, book, "id\nP\n", {"id": "S!B1"}, ["S!E1:E3", "S!H1"])
     report = _report(res)
     assert report["formula_cells"] == 4  # E1, its two other cells, H1
     assert report["checked"] == 4
@@ -253,7 +254,7 @@ def test_a_selector_inside_an_array_formula_is_an_error(make_book: Book, tmp_pat
         "inputs": {"selector": "Inputs!B3"},
     }
     with pytest.raises(CalcInputError, match="maps onto formula cell"):
-        _run(tmp_path, book, "id,v\nP,7\n", {"v": "Inputs!D1"}, ["Calc!C1"], check=check)
+        _run(tmp_path, book, "id\nP\n", {"id": "Inputs!D1"}, ["Calc!C1"], check=check)
 
 
 def test_a_spill_that_grows_carries_its_anchors_status(make_book: Book, tmp_path: Path) -> None:
@@ -348,12 +349,12 @@ def test_a_failing_anchor_refuses_its_other_cells(make_book: Book, tmp_path: Pat
         {
             "Inputs": {"A1": 15, "A2": "x", "A3": 25},
             "Keys": {"A1": 10, "A2": 20, "A3": 30},
-            "Calc": {"D1": F("=MATCH(Inputs!A1:A3,Keys!A1:A3,1)", 1), "D2": 0, "D3": 0, "Z1": 1},
+            "Calc": {"D1": F("=MATCH(Inputs!A1:A3,Keys!A1:A3,1)", 1), "D2": 0, "D3": 0, "Z1": "id"},
         },
     )
     spec = ("D1", "D1:D3", "MATCH(Inputs!A1:A3,Keys!A1:A3,1)", {"D2": "#N/A", "D3": 2.0}, False)
     book = _arrays(book, "xl/worksheets/sheet3.xml", [spec])
-    res = _run(tmp_path, book, "id,z\nP,1\n", {"z": "Calc!Z1"}, ["Calc!D2"])
+    res = _run(tmp_path, book, "id\nP\n", {"id": "Calc!Z1"}, ["Calc!D2"])
     row = _rows(res)[("P", "Calc!D2")]
     assert row["status"] == "refused", row
     assert "@Calc!D1:stored 1.0" in row["reasons"], row

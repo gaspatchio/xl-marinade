@@ -221,9 +221,10 @@ marinade values book.xlsx --variables vars.json [--map map.json] -o stored/
   are errors naming the policy and field; ids like `123-45-6789` stay text.
   Also errors: a CSV row wider than its header (or a value under an unnamed
   column), a repeated JSON key, two fields
-  (or two check outputs) on one cell, and a field no formula reads (the id
-  field, and sheets `INDIRECT`/`OFFSET` can reach, are exempt; `run.json`
-  `inputs` records whether a requested output reads each field).
+  (or two check outputs) on one cell, and a field no formula can read (the id
+  field is exempt; a cell a dynamic reference, a formula name or a 3-D
+  reference may reach is accepted; `run.json` `inputs` records whether a
+  requested output reads each field: `true`, `false` or `"unknown"`).
 - **Files out** in `-o`: `results.csv`, `rows.csv`, `paths.csv`,
   `trust_report.json`, `run.json`. Known outputs are cleared at the start of a run;
   an input that is one of them, or an `-o` that is a file, is refused first.

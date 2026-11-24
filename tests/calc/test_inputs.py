@@ -690,19 +690,21 @@ def test_a_field_read_through_a_name_or_range_is_accepted(
 
 
 @pytest.mark.parametrize(
-    ("formula", "field"),
+    ("formula", "field", "read"),
     [
         # The graph sees a literal INDIRECT's cell and an OFFSET's stored landing cell,
-        # not the other cells a dynamic reference can reach on its sheet.
-        ('=INDIRECT("Inputs!B1")*2', "Inputs!B2"),  # INDIRECT text with a literal sheet
-        ('=INDIRECT("B1")*2', "Calc!B9"),  # literal text, the formula's own sheet
-        ("=OFFSET(Inputs!A1,0,1)*2", "Inputs!B2"),  # OFFSET lands anywhere on its sheet
-        ("=OFFSET(Inputs!A1,Other!C1,1)*2", "Other!C1"),  # an argument cell: no edge yet
-        ('=INDIRECT(Inputs!C1&"!B1")*2', "Other!B1"),  # text not literal: every sheet
+        # not the other cells a dynamic reference can reach on its sheet: whether those
+        # are read is unknown, so they are accepted and recorded as "unknown".
+        ('=INDIRECT("Inputs!B1")*2', "Inputs!B2", "unknown"),  # literal sheet
+        ('=INDIRECT("B1")*2', "Calc!B9", "unknown"),  # literal text, own sheet
+        ("=OFFSET(Inputs!A1,0,1)*2", "Inputs!B2", "unknown"),  # lands on its sheet
+        ('=INDIRECT(Inputs!C1&"!B1")*2', "Other!B1", "unknown"),  # text not literal
+        # An OFFSET's rows argument is a read the graph now records.
+        ("=OFFSET(Inputs!A1,Other!C1,1)*2", "Other!C1", True),
     ],
 )
 def test_a_field_on_a_sheet_a_dynamic_reference_reaches_is_accepted(
-    make_book: Book, tmp_path: Path, formula: str, field: str
+    make_book: Book, tmp_path: Path, formula: str, field: str, read: object
 ) -> None:
     sheets = {
         "Inputs": {"A1": "age", "B1": 40, "B2": 0, "C1": "Inputs"},
@@ -711,9 +713,7 @@ def test_a_field_on_a_sheet_a_dynamic_reference_reaches_is_accepted(
     }
     book = make_book("dyn", sheets)
     res = calc(_req(tmp_path, book, "id,age\np,25\n", {"fields": {"age": field}}, ["Calc!B1"]))
-    assert _run_json(res)["inputs"] == {
-        "age": {"target": field, "read_by_requested_outputs": False}
-    }
+    assert _run_json(res)["inputs"] == {"age": {"target": field, "read_by_requested_outputs": read}}
 
 
 def test_a_dynamic_reference_with_a_literal_sheet_exempts_only_that_sheet(
@@ -914,3 +914,152 @@ def test_ir_floor_compares_versions_exactly(
     else:
         with pytest.raises(CalcInputError, match="re-extract"):
             graph_module._check_ir_version(tmp_path / "ir.db", version)
+
+
+# -- review round 2: a field is unread only when that is provable -------------------
+#
+# A field counts as read when any formula's cell or range reference contains its cell,
+# whether or not the IR holds a row for that (blank) cell. Hand values: the output
+# reads the field, so it computes with the policy's value.
+
+
+@pytest.mark.parametrize(
+    ("inputs", "formula", "cached", "field", "value", "want"),
+    [
+        # a blank input outside the used range, read directly
+        ({"A1": "x"}, "=Inputs!B1+1", 1, "Inputs!B1", "5", "6.0"),
+        # a blank input below the used rows, in a later bucket, read through a range
+        ({"A1": "x", "B1": 1}, "=SUM(Inputs!B1:B1000)", 1, "Inputs!B300", "5", "6.0"),
+        ({"A1": "x", "B1": 1}, "=SUM(Inputs!B:B)", 1, "Inputs!B300", "5", "6.0"),
+        ({"A1": "x", "B1": 1}, "=SUM(Inputs!B1:B100)", 1, "Inputs!B50", "5", "6.0"),
+    ],
+)
+def test_a_blank_field_a_formula_reads_is_accepted_and_recorded_as_read(
+    make_book: Book,
+    tmp_path: Path,
+    inputs: dict[str, object],
+    formula: str,
+    cached: float,
+    field: str,
+    value: str,
+    want: str,
+) -> None:
+    book = make_book("blank", {"Inputs": inputs, "Calc": {"B1": F(formula, cached)}})
+    res = calc(_req(tmp_path, book, f"id,f\np,{value}\n", {"fields": {"f": field}}, ["Calc!B1"]))
+    row = _results(res)[("p", "Calc!B1")]
+    assert (row["value"], row["status"]) == (want, "ok")
+    assert _run_json(res)["inputs"] == {"f": {"target": field, "read_by_requested_outputs": True}}
+
+
+@pytest.mark.parametrize(
+    ("sheets", "names", "field", "read"),
+    [
+        # read through a name holding a formula, and a name chain: the name's text is
+        # read, so the read is provable
+        (
+            {"Inputs": {"A1": "age", "B1": 40}, "Calc": {"B1": F("=Dbl+1", 81)}},
+            {"Dbl": "Inputs!$B$1*2"},
+            "Inputs!B1",
+            True,
+        ),
+        (
+            {"Inputs": {"A1": "age", "B1": 40}, "Calc": {"B1": F("=Rate2*2", 80)}},
+            {"Rate": "Inputs!$B$1", "Rate2": "Rate"},
+            "Inputs!B1",
+            True,
+        ),
+        # a name holding OFFSET or INDIRECT: the IR keeps no text for it, so unknown
+        (
+            {
+                "Inputs": {"A1": "n", "B1": 2},
+                "Data": {"A1": 10, "A2": 20, "A3": 30},
+                "Calc": {"B1": F("=SUM(Rng)", 30)},
+            },
+            {"Rng": "OFFSET(Data!$A$1,0,0,Inputs!$B$1,1)"},
+            "Inputs!B1",
+            "unknown",
+        ),
+        (
+            {
+                "Inputs": {"A1": "addr", "B1": "Data!A1"},
+                "Data": {"A1": 10, "A2": 20},
+                "Calc": {"B1": F("=Pick*2", 20)},
+            },
+            {"Pick": "INDIRECT(Inputs!$B$1)"},
+            "Inputs!B1",
+            "unknown",
+        ),
+        # a 3-D reference has no edge: the same address on any sheet is unknown
+        (
+            {
+                "S1": {"B1": 1},
+                "S2": {"B1": 2},
+                "S3": {"B1": 3},
+                "Calc": {"B1": F("=SUM(S1:S3!B1)", 6)},
+            },
+            {},
+            "S2!B1",
+            "unknown",
+        ),
+        # CELL's arguments have no edge in the IR: read through the reference
+        (
+            {
+                "Inputs": {"B1": "row"},
+                "Data": {"C3": 5},
+                "Calc": {"B1": F("=CELL(Inputs!B1,Data!C3)", 3)},
+            },
+            {},
+            "Inputs!B1",
+            True,
+        ),
+    ],
+)
+def test_reads_the_graph_cannot_see_never_refuse_the_field(
+    make_book: Book,
+    tmp_path: Path,
+    sheets: dict[str, dict[str, object]],
+    names: dict[str, str],
+    field: str,
+    read: object,
+) -> None:
+    # At f23994a each of these stopped the whole run with "no formula reads": the
+    # outputs reading the field are refused patterns or engine errors per output,
+    # never a reason to refuse the run.
+    book = make_book("hidden", sheets, names=names)
+    res = calc(_req(tmp_path, book, "id,f\np,3\n", {"fields": {"f": field}}, ["Calc!B1"]))
+    assert _run_json(res)["inputs"] == {"f": {"target": field, "read_by_requested_outputs": read}}
+
+
+def test_a_3d_reference_does_not_cover_other_addresses(make_book: Book, tmp_path: Path) -> None:
+    sheets = {
+        "S1": {"B1": 1},
+        "S2": {"B1": 2, "C5": 0},
+        "Calc": {"B1": F("=SUM(S1:S2!B1)", 3)},
+    }
+    book = make_book("three_d", sheets)
+    with pytest.raises(CalcInputError, match=r"map field 'f' sets S2!C5"):
+        calc(_req(tmp_path, book, "id,f\np,3\n", {"fields": {"f": "S2!C5"}}, ["Calc!B1"]))
+
+
+def test_an_unused_formula_name_does_not_hide_an_unread_field(
+    make_book: Book, tmp_path: Path
+) -> None:
+    # Rng holds OFFSET but no formula uses it, so nothing reads Inputs!C1.
+    sheets = {"Inputs": {"A1": "age", "B1": 40, "C1": 0}, "Calc": {"B1": F("=Inputs!B1*2", 80)}}
+    book = make_book("unused", sheets, names={"Rng": "OFFSET(Inputs!$A$1,0,0,2,1)"})
+    with pytest.raises(CalcInputError, match=r"map field 'f' sets Inputs!C1"):
+        calc(_req(tmp_path, book, "id,f\np,3\n", {"fields": {"f": "Inputs!C1"}}, ["Calc!B1"]))
+
+
+def test_a_read_field_that_only_unrequested_outputs_read_is_false(
+    make_book: Book, tmp_path: Path
+) -> None:
+    sheets = {
+        "Inputs": {"A1": "x", "B1": 1},
+        "Calc": {"B1": F("=SUM(Inputs!B1:B1000)", 1), "B2": F("=7", 7)},
+    }
+    book = make_book("unreq", sheets)
+    res = calc(_req(tmp_path, book, "id,f\np,5\n", {"fields": {"f": "Inputs!B300"}}, ["Calc!B2"]))
+    assert _run_json(res)["inputs"] == {
+        "f": {"target": "Inputs!B300", "read_by_requested_outputs": False}
+    }

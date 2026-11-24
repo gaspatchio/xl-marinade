@@ -655,6 +655,31 @@ class WorkbookGraph:
         """Formula cells that read ``cell`` directly or through a range."""
         return frozenset(self._dependents(cell))
 
+    def readers(self, cell: CellRef) -> frozenset[CellRef]:
+        """Formula cells whose cell or range references contain ``cell``, whether or not
+        the IR holds a row for it. Unlike :meth:`dependents` this also finds a range
+        that reaches past the sheet's used rows (an empty input below the last used
+        row), at the cost of a scan over every range edge."""
+        out = self._dependents(cell)
+        for src, rects in self._ranges.items():
+            if src in out:
+                continue
+            for sheet, r1, c1, r2, c2 in rects:
+                if sheet == cell.sheet and r1 <= cell.row <= r2 and c1 <= cell.col <= c2:
+                    out.add(src)
+                    break
+        return frozenset(out)
+
+    def names(self) -> list[NameDef]:
+        """Every definition of every defined name, workbook and sheet scope."""
+        return [found for defs in self._names.values() for found in defs]
+
+    def reference_rects(self, sheet: str, ref: str) -> list[_Rect]:
+        """The rectangles a reference written on ``sheet`` covers: a cell, a range, a
+        whole column or row (cut to the used range) or a name over cells; empty when it
+        is none of those."""
+        return self._ref_rects(CellRef(sheet, 1, 1), ref)
+
     def downstream(self, roots: Iterable[CellRef]) -> dict[CellRef, CellRef]:
         """Every cell reachable forward from the roots, mapped to the smallest root reaching it."""
         owner: dict[CellRef, CellRef] = {}
@@ -918,6 +943,8 @@ def _dynamic_reads(root: ASTNode) -> tuple[list[str] | None, list[str]]:
         elif isinstance(node, UnaryNode):
             stack.append(node.operand)
     return (arguments if dynamic else None), outside
+
+
 def running_extractor_version() -> str:
     """The version this install stamps into an IR it extracts (package metadata)."""
     from xl_marinade.core.new_arch.fast_extraction_pipeline import get_extractor_version

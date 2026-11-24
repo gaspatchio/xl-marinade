@@ -176,11 +176,13 @@ schema is a versioned public contract.
 - **`marinade calc`: a map field that no formula reads is an error.** A field aimed one
   cell off (at the label beside the input) was accepted, so every policy got the stored
   inputs' answer reported `ok` and nothing recorded that the field had no effect. It is
-  now an error naming the field and its cell. The id field is exempt (it may be written
-  into a display cell), and so are cells on sheets an `INDIRECT` text or an `OFFSET` can
-  reach, or that hold a cell read inside the arguments of those or of `CELL`, `INFO`
-  and `GETPIVOTDATA` (the formula graph has no edge for those reads). `run.json` gains
-  `inputs`: per field, the cell it sets and whether a requested output reads it.
+  now an error naming the field and its cell, but only when no formula can read it: a
+  reference covering the cell (an empty one included), a name holding a formula, or a
+  `CELL`, `INFO` or `GETPIVOTDATA` argument counts as a read, and a cell an `OFFSET`
+  or `INDIRECT` may land on, a name holding one may reach, or a 3-D reference may read
+  is accepted. The id field is exempt (it may be written into a display cell).
+  `run.json` gains `inputs`: per field, the cell it sets and whether a requested output
+  reads it (`true`, `false` or `"unknown"`).
 
 ## [0.8.0] - 2026-11-24
 
