@@ -38,6 +38,21 @@ pip install 'xl-marinade[calc]'
 
 You must give at least one of `--outputs` and `--variables`.
 
+### Targets
+
+Every place that names cells (`map.json` fields, `--outputs`, `vars.json`, and the
+output, sheet and selector entries of `check.json`) takes a cell (`Inputs!C3`), a range
+(`Proj!C11:C130`) or a defined name. Sheet names and defined names ignore case, as in
+Excel.
+
+A name can be defined for the whole workbook or for one sheet only (a sheet copied in
+from another workbook often brings its own). Write a sheet's own name as
+`'Sheet'!Name`. A bare name means the workbook's definition; when a sheet defines the
+same name too, a bare name is refused as ambiguous, and the error says how to write each.
+
+Inside formulas, names are read the way Excel reads them: a formula reads its own
+sheet's definition of a name first, and the workbook's only when the sheet has none.
+
 ### `map.json`
 
 ```json

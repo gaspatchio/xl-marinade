@@ -12,7 +12,7 @@ pytest.importorskip("ironcalc")
 
 from tests.calc.conftest import F  # noqa: E402
 from xl_marinade.calc.engine import Engine  # noqa: E402
-from xl_marinade.calc.graph import WorkbookGraph  # noqa: E402
+from xl_marinade.calc.graph import NameDef, WorkbookGraph  # noqa: E402
 from xl_marinade.calc.models import CellRef  # noqa: E402
 from xl_marinade.calc.probes import (  # noqa: E402
     PROBE_SHEET,
@@ -40,14 +40,16 @@ def _rc(a1: str) -> tuple[int, int]:
 
 
 class _Names:
+    """Names the formula's sheet owns, each over two areas (which cannot be lifted)."""
+
     def __init__(self, scoped: set[str]) -> None:
         self.scoped = scoped
 
-    def is_sheet_scoped_name(self, name: str) -> bool:
-        return name in self.scoped
-
-    def is_formula_name(self, name: str) -> bool:
-        return False
+    def lookup_name(self, ref: str, sheet: str | None) -> NameDef | None:
+        if ref not in self.scoped or sheet is None:
+            return None
+        rects = ((sheet, 1, 1, 1, 1), (sheet, 3, 1, 3, 1))
+        return NameDef(ref, sheet, "cells", (f"{sheet}!A1", f"{sheet}!A3"), rects)
 
 
 def _setup(

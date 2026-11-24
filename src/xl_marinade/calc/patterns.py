@@ -27,7 +27,7 @@ from xl_marinade.calc.formula_ast import (
     parse_formula,
     sign,
 )
-from xl_marinade.calc.graph import StoredValue, WorkbookGraph
+from xl_marinade.calc.graph import NameDef, StoredValue, WorkbookGraph
 from xl_marinade.calc.models import CellRef, Reason, ReasonKind, _col_to_number
 from xl_marinade.core.levels_cycles import detect_cycles
 from xl_marinade.core.parser import (
@@ -149,13 +149,10 @@ class _Scan:
 
     graph: WorkbookGraph
     as_of: date | None
-    names: dict[str, tuple[list[CellRef], frozenset[CellRef]]] = field(default_factory=dict)
+    names: dict[tuple[str, str], tuple[list[CellRef], frozenset[CellRef]]] = field(
+        default_factory=dict
+    )
     lookups: dict[tuple[str, str, Axis, frozenset[Order]], str | None] = field(default_factory=dict)
-
-
-def _name_candidates(ref: str) -> list[str]:
-    """``ref`` itself and, for ``Sheet!name``, the bare name."""
-    return list(dict.fromkeys([ref, ref.rpartition("!")[2]]))
 
 
 def _multi_cell(ref: str, default_sheet: str) -> bool:
@@ -166,18 +163,21 @@ def _multi_cell(ref: str, default_sheet: str) -> bool:
     return (r1, c1) != (r2, c2)
 
 
-def _named_cells(scan: _Scan, ref: str) -> tuple[list[CellRef], frozenset[CellRef]]:
-    """Cells of a defined name written as ``name`` or ``Sheet!name``; empty if not a name."""
-    hit = scan.names.get(ref)
+def _name_def(scan: _Scan, cell: CellRef, ref: str) -> NameDef | None:
+    """The definition ``ref`` reads in ``cell``'s formula; None if it is not a name."""
+    return scan.graph.lookup_name(ref, cell.sheet)
+
+
+def _named_cells(scan: _Scan, cell: CellRef, ref: str) -> tuple[list[CellRef], frozenset[CellRef]]:
+    """Cells of a defined name written as ``name`` or ``Sheet!name``, read from
+    ``cell``'s sheet as Excel does; empty if not a name over cells."""
+    key = (cell.sheet, ref)
+    hit = scan.names.get(key)
     if hit is not None:
         return hit
-    result: tuple[list[CellRef], frozenset[CellRef]] = ([], frozenset())
-    for candidate in _name_candidates(ref):
-        named = scan.graph.name_cells(candidate)
-        if named:
-            result = (named, frozenset(named))
-            break
-    scan.names[ref] = result
+    named = scan.graph.name_cells(ref, cell.sheet)
+    result = (named, frozenset(named))
+    scan.names[key] = result
     return result
 
 
@@ -217,7 +217,7 @@ def _contains(rect: _Rect, cell: CellRef) -> bool:
 
 def _refers_to_self(scan: _Scan, cell: CellRef, ref: str) -> bool:
     """True when the reference covers the formula's own cell (the IR drops self-edges)."""
-    if cell in _named_cells(scan, ref)[1]:
+    if cell in _named_cells(scan, cell, ref)[1]:
         return True
     parsed = _ref_rect(ref, cell.sheet)
     return parsed is not None and _contains(parsed[0], cell)
@@ -226,7 +226,7 @@ def _refers_to_self(scan: _Scan, cell: CellRef, ref: str) -> bool:
 def _table_cells(scan: _Scan, cell: CellRef, ref: str) -> tuple[_Rect, list[CellRef]] | None:
     """The table's bounding rectangle and the cells to read; None if not a plain range."""
     graph = scan.graph
-    named = _named_cells(scan, ref)[0]
+    named = _named_cells(scan, cell, ref)[0]
     if named:
         rows = [c.row for c in named]
         cols = [c.col for c in named]
@@ -329,16 +329,17 @@ def _formula_reasons(scan: _Scan, cell: CellRef, text: str) -> set[str]:
         if isinstance(node, RefNode):
             if _refers_to_self(scan, cell, node.ref):
                 found.add(CIRCULAR)
-            candidates = _name_candidates(node.ref)
-            if any(scan.graph.is_external_name(n) for n in candidates):
+            definition = _name_def(scan, cell, node.ref)
+            kind = definition.kind if definition is not None else None
+            if kind == "external":
                 # A name over another workbook's cells: the engine copy holds no cached
                 # value for it, so off the stored inputs it can only be wrong.
                 found.add(NOT_HELD)
-            elif any(scan.graph.is_formula_name(n) for n in candidates):
+            elif kind == "formula":
                 found.add(NAME_FORMULA)
             if exempt or scan.graph.is_array_formula(cell):
                 continue
-            named = _named_cells(scan, node.ref)[0]
+            named = _named_cells(scan, cell, node.ref)[0]
             if len(named) > 1:
                 found.add(IMPLICIT)
             elif not named and _multi_cell(node.ref, cell.sheet):

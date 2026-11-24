@@ -193,6 +193,14 @@ def _input_cell(graph: WorkbookGraph, target: str, what: str) -> CellRef:
     return cell
 
 
+def _sheet(graph: WorkbookGraph, name: str, what: str) -> str:
+    """The workbook's spelling of a sheet named in any case (Excel ignores case)."""
+    sheet = graph.sheet(name)
+    if sheet is None:
+        raise CalcInputError(f"unknown sheet {name!r} in {what}")
+    return sheet
+
+
 def _column(letters: str, what: str) -> int:
     if not _COLUMN.match(letters):
         raise CalcInputError(f"{what} {letters!r} is not a column letter")
@@ -378,8 +386,9 @@ def _check_against(
     Each set's readings are dropped once folded in, so memory does not grow with the
     number of sets (a mismatching set keeps only its path signature)."""
     graph = s.graph
+    results_sheet = _sheet(graph, check.results_sheet, "results.sheet")
     results = _id_rows(
-        graph, check.results_sheet, _column(check.id_column, "results.id_column"), check.first_row
+        graph, results_sheet, _column(check.id_column, "results.id_column"), check.first_row
     )
     outputs = {
         _single(graph, target, "check output"): _column(col, f"results column for {target}")
@@ -387,10 +396,13 @@ def _check_against(
     }
     table_rows: dict[str, int] = {}
     table_cols: dict[CellRef, int] = {}
-    table_sheet = check.table.sheet if check.table is not None else ""
+    table_sheet = ""
     if check.table is not None:
         t = check.table
-        table_rows = _id_rows(graph, t.sheet, _column(t.id_column, "table.id_column"), t.first_row)
+        table_sheet = _sheet(graph, t.sheet, "inputs.table.sheet")
+        table_rows = _id_rows(
+            graph, table_sheet, _column(t.id_column, "table.id_column"), t.first_row
+        )
         for name, letters in t.fields.items():
             if name not in s.inputs:
                 raise CalcInputError(f"check table field {name!r} is not in the input map")
@@ -417,7 +429,7 @@ def _check_against(
         reading = s.recalc()
         matched = True
         for cell, col in outputs.items():
-            stored = graph.stored(CellRef(check.results_sheet, row, col))
+            stored = graph.stored(CellRef(results_sheet, row, col))
             got = s.engine.value(cell)
             if same(stored, got, s.req.tolerance):
                 continue

@@ -7,6 +7,17 @@ schema is a versioned public contract.
 
 ## [Unreleased]
 
+### Fixed
+- **`marinade calc`: defined names are read the way Excel reads them.** A formula reads
+  its own sheet's definition of a name before the workbook's, so a sheet-scoped name
+  that shadows a workbook name (common in sheets copied from another workbook) no
+  longer feeds the wrong cells to the probes, the implicit-intersection and sortedness
+  scans, or an `OFFSET` base, which could leave a wrong value marked `ok`. Names and
+  sheet names ignore case everywhere, including `check.json` sheets and the sheet in
+  an `INDIRECT` text. A sheet's own name can be a target, written `'Sheet'!Name`; a
+  bare name that a sheet also defines is refused as ambiguous instead of silently
+  setting the workbook's cell.
+
 ## [0.8.0] - 2026-11-24
 
 Adds `marinade calc` and `marinade values`, both experimental. `calc` recalculates

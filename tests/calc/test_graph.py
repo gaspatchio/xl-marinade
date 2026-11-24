@@ -101,7 +101,8 @@ def test_resolve_target(graph: WorkbookGraph) -> None:
     with pytest.raises(CalcInputError):
         graph.resolve_target("Missing!A1")
     assert graph.name_cells("rate") == [A1]
-    assert not graph.is_sheet_scoped_name("rate")
+    found = graph.lookup_name("rate", "S")
+    assert found is not None and found.scope is None
 
 
 def test_allowed_values_and_flags(graph: WorkbookGraph) -> None:
@@ -169,9 +170,14 @@ def test_formula_names_and_array_cells(make_book: Book, ir_for: IrFor) -> None:
         names={"f": "TODAY()", "k": "0.05", "r": "S!$A$1:$A$2", "c": "S!$A:$A"},
     )
     g = WorkbookGraph.from_ir(ir_for(path))
-    assert g.is_formula_name("f") and g.is_formula_name("k")
-    assert not g.is_formula_name("r") and not g.is_formula_name("c")
-    assert not g.is_formula_name("missing")
+
+    def kind(name: str) -> str | None:
+        found = g.lookup_name(name, "S")
+        return found.kind if found is not None else None
+
+    assert kind("f") == "formula" and kind("k") == "formula"
+    assert kind("r") == "cells" and kind("c") == "cells"
+    assert kind("missing") is None
     assert g.is_array_formula(B1) and not g.is_array_formula(C1)
 
 
@@ -200,6 +206,7 @@ def test_name_over_external_range_is_not_cells(
     )
     book = add_external_link(base, tmp_path / "xn2.xlsx", "Src", {"A1": "1", "A2": "2"})
     g = WorkbookGraph.from_ir(ir_for(book))
-    assert g.is_external_name("Ext")
+    found = g.lookup_name("Ext", "S")
+    assert found is not None and found.kind == "external"
     assert g.name_cells("Ext") == []
-    assert not g.is_external_name("missing")
+    assert g.lookup_name("missing", "S") is None

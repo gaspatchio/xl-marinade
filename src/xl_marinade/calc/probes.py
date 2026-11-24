@@ -41,7 +41,7 @@ from xl_marinade.calc.formula_ast import (
     parse_formula,
     sign,
 )
-from xl_marinade.calc.graph import WorkbookGraph
+from xl_marinade.calc.graph import NameDef, WorkbookGraph
 from xl_marinade.calc.models import CellRef, _col_to_number
 from xl_marinade.core.parser import (
     ASTNode,
@@ -129,10 +129,15 @@ class Probe:
 
 @dataclass(slots=True)
 class ProbePlan:
-    """The probes to place, in order, and per cell the kinds that could not be placed."""
+    """The probes to place, in order, and per cell the kinds that could not be placed.
+
+    ``sheets`` maps each casefolded sheet name to the workbook's spelling, so the
+    sheet in an ``INDIRECT`` text is read as Excel reads it, in any case.
+    """
 
     probes: list[Probe]
     unplaced: dict[CellRef, list[ProbeKind]]
+    sheets: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -157,9 +162,7 @@ class ProbeReadings:
 class NameScopes(Protocol):
     """What :func:`anchor` needs to know about defined names."""
 
-    def is_sheet_scoped_name(self, name: str) -> bool: ...
-
-    def is_formula_name(self, name: str) -> bool: ...
+    def lookup_name(self, ref: str, sheet: str | None) -> NameDef | None: ...
 
 
 # -- near flips ----------------------------------------------------------------
@@ -246,16 +249,30 @@ def _anchor_ref(ref: str, sheet: str, names: NameScopes | None) -> str:
         name = m.group("a")
         if name.lower().startswith("_xlpm."):
             raise ValueError(f"cannot lift LET/LAMBDA parameter {name!r}")
-        if s1 is None and names is not None:
-            if names.is_sheet_scoped_name(name):
-                raise ValueError(f"cannot lift sheet-scoped name {name!r}")
-            if names.is_formula_name(name):
-                raise ValueError(f"cannot lift formula name {name!r}")
-        return ref
+        return _lift_name(ref, sheet, names)
     kind_b, b_abs = _end(b)
     if kind != kind_b or kind == "name" or (s2 is not None and s2 != prefix):
         raise ValueError(f"cannot lift reference {ref!r}")
     return f"{prefix}!{a}:{b_abs}"
+
+
+def _lift_name(ref: str, sheet: str, names: NameScopes | None) -> str:
+    """A defined name as the probe sheet must read it.
+
+    The probe sheet sees only the workbook's definitions, and the engine reads no
+    ``Sheet!Name``: a definition the formula's own sheet owns, or one written with a
+    sheet, is lifted as the reference it names.
+    """
+    found = names.lookup_name(ref, sheet) if names is not None else None
+    if found is None:
+        return ref
+    if found.kind != "cells":
+        raise ValueError(f"cannot lift formula name {ref!r}")
+    if found.scope is None and "!" not in ref:
+        return ref
+    if len(found.areas) != 1:
+        raise ValueError(f"cannot lift multi-area name {ref!r}")
+    return _anchor_ref(found.areas[0], sheet, None)
 
 
 def _const(value: object) -> str:
@@ -326,11 +343,14 @@ def anchor(node: ASTNode, sheet: str, *, names: NameScopes | None = None) -> str
 
     Unqualified references are qualified with ``sheet`` (quoted like
     :meth:`CellRef.a1`); every cell, column and row reference becomes absolute;
-    defined names stay names. ``INDIRECT`` text without a sheet is prefixed with
-    ``sheet`` at run time.
+    workbook-level names stay names. With ``names``, a name ``sheet`` owns, or one
+    written ``Sheet!Name``, becomes the reference it names (the probe sheet would
+    read the workbook's definition). ``INDIRECT`` text without a sheet is prefixed
+    with ``sheet`` at run time.
 
     Raises:
-        ValueError: for a sheet-scoped or formula name (when ``names`` is given), an
+        ValueError: for a formula name, or a multi-area name lifted as its reference
+            (when ``names`` is given), an
             array constant or unrecognised reference, ``LET``/``LAMBDA`` and friends,
             a bare ``ROW()``/``COLUMN()``/``SHEET()``, ``CELL`` without a reference,
             or R1C1-style ``INDIRECT``.
@@ -506,12 +526,16 @@ class _Planner:
         if m is None:
             raise ValueError(f"cannot lift reference {node.ref!r}")
         if _end(m.group("a"))[0] == "name" and m.group("b") is None:
-            named = self.graph.name_cells(m.group("a"))
-            if not named:
-                raise ValueError(f"name {node.ref!r} has no cells")
-            return named[0].sheet
+            found = self.graph.lookup_name(node.ref, self.cell.sheet)
+            sheets = {r[0] for r in found.rects} if found is not None else set()
+            if found is None or found.kind != "cells" or len(sheets) != 1:
+                raise ValueError(f"name {node.ref!r} is not cells on one sheet")
+            return sheets.pop()
         s1 = m.group("s1")
-        return _unquote(s1) if s1 is not None else self.cell.sheet
+        if s1 is None:
+            return self.cell.sheet
+        written = _unquote(s1)
+        return self.graph.sheet(written) or written
 
 
 def _unquote(sheet: str) -> str:
@@ -604,7 +628,9 @@ def plan_probes(graph: WorkbookGraph, cells: Iterable[CellRef], *, cap: int) -> 
         planner.family = graph.family(cell)
         planner.counters = {}
         planner.visit(root, False, graph.is_array_formula(cell))
-    return ProbePlan(planner.probes, planner.unplaced)
+    return ProbePlan(
+        planner.probes, planner.unplaced, {name.casefold(): name for name in graph.sheets()}
+    )
 
 
 # -- placing and reading -------------------------------------------------------
@@ -697,14 +723,15 @@ def _types_differ(probe: Probe, values: list[EngineValue]) -> bool:
     return a is not None and b is not None and a != b
 
 
-def _text_cells(text: EngineValue, sheet: str) -> list[CellRef] | None:
+def _text_cells(text: EngineValue, sheet: str, sheets: dict[str, str]) -> list[CellRef] | None:
     """Cells of an ``INDIRECT`` text address (A1 style); None when not a plain range."""
     if not isinstance(text, str) or _is_error(text):
         return None
     m = _TEXT_REF.match(text.strip())
     if m is None:
         return None
-    target = _unquote(m.group("sheet")) if m.group("sheet") else sheet
+    written = _unquote(m.group("sheet")) if m.group("sheet") else sheet
+    target = sheets.get(written.casefold(), written)
     r1, c1 = int(m.group("r1")), _col_to_number(m.group("c1"))
     r2 = int(m.group("r2")) if m.group("r2") else r1
     c2 = _col_to_number(m.group("c2")) if m.group("c2") else c1
@@ -715,10 +742,12 @@ def _rect(sheet: str, row: int, col: int, rows: int, cols: int) -> list[CellRef]
     return [CellRef(sheet, r, c) for r in range(row, row + rows) for c in range(col, col + cols)]
 
 
-def _dynamic_cells(probe: Probe, values: list[EngineValue]) -> list[CellRef] | None:
+def _dynamic_cells(
+    probe: Probe, values: list[EngineValue], sheets: dict[str, str]
+) -> list[CellRef] | None:
     """The cells a dynamic reference landed on; None when the reading is unusable."""
     if probe.meta["function"] == "INDIRECT":
-        return _text_cells(values[0], probe.meta["sheet"])
+        return _text_cells(values[0], probe.meta["sheet"], sheets)
     nums = [v for v in values if isinstance(v, float)]
     if len(nums) != 4 or nums[2] < 1 or nums[3] < 1:
         return None
@@ -787,7 +816,7 @@ def read_probes(engine: Engine, plan: ProbePlan) -> ProbeReadings:
             if _types_differ(probe, values):
                 readings.type_mismatch.add(probe.cell)
         else:
-            landed = _dynamic_cells(probe, values)
+            landed = _dynamic_cells(probe, values, plan.sheets)
             dynamic.setdefault(probe.cell, set()).update(landed or ())
             if landed is None:
                 readings.dynamic_unread.add(probe.cell)
