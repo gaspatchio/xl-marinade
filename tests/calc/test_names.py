@@ -91,9 +91,10 @@ def shadowed(make_book: Book) -> Path:
     return make_book("shadow", SHADOWED, names=SHADOWED_NAMES, local_names=SHADOWED_LOCAL)
 
 
-def test_branch_probe_reads_the_sheets_own_name(shadowed: Path, tmp_path: Path) -> None:
+def test_branch_on_a_sheets_own_name_is_never_ok(shadowed: Path, tmp_path: Path) -> None:
     # Calc!B1 reads Calc's Rate (Calc!A5). Stored 0.03: FALSE. Policy P sets 0.06: in
-    # Excel 0.06 > 0.05 is TRUE, an arm the stored inputs never took -> unverified_path.
+    # Excel 0.06 > 0.05 is TRUE. The probe sheet would read the workbook's Rate, and a
+    # name's stored reference may be relative, so the probe stays unplaced: never ok.
     res = _run(
         tmp_path,
         shadowed,
@@ -102,30 +103,29 @@ def test_branch_probe_reads_the_sheets_own_name(shadowed: Path, tmp_path: Path) 
         ["Calc!B1"],
     )
     got = _results(res)
+    for pid in ("P", "S"):
+        row = got[(pid, "Calc!B1")]
+        assert row["status"] == "uncertain"
+        assert "not_checked_path@Calc!B1" in row["reasons"]
     assert got[("P", "Calc!B1")]["value"] == "200.0"
-    assert got[("P", "Calc!B1")]["status"] == "unverified_path"
-    assert (got[("S", "Calc!B1")]["value"], got[("S", "Calc!B1")]["status"]) == ("100.0", "ok")
-    assert ("P", "Calc!B1", "TRUE", "false") in _paths(res)
-    assert ("S", "Calc!B1", "FALSE", "true") in _paths(res)
 
 
-def test_anchor_lifts_a_sheets_own_name_as_its_reference(shadowed: Path, ir_for: IrFor) -> None:
+def test_anchor_leaves_a_sheets_own_name_unplaced(shadowed: Path, ir_for: IrFor) -> None:
     g = WorkbookGraph.from_ir(ir_for(shadowed))
 
     def lift(text: str, sheet: str) -> str:
         return anchor(FormulaParser().parse(text), sheet, names=g)  # type: ignore[arg-type]
 
-    # The probe sheet sees only workbook names, and the engine reads no ``Sheet!Name``:
-    # a sheet's own name is written as the cells it names.
-    assert lift("Rate>0.05", "Calc") == "Calc!$A$5>0.05"
-    assert lift("rate>0.05", "Calc") == "Calc!$A$5>0.05"
+    # The probe sheet sees only workbook names, and the engine reads no Sheet!Name.
     assert lift("Rate>0.05", "Other") == "Rate>0.05"
-    assert lift("Calc!Rate>0.05", "Inputs") == "Calc!$A$5>0.05"
+    for text, sheet in [("Rate>0.05", "Calc"), ("rate>0.05", "Calc"), ("Calc!Rate>0.05", "In")]:
+        with pytest.raises(ValueError, match="sheet-scoped"):
+            lift(text, sheet)
 
 
 def test_offset_base_on_a_sheets_own_name(make_book: Book, tmp_path: Path) -> None:
-    # On Calc, Base is Calc!A1. OFFSET(Base,1,0) lands on Calc!A2, a formula with no
-    # stored value, which the trust run cannot check -> refused. Other!A2 is a constant.
+    # On Calc, Base is Calc!A1; OFFSET(Base,1,0) lands on Calc!A2 (Excel 3). The base
+    # cannot be lifted onto the probe sheet, so the reference is never followed: refused.
     book = make_book(
         "offset",
         {
@@ -138,9 +138,9 @@ def test_offset_base_on_a_sheets_own_name(make_book: Book, tmp_path: Path) -> No
     )
     res = _run(tmp_path, book, "id,n\nP,1\nS,0\n", {"n": "Inputs!B1"}, ["Calc!C6"])
     got = _results(res)
-    assert got[("P", "Calc!C6")]["status"] == "refused"
-    assert "Calc!A2" in got[("P", "Calc!C6")]["reasons"]
-    assert (got[("S", "Calc!C6")]["value"], got[("S", "Calc!C6")]["status"]) == ("5.0", "ok")
+    for pid in ("P", "S"):
+        assert got[(pid, "Calc!C6")]["status"] == "refused"
+        assert "dynamic reference not checked" in got[(pid, "Calc!C6")]["reasons"]
 
 
 def test_scans_read_the_sheets_own_name(make_book: Book, ir_for: IrFor) -> None:
@@ -472,3 +472,61 @@ def test_one_sheet_unions_and_multi_sheet_outputs_still_resolve(
     res = _run(tmp_path, unions, "id,x\nP,3\n", {"x": "In!A1"}, ["Both"])
     values_by_cell = {out: r["value"] for (_p, out), r in _results(res).items()}
     assert values_by_cell == {"P1!A1": "30.0", "P1!A2": "60.0", "P2!A1": "90.0", "P2!A2": "120.0"}
+
+
+# -- names whose reference is relative ------------------------------------------
+
+RELATIVE = "name with a relative reference: Left"
+
+
+@pytest.mark.parametrize("scope", ["sheet", "workbook"])
+def test_a_relative_name_in_a_formula_is_refused(
+    make_book: Book, tmp_path: Path, scope: str
+) -> None:
+    # Left is stored relative to A1 as Calc!XFD1: one column left of the cell using it.
+    # Excel: at Calc!C5, Left is Calc!B5. P sets x = 10, so B5 = 10 > 5 and C5 = 100;
+    # IronCalc reads Calc!XFD1 (empty) and gives 200. Refused for every policy.
+    sheets: dict[str, dict[str, object]] = {
+        "In": {"B1": 1},
+        "Calc": {"B5": F("=In!B1", 1), "C5": F("=IF(Left>5,100,200)", 200)},
+    }
+    where = {"names": {"Left": "Calc!XFD1"}}
+    if scope == "sheet":
+        where = {"local_names": {("Calc", "Left"): "Calc!XFD1"}}
+    book = make_book(f"rel_{scope}", sheets, **where)
+    res = _run(tmp_path, book, "id,x\nP,10\nS,1\n", {"x": "In!B1"}, ["Calc!C5"])
+    got = _results(res)
+    for pid in ("P", "S"):
+        assert got[(pid, "Calc!C5")]["status"] == "refused"
+        assert f"refused_pattern@Calc!C5:{RELATIVE}" in got[(pid, "Calc!C5")]["reasons"]
+
+
+def test_a_relative_name_as_a_target_is_refused(make_book: Book, tmp_path: Path) -> None:
+    book = make_book(
+        "rel_target",
+        {"In": {"B1": 1}, "Calc": {"B5": F("=In!B1*2", 2)}},
+        names={"Here": "Calc!B5", "Fixed": "Calc!$B$5"},
+    )
+    res = _run(tmp_path, book, "id,x\nP,3\n", {"x": "In!B1"}, ["Fixed"])
+    assert _results(res)[("P", "Calc!B5")]["value"] == "6.0"
+    with pytest.raises(CalcInputError, match="'Here' has a relative reference"):
+        _run(tmp_path, book, "id,x\nP,3\n", {"x": "In!B1"}, ["Here"])
+
+
+def test_a_relative_name_as_a_list_source_is_refused(make_book: Book, tmp_path: Path) -> None:
+    # The list Opts is Lists!A1:A2 written without $, so its cells depend on the cell
+    # validated: Excel's list for In!B1 is not knowable from the stored reference.
+    book = make_book(
+        "rel_dv",
+        {
+            "In": {"B1": "a"},
+            "Lists": {"A1": "a", "A2": "b"},
+            "Calc": {"B1": F('=In!B1&"!"', "a!")},
+        },
+        names={"Opts": "Lists!A1:A2"},
+        list_sources=[("In!B1", "Opts")],
+    )
+    res = _run(tmp_path, book, "id,x\nP,b\n", {"x": "In!B1"}, ["Calc!B1"])
+    row = _results(res)[("P", "Calc!B1")]
+    assert row["status"] == "refused"
+    assert "refused_pattern@In!B1:name with a relative reference: Opts" in row["reasons"]

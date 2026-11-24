@@ -17,6 +17,11 @@ schema is a versioned public contract.
   an `INDIRECT` text. A sheet's own name can be a target, written `'Sheet'!Name`; a
   bare name that a sheet also defines is refused as ambiguous instead of silently
   setting the workbook's cell.
+- **`marinade calc`: names with a relative reference are refused.** A defined name
+  written without `$` (such as `Calc!B5`) names different cells from each cell that
+  uses it; IronCalc reads the stored reference as it is, so such a formula could come
+  back `ok` with the wrong value. It is now a refused pattern (`name with a relative
+  reference: <Name>`), and such a name is refused as a target or dropdown list.
 - **`marinade calc` / `marinade values`: targets that cover no cells are errors.** An
   output, variable range or map field naming a defined name that holds a formula
   (`OFFSET` dynamic ranges included), a constant, a broken reference or another

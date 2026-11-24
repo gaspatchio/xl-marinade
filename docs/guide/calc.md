@@ -57,6 +57,10 @@ ranges included), a constant, a broken reference (`#REF!`) or cells in another w
 and a whole column or row outside the range the sheet uses. Give such a target as a
 plain range instead.
 
+A name whose reference is relative (written without `$` on its row or column, such as
+`Calc!B5` or `Calc!$B5`) names different cells from each cell that uses it, so it is
+refused as a target too.
+
 Inside formulas, names are read the way Excel reads them: a formula reads its own
 sheet's definition of a name first, and the workbook's only when the sheet has none.
 
@@ -304,6 +308,7 @@ the next. They are refused even when the trust run reproduces them. The `detail`
 | `implicit intersection on multi-cell name` | A single-cell use of a defined name that covers several cells (a name over a whole column or row always does). |
 | `implicit intersection on multi-cell range` | A multi-cell range used outside a function argument. Ranges inside `SUMPRODUCT`, `MMULT` and similar are fine. |
 | `name holds a formula` | A formula reads a defined name whose definition is a formula or a constant rather than cells (the detail text says "formula" for both). IronCalc 0.9.1 rejects such names. |
+| `name with a relative reference: <Name>` | A formula reads a defined name whose reference is relative (no `$` on its row or column). Excel reads it relative to the cell using it; IronCalc 0.9.1 reads the stored reference as it is. Also put on a mapped input whose dropdown list is such a name, which refuses everything that input feeds. |
 | `RAND`, `RANDBETWEEN`, `RANDARRAY` | Always. |
 | `TODAY`, `NOW` | Unless `--as-of YYYY-MM-DD` is given; then they are replaced by that date. |
 | `circular reference` | Always (iterative calculation is noted in the report, not honoured). |

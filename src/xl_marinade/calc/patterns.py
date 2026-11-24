@@ -51,6 +51,7 @@ DATA_TABLE = "data table"
 UNPARSEABLE = "unparseable formula"
 NOT_HELD = "external reference not held"
 INPUT_KEYS = "approximate lookup on input-dependent keys"
+RELATIVE_NAME = "name with a relative reference"
 
 _MAX_ROW = 1_048_576
 _MAX_COL = 16_384
@@ -344,6 +345,9 @@ def _formula_reasons(scan: _Scan, cell: CellRef, text: str) -> set[str]:
                 found.add(NOT_HELD)
             elif kind == "formula":
                 found.add(NAME_FORMULA)
+            if definition is not None and definition.relative:
+                # Excel reads it relative to this cell; the engine reads the stored text.
+                found.add(f"{RELATIVE_NAME}: {definition.name}")
             if exempt or scan.graph.is_array_formula(cell):
                 continue
             if definition is not None:

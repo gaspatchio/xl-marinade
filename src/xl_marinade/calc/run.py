@@ -48,7 +48,12 @@ from xl_marinade.calc.output import (
     write_run,
     write_trust_report,
 )
-from xl_marinade.calc.patterns import NOT_HELD, input_dependent_lookups, scan_patterns
+from xl_marinade.calc.patterns import (
+    NOT_HELD,
+    RELATIVE_NAME,
+    input_dependent_lookups,
+    scan_patterns,
+)
 from xl_marinade.calc.prepare import PreparedCopy, count_external_refs, prepare_engine_copy
 from xl_marinade.calc.probes import (
     ProbeKind,
@@ -645,6 +650,7 @@ def calc(req: CalcRequest) -> CalcResult:
                 scan_patterns(graph, as_of=req.as_of, data_table_cells=prepared.data_table_cells),
             ),
             input_dependent_lookups(graph, set(inputs.values())),
+            _relative_lists(graph, inputs),
         )
         with quiet_native_output():
             engine = Engine.load(prepared.path)
@@ -711,6 +717,20 @@ def calc(req: CalcRequest) -> CalcResult:
         out / "paths.csv",
         out / "run.json",
     )
+
+
+def _relative_lists(
+    graph: WorkbookGraph, inputs: dict[str, CellRef]
+) -> dict[CellRef, list[Reason]]:
+    """A ``refused_pattern`` on each mapped input whose dropdown list is a name with a
+    relative reference: Excel's list depends on the cell validated, so it is unknown."""
+    out: dict[CellRef, list[Reason]] = {}
+    for cell in sorted(set(inputs.values())):
+        found = graph.list_source_name(cell)
+        if found is not None and found.relative:
+            detail = f"{RELATIVE_NAME}: {found.name}"
+            out[cell] = [Reason(ReasonKind.refused_pattern, cell, detail)]
+    return out
 
 
 def _merge_patterns(

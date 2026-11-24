@@ -9,12 +9,13 @@ import sqlite3
 from bisect import bisect_left
 from collections import defaultdict, deque
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 
 from xl_marinade.calc.formula_ast import NAME, SHEET
 from xl_marinade.calc.models import CellRef, _col_to_number
+from xl_marinade.calc.prepare import relative_names
 from xl_marinade.core.db_uri import connect_read_only
 from xl_marinade.errors import CalcInputError
 
@@ -54,7 +55,8 @@ class NameDef:
     another workbook, and ``formula`` for a formula, a constant or a broken
     reference. ``areas`` is the IR's destination text, one entry per area;
     ``rects`` the areas this graph can read as cells, a whole column or row cut to
-    its sheet's used range (``whole`` is then True).
+    its sheet's used range (``whole`` is then True). ``relative`` marks a reference
+    written without ``$``: Excel reads it relative to the cell that uses the name.
     """
 
     name: str
@@ -63,6 +65,7 @@ class NameDef:
     areas: tuple[str, ...]
     rects: tuple[_Rect, ...]
     whole: bool = False
+    relative: bool = False
 
 
 def _unquote(sheet: str) -> str:
@@ -297,6 +300,17 @@ class WorkbookGraph:
             return None
         return (sheet, r1, c1, r2, c2)
 
+    def mark_relative(self, names: Iterable[tuple[str | None, str]]) -> None:
+        """Flag the definitions whose reference is relative, given as (owning sheet or
+        None, name); the IR stores destinations without ``$``, so the caller reads
+        them from the workbook."""
+        for owner, name in names:
+            sheet = (self.sheet(owner) or owner) if owner is not None else None
+            key = (sheet, name.casefold())
+            found = self._names.get(key)
+            if found is not None:
+                self._names[key] = replace(found, relative=True)
+
     # -- basic lookups ---------------------------------------------------
 
     def sheets(self) -> list[str]:
@@ -519,6 +533,11 @@ class WorkbookGraph:
                 outside the range its sheet uses.
         """
         name = found.name
+        if found.relative:
+            raise CalcInputError(
+                f"target {target!r}: name {name!r} has a relative reference (it names "
+                "different cells from each cell that uses it); give the cells instead"
+            )
         if found.kind == "external":
             raise CalcInputError(
                 f"target {target!r}: name {name!r} points into another workbook; "
@@ -580,9 +599,23 @@ class WorkbookGraph:
             clipped = self._clip((self.sheet(written) or written, r1, c1, r2, c2))
             return [clipped] if clipped is not None else []
         found = self.lookup_name(text, sheet)
-        if found is None or found.kind != "cells":
+        if found is None or found.kind != "cells" or found.relative:
             return None
         return list(found.rects)
+
+    def list_source_name(self, cell: CellRef) -> NameDef | None:
+        """The defined name a cell's list validation takes its items from, if any."""
+        for rects, literals, f1, sheet in self._validations:
+            if literals is not None or not any(
+                r[0] == cell.sheet and r[1] <= cell.row <= r[3] and r[2] <= cell.col <= r[4]
+                for r in rects
+            ):
+                continue
+            text = str(f1 or "").strip().removeprefix("=").strip()
+            found = self.lookup_name(text, sheet)
+            if found is not None:
+                return found
+        return None
 
 
 def open_graph(workbook: Path, ir: Path | None, tmp: Path) -> WorkbookGraph:
@@ -603,8 +636,10 @@ def open_graph(workbook: Path, ir: Path | None, tmp: Path) -> WorkbookGraph:
             raise CalcInputError(f"cannot read {workbook}: {exc}") from exc
         if digest != graph.workbook_sha256:
             raise CalcInputError(f"IR {ir} does not match workbook {workbook} (sha256 differs)")
-        return graph
-    from xl_marinade.core.api import extract
+    else:
+        from xl_marinade.core.api import extract
 
-    tmp.mkdir(parents=True, exist_ok=True)
-    return WorkbookGraph.from_ir(extract(workbook, tmp / "ir.db"))
+        tmp.mkdir(parents=True, exist_ok=True)
+        graph = WorkbookGraph.from_ir(extract(workbook, tmp / "ir.db"))
+    graph.mark_relative(relative_names(workbook))
+    return graph

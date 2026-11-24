@@ -226,3 +226,33 @@ def test_prepare_external_in_defined_name(make_book, tmp_path):
     eng = Engine.load(copy.path)
     eng.evaluate()
     assert eng.value(CellRef("S", 1, 1)) == "#NAME?"  # constant-valued name: unsupported
+
+
+@pytest.mark.parametrize(
+    ("text", "relative"),
+    [
+        ("Calc!$A$1", False),
+        ("Calc!XFD1", True),
+        ("Calc!$B1", True),
+        ("Calc!B$1", True),
+        ("Calc!$A$1:B2", True),
+        ("Calc!$A$1:$B$2", False),
+        ("Calc!$B:$B", False),
+        ("Calc!B:B", True),
+        ("Calc!$1:$3", False),
+        ("Calc!1:3", True),
+        ("P1!$A$1:$A$2,P2!$A$1:$A$2", False),
+        ("OFFSET(Calc!$B$1,0,0,In!$A$1,1)", False),
+        ("OFFSET(Calc!$B$1,0,0,In!A1,1)", True),
+        ("Q1!$A$1", False),
+        ("'Q1 B2'!$A$1", False),
+        ('"A1"&$B$2', False),
+        ("LOG10($A$1)", False),
+        ("0.05", False),
+        ("#REF!", False),
+    ],
+)
+def test_has_relative_reference(text: str, relative: bool) -> None:
+    from xl_marinade.calc.prepare import has_relative_reference
+
+    assert has_relative_reference(text) is relative

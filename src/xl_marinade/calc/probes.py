@@ -259,20 +259,21 @@ def _anchor_ref(ref: str, sheet: str, names: NameScopes | None) -> str:
 def _lift_name(ref: str, sheet: str, names: NameScopes | None) -> str:
     """A defined name as the probe sheet must read it.
 
-    The probe sheet sees only the workbook's definitions, and the engine reads no
-    ``Sheet!Name``: a definition the formula's own sheet owns, or one written with a
-    sheet, is lifted as the reference it names.
+    Only a workbook-level name written bare can be lifted as it is. The probe sheet
+    would read the workbook's definition of a name the formula's own sheet defines, the
+    engine reads no ``Sheet!Name``, and a name's reference may be relative to the cell
+    that uses it (the IR keeps no ``$``), so none of those is lifted.
     """
     found = names.lookup_name(ref, sheet) if names is not None else None
     if found is None:
         return ref
     if found.kind != "cells":
         raise ValueError(f"cannot lift formula name {ref!r}")
-    if found.scope is None and "!" not in ref:
-        return ref
-    if len(found.areas) != 1:
-        raise ValueError(f"cannot lift multi-area name {ref!r}")
-    return _anchor_ref(found.areas[0], sheet, None)
+    if found.relative:
+        raise ValueError(f"cannot lift name with a relative reference {ref!r}")
+    if found.scope is not None or "!" in ref:
+        raise ValueError(f"cannot lift sheet-scoped name {ref!r}")
+    return ref
 
 
 def _const(value: object) -> str:
@@ -343,17 +344,15 @@ def anchor(node: ASTNode, sheet: str, *, names: NameScopes | None = None) -> str
 
     Unqualified references are qualified with ``sheet`` (quoted like
     :meth:`CellRef.a1`); every cell, column and row reference becomes absolute;
-    workbook-level names stay names. With ``names``, a name ``sheet`` owns, or one
-    written ``Sheet!Name``, becomes the reference it names (the probe sheet would
-    read the workbook's definition). ``INDIRECT`` text without a sheet is prefixed
+    workbook-level names stay names. ``INDIRECT`` text without a sheet is prefixed
     with ``sheet`` at run time.
 
     Raises:
-        ValueError: for a formula name, or a multi-area name lifted as its reference
-            (when ``names`` is given), an
-            array constant or unrecognised reference, ``LET``/``LAMBDA`` and friends,
-            a bare ``ROW()``/``COLUMN()``/``SHEET()``, ``CELL`` without a reference,
-            or R1C1-style ``INDIRECT``.
+        ValueError: (when ``names`` is given) for a formula name, a name with a
+            relative reference, a name ``sheet`` defines for itself, or a name written
+            ``Sheet!Name``; and for an array constant or unrecognised reference,
+            ``LET``/``LAMBDA`` and friends, a bare ``ROW()``/``COLUMN()``/``SHEET()``,
+            ``CELL`` without a reference, or R1C1-style ``INDIRECT``.
     """
     return _emit(node, sheet, names)
 
