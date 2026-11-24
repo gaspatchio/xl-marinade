@@ -337,3 +337,51 @@ def test_an_input_beside_a_spill_is_not_spill_growth(make_book: Book, tmp_path: 
     row = _rows(res)[("P", "Calc!C1")]
     assert row["value"] == "14.0"
     assert row["status"] == "ok", row
+
+
+def test_a_failing_anchor_refuses_its_other_cells(make_book: Book, tmp_path: Path) -> None:
+    # D1:D3 = {MATCH(Inputs!A1:A3, Keys!A1:A3, 1)} over keys 10, 20, 30 with inputs 15,
+    # "x", 25: Excel {1; #N/A; 2}. IronCalc 0.9.1 gives #N/A in D1, so the anchor fails
+    # the trust run, and D2 (whose own value matches) carries that failure.
+    book = make_book(
+        "anchorfail",
+        {
+            "Inputs": {"A1": 15, "A2": "x", "A3": 25},
+            "Keys": {"A1": 10, "A2": 20, "A3": 30},
+            "Calc": {"D1": F("=MATCH(Inputs!A1:A3,Keys!A1:A3,1)", 1), "D2": 0, "D3": 0, "Z1": 1},
+        },
+    )
+    spec = ("D1", "D1:D3", "MATCH(Inputs!A1:A3,Keys!A1:A3,1)", {"D2": "#N/A", "D3": 2.0}, False)
+    book = _arrays(book, "xl/worksheets/sheet3.xml", [spec])
+    res = _run(tmp_path, book, "id,z\nP,1\n", {"z": "Calc!Z1"}, ["Calc!D2"])
+    row = _rows(res)[("P", "Calc!D2")]
+    assert row["status"] == "refused", row
+    assert "@Calc!D1:stored 1.0" in row["reasons"], row
+
+
+def test_an_indirect_landing_inside_an_array_is_not_ok(make_book: Book, tmp_path: Path) -> None:
+    # K1:K3 = {IF(x>5, C1:C3*2, C1:C3)} over C = 1, 2, 3; E1 = INDIRECT("K"&k). Stored
+    # k = 1, x = 1: 1. Policy k = 2, x = 9: K2 = 4, from an IF no probe can check.
+    book = make_book(
+        "land_in_array",
+        {
+            "Inputs": {"B1": 1, "B2": 1},
+            "Calc": {
+                "C1": 1,
+                "C2": 2,
+                "C3": 3,
+                "K1": F("=IF(Inputs!$B$2>5,Calc!C1:C3*2,Calc!C1:C3)", 1),
+                "K2": 0,
+                "K3": 0,
+                "E1": F('=INDIRECT("K"&Inputs!$B$1)', 1),
+            },
+        },
+    )
+    formula = "IF(Inputs!$B$2&gt;5,Calc!C1:C3*2,Calc!C1:C3)"
+    book = _arrays(
+        book, "xl/worksheets/sheet2.xml", [("K1", "K1:K3", formula, {"K2": 2.0, "K3": 3.0}, False)]
+    )
+    res = _run(tmp_path, book, "id,k,x\nP,2,9\n", {"k": "Inputs!B1", "x": "Inputs!B2"}, ["Calc!E1"])
+    row = _rows(res)[("P", "Calc!E1")]
+    assert row["value"] == "4.0"
+    assert row["status"] != "ok", row

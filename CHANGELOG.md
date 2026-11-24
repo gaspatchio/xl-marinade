@@ -107,8 +107,8 @@ schema is a versioned public contract.
   range ends and landing cells.** Three gaps let a value come back `ok` where Excel
   computes another. The cells deciding where an `OFFSET` or `INDIRECT` points (rows,
   columns, height, width, the address text) were not precedents, so a failure or an
-  untried branch there never reached the output. A range ending in a call
-  (`SUM(C5:OFFSET(C5,Term-1,0))`, `B1:INDIRECT(…)`, `A1:INDEX(…)`) was read as a
+  untried branch there never reached the output. A range ending in an `OFFSET` or
+  `INDIRECT` call (`SUM(C5:OFFSET(C5,Term-1,0))`, `B1:INDIRECT(…)`) was read as a
   function named `C5:OFFSET` and never followed. And the cells a policy landed on away
   from the stored inputs' landing cell were never probed, so their branches, lookups
   and roundings went unchecked unless those cells were requested too, which made asking

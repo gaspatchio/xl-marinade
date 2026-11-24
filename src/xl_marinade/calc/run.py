@@ -938,7 +938,7 @@ def _relative_lists(
 def _landing_region(
     graph: WorkbookGraph, planned: set[CellRef], patterns: dict[CellRef, list[Reason]]
 ) -> list[CellRef]:
-    """Formula cells to probe because a dynamic reference may land on them (ruling D1):
+    """Formula cells to probe because a dynamic reference may land on them:
     every formula cell on a sheet an ``OFFSET``, a built range or an ``INDIRECT`` with a
     literal sheet reaches from the planned cells, and everything upstream of those, to
     a fixed point. Probing them lets the trust run and ``--check-against`` exercise
