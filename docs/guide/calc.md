@@ -124,7 +124,8 @@ checked points, 100% came back `ok`, and all of them were correct.
 1. Read the workbook's calculation settings. 1904 dates, precision as displayed or a
    Strict Open XML file refuse the whole workbook (exit code 6).
 2. Extract the formula graph into a temporary database, or reuse `--ir` if it matches the
-   workbook.
+   workbook. Give `--ir` a database extracted with 0.8.1 or later: earlier ones trimmed
+   formulas' text results and dropped `""` results, which the trust run then fails.
 3. Scan the formulas for [refused patterns](#refused-patterns).
 4. Load a copy with every formula's stored value deleted, so the engine has to compute.
    The **trust run** compares each formula cell with what Excel stored, within

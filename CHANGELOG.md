@@ -7,6 +7,31 @@ schema is a versioned public contract.
 
 ## [Unreleased]
 
+### Fixed
+- **A formula's text result is stored exactly as Excel saved it.** The
+  extractor trimmed leading and trailing whitespace (spaces, tabs, line
+  breaks) from every cached value, and stored nothing for a formula whose
+  result is the empty string. So `="  "&"Total"` was stored as `Total`, and a
+  projection that blanks periods beyond term with `=IF(t>Term,"",x)` had no
+  stored value in those cells. Text results (`<c t="str">`) are now kept
+  as cached, and `""` is stored as a value. Numeric, boolean and error caches
+  are read as before, and constants (shared and inline strings) were never
+  trimmed. Who sees a difference: `agent_cells.value` and the value blobs of
+  those cells; the label-scan context of bindings next to them, which records
+  neighbouring values; documentation that prints sample values; `marinade
+  values`, which returned the trimmed text; and `marinade calc`, whose trust
+  run failed those cells (`silently_wrong` for edge whitespace,
+  `no_stored_value` for a whitespace-only or `""` result) and refused every
+  output downstream of them. The output schema is unchanged at 3.0.
+  Re-extract a workbook to pick this up, and pass `marinade calc --ir` only a
+  database extracted with this version. `marinade diff` between a database
+  extracted before this fix and one extracted after reports `VALUE_CHANGED`
+  on text results with edge whitespace; a `""` result that was missing
+  before counts as a recalculation gap and is not reported, like any other
+  cached value that appears on an unchanged formula. `marinade diff` also
+  now treats a stored `""` as a value, not as a missing one, so `""`
+  turning into text on an unchanged formula is reported as `VALUE_CHANGED`.
+
 ## [0.8.0] - 2026-11-24
 
 Adds `marinade calc` and `marinade values`, both experimental. `calc` recalculates
