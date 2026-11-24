@@ -147,9 +147,10 @@ schema is a versioned public contract.
   dates such as `30/06/2024` or `30-Jun-2024`, times, other scripts' digits), a leading
   apostrophe, error values and numbers outside Excel's range (`1e-400` used to become
   0) are now errors that name the policy and field, on empty and number cells, and so
-  is `1_000` on a number cell. ISO dates before 1900-03-01 are refused: their serial was
-  one too high (a 1900-01-01 placeholder date became 2), and Excel has no dates before
-  1900.
+  is `1_000` on a number cell. On a text cell a leading apostrophe is dropped, as
+  Excel's entry prefix (`'123` sets the text `123`). ISO dates before 1900-03-01 are
+  refused: their serial was one too high (a 1900-01-01 placeholder date became 2), and
+  Excel has no dates before 1900.
   `--check-against` table values keep their stored type: a stored `TRUE` was set as
   the text `"TRUE"`, which made a false mismatch and refused the output.
 - **`marinade values`: the stored row is labelled with the default id field.** With
@@ -177,10 +178,11 @@ schema is a versioned public contract.
   cell off (at the label beside the input) was accepted, so every policy got the stored
   inputs' answer reported `ok` and nothing recorded that the field had no effect. It is
   now an error naming the field and its cell, but only when no formula can read it: a
-  reference covering the cell (an empty one included), a name holding a formula, or a
-  `CELL`, `INFO` or `GETPIVOTDATA` argument counts as a read, and a cell an `OFFSET`
-  or `INDIRECT` may land on, a name holding one may reach, or a 3-D reference may read
-  is accepted. The id field is exempt (it may be written into a display cell).
+  reference covering the cell (an empty one included), a defined name in any form Excel
+  resolves (`'Sheet'!Name` included), a name holding a formula, or a `CELL`, `INFO` or
+  `GETPIVOTDATA` argument counts as a read, and a cell an `OFFSET` or `INDIRECT` may
+  land on, a name holding one may reach, or a 3-D reference may read is accepted. The
+  id field is exempt (it may be written into a display cell).
   `run.json` gains `inputs`: per field, the cell it sets and whether a requested output
   reads it (`true`, `false` or `"unknown"`).
 

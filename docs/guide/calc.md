@@ -90,11 +90,13 @@ A field that no formula can read is an error too: its value would change nothing
 every policy would get the stored inputs' answer as `ok` (a map one cell off, on the
 label beside the input, is the usual cause). A field counts as read when any formula's
 cell or range reference covers its cell, an empty one included, or when a formula reads
-it through a name holding a formula or inside `CELL`, `INFO` or `GETPIVOTDATA`. A field
-is refused only when no read can reach it: where a read cannot be placed (an `OFFSET` or
-`INDIRECT` landing beyond the cell it lands on with the stored inputs, a name holding
-`OFFSET` or `INDIRECT`, a 3-D reference such as `S1:S3!B1`), every cell it may reach is
-accepted. The id field is never refused, since it may be written into a display cell. A
+it through a defined name in any form Excel resolves (`Name`, a sheet's own name,
+`'Sheet'!Name`), through a name holding a formula, or inside `CELL`, `INFO` or
+`GETPIVOTDATA`. A field is refused only when no read can reach it: where a read cannot be
+placed (an `OFFSET` or `INDIRECT` landing beyond the cell it lands on with the stored
+inputs, a name holding `OFFSET` or `INDIRECT`, a name with a relative reference, a
+`Sheet!Name` calc cannot resolve, a 3-D reference such as `S1:S3!B1`), every cell it may
+reach is accepted. The id field is never refused, since it may be written into a display cell. A
 field read only by outputs you did not request is accepted. `run.json` records, under
 `inputs`, the cell each field sets and whether a requested output reads it.
 
@@ -107,7 +109,8 @@ the value the cell holds:
 - A number cell takes a plain decimal (`40`, `-1.5`, `.5`, `4e1`, `0042`) or an ISO date
   (`2024-06-30`), which becomes its Excel serial (45473).
 - A boolean cell takes `TRUE` or `FALSE`, in any case.
-- A text cell takes the text as written, even when it looks like a number.
+- A text cell takes the text as written, even when it looks like a number, less one
+  leading apostrophe: Excel's entry prefix, so `'123` sets the text `123`.
 - A cell the workbook saved empty takes an ISO date as its serial, `TRUE`/`FALSE` (any
   case) as a boolean and a plain decimal as a number; any other text stays text.
 
@@ -118,8 +121,8 @@ what is wrong, rather than a guess:
   `$100`, `(100)`, `4 000`, digits other than 0-9 (`٤٠`, `１２３`), fractions (`1 1/2`),
   times and date-times (`12:30`, `3:2`, `2024-06-30T12:00`), and dates not written
   `YYYY-MM-DD`. Give a plain decimal or an ISO date instead;
-- a leading apostrophe (`'123`): Excel drops it and keeps the rest as text, so give
-  the value without it;
+- a leading apostrophe (`'123`): Excel makes the rest text, which a number or empty
+  cell would not hold as calc reads it, so give the value without it;
 - error values such as `#N/A`;
 - numbers outside the range Excel accepts (`1e-400`, `1e400`);
 - ISO dates before 1900-03-01. Excel's 1900 date system counts a 29 February 1900 that

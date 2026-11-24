@@ -805,10 +805,13 @@ def test_a_leading_apostrophe_is_refused_by_name(stored: float | None) -> None:
         coerce_input("'123", stored)
 
 
-def test_a_leading_apostrophe_stays_on_a_text_target() -> None:
+def test_a_leading_apostrophe_is_dropped_on_a_text_target() -> None:
+    # Excel's entry prefix: '123 typed into a cell holds the text 123.
     from xl_marinade.calc.run import coerce_input
 
-    assert coerce_input("'123", "x") == "'123"
+    assert coerce_input("'123", "x") == "123"
+    assert coerce_input("''x", "x") == "'x"  # only the one prefix
+    assert coerce_input("a'b", "x") == "a'b"
 
 
 @pytest.mark.parametrize("raw", ["3:2", "3:02", "12:5:7"])
@@ -1062,4 +1065,48 @@ def test_a_read_field_that_only_unrequested_outputs_read_is_false(
     res = calc(_req(tmp_path, book, "id,f\np,5\n", {"fields": {"f": "Inputs!B300"}}, ["Calc!B2"]))
     assert _run_json(res)["inputs"] == {
         "f": {"target": "Inputs!B300", "read_by_requested_outputs": False}
+    }
+
+
+@pytest.mark.parametrize(
+    ("formula", "local", "names"),
+    [
+        # Loc is Inputs' own name, used qualified from another sheet: no IR edge.
+        ("=Inputs!Loc*2", {("Inputs", "Loc"): "Inputs!$B$1"}, {}),
+        # the workbook's name, written qualified
+        ("=Inputs!Rate*2", {}, {"Rate": "Inputs!$B$1"}),
+    ],
+)
+def test_a_field_read_through_a_qualified_name_is_read(
+    make_book: Book,
+    tmp_path: Path,
+    formula: str,
+    local: dict[tuple[str, str], str],
+    names: dict[str, str],
+) -> None:
+    # The reviewer's d5_probe5 repro: Excel reads Inputs!B1 (hand: 5*2 = 10). At
+    # 3e97022 the first case stopped the whole run with "no formula reads".
+    book = make_book(
+        "qualified",
+        {"Inputs": {"A1": "x", "B1": 1}, "Calc": {"B1": F(formula, 2)}},
+        names=names,
+        local_names=local,
+    )
+    res = calc(_req(tmp_path, book, "id,f\np,5\n", {"fields": {"f": "Inputs!B1"}}, ["Calc!B1"]))
+    assert _run_json(res)["inputs"] == {
+        "f": {"target": "Inputs!B1", "read_by_requested_outputs": True}
+    }
+
+
+def test_a_field_read_through_a_scoped_name_on_its_own_sheet_is_read(
+    make_book: Book, tmp_path: Path
+) -> None:
+    book = make_book(
+        "own_scoped",
+        {"Inputs": {"A1": "x", "B1": 1, "C1": F("=Loc*2", 2)}},
+        local_names={("Inputs", "Loc"): "Inputs!$B$1"},
+    )
+    res = calc(_req(tmp_path, book, "id,f\np,5\n", {"fields": {"f": "Inputs!B1"}}, ["Inputs!C1"]))
+    assert _run_json(res)["inputs"] == {
+        "f": {"target": "Inputs!B1", "read_by_requested_outputs": True}
     }

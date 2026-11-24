@@ -186,7 +186,8 @@ def coerce_input(raw: str, stored: StoredValue) -> float | str | bool:
     - a number cell takes a plain ASCII decimal (optional sign, digits, optional
       fraction and exponent) or an ISO ``YYYY-MM-DD`` date as its Excel 1900 serial;
     - a boolean cell takes ``TRUE``/``FALSE`` in any case;
-    - a text cell takes the text as written;
+    - a text cell takes the text as written, less one leading apostrophe (Excel's
+      entry prefix);
     - a cell the workbook saved empty takes an ISO date as its serial, ``TRUE``/``FALSE``
       as a boolean, a plain decimal as a number, and any other text as text.
 
@@ -204,7 +205,8 @@ def coerce_input(raw: str, stored: StoredValue) -> float | str | bool:
             raise CalcInputError(f"{raw!r} is not TRUE or FALSE")
         return upper == _TRUE
     if isinstance(stored, str):
-        return raw
+        # Excel's entry prefix: '123 typed into a cell holds the text 123.
+        return raw[1:] if raw.startswith("'") else raw
     if _ISO_DATE.fullmatch(text):
         return _iso_serial(raw, text)
     if stored is None and text.upper() in (_TRUE, _FALSE):

@@ -41,6 +41,8 @@ _CELL = r"\$?([A-Za-z]{1,3})\$?([0-9]+)"
 _THREE_D = re.compile(
     rf"(?:'(?:[^':]|'')+:(?:[^']|'')+'|(?<![\w.'])[^\W\d][\w.]*:[^\W\d][\w.]*)!{_CELL}(?::{_CELL})?"
 )
+_WHOLE = re.compile(r"\$?[A-Za-z]{1,3}:\$?[A-Za-z]{1,3}|\$?[0-9]+:\$?[0-9]+")
+_NAME = re.compile(r"(?:[^\W\d]|[_\\])[\w.\\?]*")
 _MAX_DEPTH = 8
 
 
@@ -97,10 +99,10 @@ def field_read(
 def hidden_reads(graph: WorkbookGraph) -> HiddenReads:
     """Scan every formula once for reads that have no edge in the graph."""
     out = HiddenReads()
-    names = [d.name for d in graph.names() if d.kind == "formula" or d.relative]
+    names = [d.name for d in graph.names()]
     name_re = (
         re.compile(
-            r"(?<![\w.!$\\])(?:"
+            r"(?<![\w.$\\])(?:"
             + "|".join(re.escape(n) for n in sorted(set(names), key=len, reverse=True))
             + r")(?![\w.(\[])",
             re.IGNORECASE,
@@ -158,6 +160,8 @@ def _call(graph: WorkbookGraph, cell: CellRef, node: FunctionNode, out: HiddenRe
 def _name_ref(graph: WorkbookGraph, cell: CellRef, ref: str, out: HiddenReads) -> None:
     found = graph.lookup_name(ref, cell.sheet)
     if found is None:
+        if _unresolved_name(ref):
+            out.every_sheet = True  # a name form calc cannot resolve: it may read anything
         return
     if found.relative:
         # Read relative to each cell using it: somewhere on its sheets.
@@ -167,13 +171,29 @@ def _name_ref(graph: WorkbookGraph, cell: CellRef, ref: str, out: HiddenReads) -
         else:
             out.every_sheet = True
         return
+    if found.kind == "cells":
+        # Resolved as Excel resolves it (the formula's own sheet first, or the sheet a
+        # ``Sheet!Name`` names): the IR has no edge for every such form.
+        out.readers.extend((rect, cell) for rect in found.rects)
+        return
     if found.kind != "formula":
-        return  # a name over cells has edges; an external one reads no cell here
+        return  # cells in another workbook: none of this one's
     rects = _name_text_rects(graph, found, 0)
     if rects is None:
         out.every_sheet = True
     else:
         out.readers.extend((rect, cell) for rect in rects)
+
+
+def _unresolved_name(ref: str) -> bool:
+    """True for ``Sheet!Name`` that no definition answers (a cell, range, whole
+    column or row, or another workbook's reference is not a name)."""
+    head, bang, tail = ref.rpartition("!")
+    if not bang or head.lstrip("'").startswith("[") or not tail:
+        return False
+    if _A1_TEXT.fullmatch(tail) or _WHOLE.fullmatch(tail):
+        return False
+    return _NAME.fullmatch(tail) is not None
 
 
 def _name_text_rects(graph: WorkbookGraph, found: NameDef, depth: int) -> list[Rect] | None:
