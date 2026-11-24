@@ -38,7 +38,7 @@ _SST_CT = "application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStr
 
 SHARED_STRINGS = [" key ", "\tlead tab"]
 
-# address -> the <c> element as Excel would write it (the r attribute is added).
+# address -> the <c> element as it appears in the sheet XML (the r attribute is added).
 CELLS: dict[str, str] = {
     "A1": "<c><v>2</v></c>",
     "B1": '<c t="str"><f>" "&amp;"x"</f><v> x</v></c>',
@@ -48,6 +48,8 @@ CELLS: dict[str, str] = {
     "B5": '<c t="str"><f>IF(A1&gt;1,"",A1)</f><v/></c>',
     "B6": '<c t="str"><f>CHAR(9)&amp;"x"</f><v>\tx</v></c>',
     "B7": '<c t="str"><f>"x"&amp;CHAR(10)</f><v>x\n</v></c>',
+    # CR as an XML character reference: this models the XML layer. Excel itself writes
+    # CR in cell text as _x000D_, which the extractor does not decode (a separate gap).
     "B8": '<c t="str"><f>"x"&amp;CHAR(13)</f><v>x&#13;</v></c>',
     "B9": '<c t="str"><f>" a b "</f><v> a b </v></c>',
     "B10": '<c t="str"><f>"never calculated"</f></c>',
@@ -61,13 +63,25 @@ CELLS: dict[str, str] = {
     "D1": '<c t="s"><v>0</v></c>',
     "D2": '<c t="s"><v>1</v></c>',
     "D3": '<c t="inlineStr"><is><t xml:space="preserve"> pad </t></is></c>',
+    # An array (CSE) formula over E1:E6: only the anchor holds <f>; Excel writes each
+    # other member as <c t="str"><v>...</v></c> holding that member's result.
+    "E1": '<c t="str"><f t="array" ref="E1:E6">IF(A1:A6&gt;1," a","")</f><v> a</v></c>',
+    "E2": '<c t="str"><v>b </v></c>',
+    "E3": '<c t="str"><v>  </v></c>',
+    "E4": '<c t="str"><v></v></c>',
+    "E5": '<c t="str"><v/></c>',
+    "E6": '<c t="str"><v>\tc</v></c>',
+    # A dynamic-array (spill) anchor is written the same way, with cm="1".
+    "F1": '<c t="str" cm="1"><f t="array" ref="F1:F3">IF(A1:A3&gt;1,"","x ")</f><v></v></c>',
+    "F2": '<c t="str"><v/></c>',
+    "F3": '<c t="str"><v>x </v></c>',
 }
 
 
 def _sheet_xml(cells: dict[str, str]) -> str:
     rows: dict[int, list[str]] = {}
     for ref, body in cells.items():
-        row = int(ref.lstrip("ABCD"))
+        row = int(ref.lstrip("ABCDEFGHIJKLMNOPQRSTUVWXYZ"))
         rows.setdefault(row, []).append(body.replace("<c", f'<c r="{ref}"', 1))
     data = "".join(f'<row r="{r}">{"".join(cs)}</row>' for r, cs in sorted(rows.items()))
     return (
@@ -141,11 +155,33 @@ def stored(workbook: Path, tmp_path_factory: pytest.TempPathFactory) -> dict[str
         ("B9", " a b "),
         ("B11", ""),
         ("B12", ""),
+        ("E1", " a"),
+        ("F1", ""),
     ],
 )
 def test_formula_text_result_is_stored_exactly(
     stored: dict[str, object], cell: str, expected: str
 ) -> None:
+    assert stored[cell] == expected
+
+
+@pytest.mark.parametrize(
+    ("cell", "expected"),
+    [
+        ("E2", "b "),
+        ("E3", "  "),
+        ("E4", ""),
+        ("E5", ""),
+        ("E6", "\tc"),
+        ("F2", ""),
+        ("F3", "x "),
+    ],
+)
+def test_array_and_spill_member_text_is_stored_exactly(
+    stored: dict[str, object], cell: str, expected: str
+) -> None:
+    # Members carry no <f>, but their <v> is still a formula's text result: "" and
+    # whitespace-only results are values, so the member is a cell with that value.
     assert stored[cell] == expected
 
 
@@ -179,13 +215,20 @@ def test_parser_yields_the_empty_string_for_an_empty_text_result(workbook: Path)
     assert cells[(4, 2)] == ("", "str")  # B4: <v></v>
     assert cells[(5, 2)] == ("", "str")  # B5: <v/>
     assert cells[(10, 2)] == (None, "str")  # B10: no <v>
+    assert cells[(4, 5)] == ("", "str")  # E4: array member, <v></v>
+    assert cells[(5, 5)] == ("", "str")  # E5: array member, <v/>
 
 
 # -- characterisation: the whole text-cache surface of the workbook -------------
 #
-# Captured from the code before this fix and regenerated after it; the diff between
-# the two is exactly the t="str" cells above (B1-B9 values) and nothing else --
-# no cell added or removed, no binding relabelled or retyped, no edge changed.
+# Captured from the code before this fix and regenerated after it. The diff between
+# the two is the t="str" cells above and what follows from them:
+# - the values of B1-B9, B11, B12, E1, E2, E6, F1 and F3;
+# - the array and spill members whose result is whitespace-only or "" (E3, E4, E5,
+#   F2), which were empty cells before and now hold that value;
+# - the constant bindings those members join (C2:E2 -> C2:F2, D3 and F3 -> D3:F3,
+#   E6 -> E4:E6), and the placeholder rows for empty cells around them.
+# No formula binding is relabelled or retyped, and no edge changes.
 GOLDEN = Path(__file__).parent / "golden" / "cached_text_surface.json"
 
 

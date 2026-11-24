@@ -158,8 +158,9 @@ def stream_worksheet_cells(
     - row, col: 1-based integers
     - formula: formula string without leading '=' (or None)
     - value: cell value as string (or None). A formula's text result
-             (``t="str"``) is kept exactly as cached, and ``""`` when the cached
-             ``<v>`` is empty; other cached ``<v>`` text has surrounding
+             (``t="str"``, including members of an array or spill range, which
+             carry no ``<f>``) is kept exactly as cached, and ``""`` when the
+             cached ``<v>`` is empty; other cached ``<v>`` text has surrounding
              whitespace removed.
     - cell_type: Excel cell type ('s' for shared string, 'str' for a formula's
                  text result, 'inlineStr' for inline string, 'n' for number,
@@ -291,7 +292,14 @@ def stream_worksheet_cells(
                     # get filtered here. Rare in practice (the len(elem)==0 fast
                     # path covers the vast majority of empties), but preserves the
                     # original byte-equivalent behaviour for malformed/edge XML.
-                    if formula is None and (value is None or value == "") and shared_index is None:
+                    # A t="str" cell with no <f> -- a member of an array or spill
+                    # range -- keeps a "" result: Excel saved it as that member's
+                    # value, the same as for the anchor that holds the formula.
+                    if (
+                        formula is None
+                        and shared_index is None
+                        and (value is None or (value == "" and cell_type != "str"))
+                    ):
                         elem.clear()
                         continue
 
