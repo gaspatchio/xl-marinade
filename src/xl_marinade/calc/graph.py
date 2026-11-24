@@ -30,6 +30,11 @@ from xl_marinade.errors import CalcInputError
 StoredValue = float | str | bool | None
 
 _BUCKET = 256
+IR_VERSION_FLOOR = "0.8.1"
+"""The oldest extractor whose IR ``--ir`` accepts (ruling D9): 0.8.1 keeps formulas'
+cached text exactly, where older IRs trimmed it and dropped ``""`` results (and before
+0.7.1 no cell was marked as an array formula)."""
+_VERSION_RE = re.compile(r"([0-9]+)\.([0-9]+)\.([0-9]+)")
 _TEXT_TYPES = frozenset({"s", "str", "inlineStr"})
 _RANGE_RE = re.compile(
     r"^(?:(?P<sheet>'(?:[^']|'')*'|[^'!]+)!)?"
@@ -180,6 +185,7 @@ class WorkbookGraph:
 
     def __init__(self) -> None:
         self.workbook_sha256: str = ""
+        self.extractor_version: str | None = None
         self.udf_cells: frozenset[CellRef] = frozenset()
         self.external_cells: dict[CellRef, list[str]] = {}
         self._formula: dict[CellRef, str] = {}
@@ -224,6 +230,8 @@ class WorkbookGraph:
     def _load(self, conn: sqlite3.Connection) -> None:
         row = conn.execute("SELECT value FROM ir_metadata WHERE key='workbook_sha256'").fetchone()
         self.workbook_sha256 = str(row[0]) if row else ""
+        row = conn.execute("SELECT value FROM ir_metadata WHERE key='extractor_version'").fetchone()
+        self.extractor_version = str(row[0]) if row and row[0] is not None else None
         sheet_names = dict(conn.execute("SELECT sheet_id, sheet_name FROM sheets"))
         self._sheets = set(sheet_names.values())
         self._sheet_key = {_fold(name): name for name in self._sheets}
@@ -903,6 +911,40 @@ def _dynamic_reads(root: ASTNode) -> tuple[list[str] | None, list[str]]:
         elif isinstance(node, UnaryNode):
             stack.append(node.operand)
     return (arguments if dynamic else None), outside
+def running_extractor_version() -> str:
+    """The version this install stamps into an IR it extracts (package metadata)."""
+    from xl_marinade.core.new_arch.fast_extraction_pipeline import get_extractor_version
+
+    return get_extractor_version()
+
+
+def _release(version: str) -> tuple[int, int, int] | None:
+    m = _VERSION_RE.match(version)
+    return (int(m[1]), int(m[2]), int(m[3])) if m else None
+
+
+def _check_ir_version(ir: Path, version: str | None) -> None:
+    """Refuse an IR from an extractor older than :data:`IR_VERSION_FLOOR`.
+
+    The stamp is the extracting install's package version. An IR stamped with this
+    install's own version is accepted whatever it says: it came from the code that is
+    running (a development build stamps the last release until the next one).
+
+    Raises:
+        CalcInputError: naming both versions and the fix.
+    """
+    if version is not None and version == running_extractor_version():
+        return
+    floor = _release(IR_VERSION_FLOOR)
+    found = _release(version) if version is not None else None
+    if found is not None and floor is not None and found >= floor:
+        return
+    stamp = f"version {version}" if version is not None else "no extractor version"
+    raise CalcInputError(
+        f"IR {ir} was extracted by xl-marinade {stamp}; calc needs an IR from "
+        f"{IR_VERSION_FLOOR} or later, which keeps formulas' text results exactly; "
+        "re-extract with marinade extract"
+    )
 
 
 def open_graph(workbook: Path, ir: Path | None, tmp: Path) -> WorkbookGraph:
@@ -913,10 +955,12 @@ def open_graph(workbook: Path, ir: Path | None, tmp: Path) -> WorkbookGraph:
     owns ``tmp`` and deletes it. The extraction database is never written otherwise.
 
     Raises:
-        CalcInputError: if ``ir`` was extracted from a different workbook.
+        CalcInputError: if ``ir`` was extracted from a different workbook, or by an
+            extractor older than :data:`IR_VERSION_FLOOR`.
     """
     if ir is not None:
         graph = WorkbookGraph.from_ir(ir)
+        _check_ir_version(ir, graph.extractor_version)
         try:
             digest = hashlib.sha256(workbook.read_bytes()).hexdigest()
         except OSError as exc:

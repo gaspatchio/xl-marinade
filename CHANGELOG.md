@@ -163,6 +163,13 @@ schema is a versioned public contract.
   probe sheet is added. An IronCalc panic (`XNPV(1,1)` raises one) is a calc error
   naming the workbook and the policy or input set, exit code 1, instead of a raw
   traceback.
+- **`marinade calc` / `marinade values`: `--ir` refuses databases from extractors older
+  than 0.8.1.** Only the workbook hash was checked, so an older IR was reused as is:
+  before 0.7.1 no cell was marked as an array formula (probes then landed inside array
+  formulas), and before 0.8.1 formulas' text results were trimmed and `""` dropped. Such
+  an IR is now refused, naming its version and the floor, with "re-extract with
+  marinade extract". The version is the one the extracting install stamped; an IR
+  stamped with the running install's own version is always accepted.
 
 ## [0.8.0] - 2026-11-24
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import csv
 import json
+import re
 from collections.abc import Callable
 from pathlib import Path
 
@@ -520,3 +521,94 @@ def test_an_engine_panic_for_one_policy_names_the_policy(make_book: Book, tmp_pa
     with pytest.raises(CalcError, match=r"policy 'boom'.*crashed.*xnpv2\.xlsx"):
         calc(req)
     assert not (tmp_path / "out" / "results.csv").exists()  # no partial results
+
+
+# -- --ir from an extractor older than calc needs (ruling D9) ------------------------
+
+
+def _stamped(ir: Path, tmp: Path, version: str | None) -> Path:
+    import shutil
+    import sqlite3
+
+    out = tmp / f"stamped-{version}.db"
+    shutil.copy(ir, out)
+    conn = sqlite3.connect(out)
+    with conn:
+        if version is None:
+            conn.execute("DELETE FROM ir_metadata WHERE key='extractor_version'")
+        else:
+            conn.execute("UPDATE ir_metadata SET value=? WHERE key='extractor_version'", (version,))
+    conn.close()
+    return out
+
+
+@pytest.mark.parametrize("version", ["0.8.0", "0.7.0", "0.3.2", None, "garbage"])
+def test_an_ir_older_than_the_floor_is_refused_with_re_extract(
+    make_book: Book,
+    ir_for: Callable[[Path], Path],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    version: str | None,
+) -> None:
+    # 0.8.1 keeps formulas' cached text exactly; older IRs trimmed it and dropped "",
+    # and before 0.7.1 is_array_formula was 0 everywhere (a false ok on CSE arrays).
+    from xl_marinade.calc import graph as graph_module
+
+    monkeypatch.setattr(graph_module, "running_extractor_version", lambda: "0.8.1", raising=False)
+    book = make_book("ir", _SIMPLE)
+    ir = _stamped(ir_for(book), tmp_path, version)
+    req = _req(tmp_path, book, "id,x\np,7\n", _SIMPLE_MAP, ["Calc!B1"], ir=ir)
+    with pytest.raises(CalcInputError, match=r"0\.8\.1.*re-extract with marinade extract"):
+        calc(req)
+    if version is not None:
+        with pytest.raises(CalcInputError, match=re.escape(version)):
+            calc(req)
+
+
+@pytest.mark.parametrize("version", ["0.8.1", "0.9.0", "1.0.0"])
+def test_an_ir_at_or_above_the_floor_is_accepted(
+    make_book: Book,
+    ir_for: Callable[[Path], Path],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    version: str,
+) -> None:
+    from xl_marinade.calc import graph as graph_module
+
+    monkeypatch.setattr(graph_module, "running_extractor_version", lambda: "0.8.1", raising=False)
+    book = make_book("ir", _SIMPLE)
+    ir = _stamped(ir_for(book), tmp_path, version)
+    res = calc(_req(tmp_path, book, "id,x\np,7\n", _SIMPLE_MAP, ["Calc!B1"], ir=ir))
+    assert _results(res)[("p", "Calc!B1")]["value"] == "8.0"
+
+
+def test_an_ir_from_the_running_extractor_is_accepted(
+    make_book: Book, ir_for: Callable[[Path], Path], tmp_path: Path
+) -> None:
+    # The stamp comes from the installed package's metadata, so a development build
+    # can stamp a version below the floor; an IR it extracted itself is accepted.
+    from xl_marinade.calc.values import ValuesRequest, values
+
+    book = make_book("ir", _SIMPLE)
+    ir = ir_for(book)
+    res = calc(_req(tmp_path, book, "id,x\np,7\n", _SIMPLE_MAP, ["Calc!B1"], ir=ir))
+    assert _results(res)[("p", "Calc!B1")]["value"] == "8.0"
+    variables = _write(tmp_path, "vars.json", json.dumps({"v": {"cell": "Calc!B1"}}))
+    values(ValuesRequest(book, variables, tmp_path / "v", ir=ir))
+
+
+def test_values_refuses_an_old_ir_too(
+    make_book: Book,
+    ir_for: Callable[[Path], Path],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from xl_marinade.calc import graph as graph_module
+    from xl_marinade.calc.values import ValuesRequest, values
+
+    monkeypatch.setattr(graph_module, "running_extractor_version", lambda: "0.8.1", raising=False)
+    book = make_book("ir", _SIMPLE)
+    ir = _stamped(ir_for(book), tmp_path, "0.8.0")
+    variables = _write(tmp_path, "vars.json", json.dumps({"v": {"cell": "Calc!B1"}}))
+    with pytest.raises(CalcInputError, match="re-extract"):
+        values(ValuesRequest(book, variables, tmp_path / "v", ir=ir))
