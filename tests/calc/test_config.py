@@ -287,3 +287,29 @@ def test_check_duplicate_keys_are_input_errors(tmp_path: Path) -> None:
         c = _raw(tmp_path / "c.json", text)
         with pytest.raises(CalcInputError, match=rf"duplicate key '{key}'"):
             load_check_against(c)
+
+
+def test_policies_value_under_an_unnamed_column_is_input_error(tmp_path: Path) -> None:
+    # "id,sa," then "A,250,000": the 000 of 250,000 lands under the unnamed third column
+    # and would be dropped (sa = 250 where 250000 was meant).
+    p = tmp_path / "p.csv"
+    p.write_text("id,sa,\nA,250,000\n", encoding="utf-8")
+    with pytest.raises(CalcInputError, match=r"policy 'A'.*line 2.*column 3"):
+        load_policies(p, InputMap(fields={"sa": "S!B1"}, id_field=None))
+
+
+def test_policies_value_under_a_middle_unnamed_column_is_input_error(tmp_path: Path) -> None:
+    # Several unnamed columns share the key "" in DictReader; the check is by position.
+    p = tmp_path / "p.csv"
+    p.write_text("id,sa,,\nA,250,000,\n", encoding="utf-8")
+    with pytest.raises(CalcInputError, match=r"policy 'A'.*column 3"):
+        load_policies(p, InputMap(fields={"sa": "S!B1"}, id_field=None))
+
+
+def test_policies_empty_unnamed_columns_still_accepted(tmp_path: Path) -> None:
+    p = tmp_path / "p.csv"
+    p.write_text("id,sa,,\nA,250000,,\nB,1, ,\n", encoding="utf-8")
+    assert load_policies(p, InputMap(fields={"sa": "S!B1"}, id_field=None)) == [
+        Policy(id="A", values={"sa": "250000"}),
+        Policy(id="B", values={"sa": "1"}),
+    ]

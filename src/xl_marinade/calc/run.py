@@ -101,13 +101,24 @@ _ISO_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 _PLAIN_NUMBER = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
 _EXCEL_MAX = 9.99999999999999e307  # the largest number Excel accepts typed into a cell
 _EXCEL_MIN = 2.2251e-308  # the smallest positive number Excel holds
-_TIME = re.compile(r"[0-9]{1,2}:[0-9]{2}(?::[0-9]{2}(?:\.[0-9]+)?)?(?:\s*[AaPp][Mm])?")
+_TIME = re.compile(r"[0-9]{1,2}:[0-9]{1,2}(?::[0-9]{1,2}(?:\.[0-9]+)?)?(?:\s*[AaPp][Mm])?")
 _DATE_TIME = re.compile(
     r"[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}[Tt ]+[0-9]{1,2}:[0-9]{2}(?::[0-9]{2}(?:\.[0-9]+)?)?Z?"
 )
 # Day, month and year in any order or with two parts (``30/06/2024``, ``1/2``, ``2024-6``).
-_OTHER_DATE = re.compile(r"[0-9]{1,4}[/.-][0-9]{1,4}(?:[/.-][0-9]{1,4})?")
+_OTHER_DATE = re.compile(r"([0-9]{1,4})[/.-]([0-9]{1,4})(?:[/.-]([0-9]{1,4}))?")
+_MONTHS = (
+    "jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec|january|february|march|april"
+    "|june|july|august|september|october|november|december"
+)
+# A month name with day and/or year numbers around it: 30-Jun-2024, June 30, 2024,
+# Jun 2024, Jun-24. The month alone, or with other words, is text.
+_MONTH_DATE = re.compile(
+    rf"(?:[0-9]{{1,4}}[ ./,-]+)?(?:{_MONTHS})\.?(?:[ ./,-]+[0-9]{{1,4}}){{0,2}}",
+    re.IGNORECASE,
+)
 _FRACTION = re.compile(r"[+-]?(?:[0-9]+ +)?[0-9]+/[0-9]+")  # 1 1/2 is 1.5 in Excel
+_DOT_THOUSANDS = re.compile(r"[+-]?[0-9]{1,3}(?:\.[0-9]{3}){2,}(?:,[0-9]+)?")  # 1.234.567
 _CURRENCY = "$€£¥"
 _DECORATION = "%,()'" + _CURRENCY
 _ERROR_VALUES = frozenset(
@@ -178,14 +189,14 @@ def coerce_input(raw: str, stored: StoredValue) -> float | str | bool:
     - a boolean cell takes ``TRUE``/``FALSE`` in any case;
     - a text cell takes the text as written;
     - a cell the workbook saved empty takes an ISO date as its serial, ``TRUE``/``FALSE``
-      as a boolean, a plain decimal as a number, and any other text as text (ruling D3).
+      as a boolean, a plain decimal as a number, and any other text as text.
 
     Raises:
         CalcInputError: for a value that does not fit a number or boolean cell; on a
             number or empty cell, for a spelling whose meaning depends on the locale
             (``5%``, ``1,000``, ``$100``, ``(100)``, digits other than 0-9, a date not
-            written ``YYYY-MM-DD``, a time), an error value, a number outside Excel's
-            range, and an ISO date before 1900-03-01 (ruling D4).
+            written ``YYYY-MM-DD``, a time), a leading apostrophe, an error value, a
+            number outside Excel's range, and an ISO date before 1900-03-01.
     """
     text = raw.strip()
     if isinstance(stored, bool):
@@ -243,6 +254,11 @@ def _locale_spelling(text: str) -> str | None:
     does not apply (most of them the locale's); None when Excel keeps it as text."""
     if text.upper() in _ERROR_VALUES:
         return "an error value; calc cannot set one as an input"
+    if text.startswith("'"):
+        return (
+            "text with a leading apostrophe, which Excel drops (it keeps the rest as "
+            "text); give the value without it"
+        )
     kind = _locale_kind(text)
     if kind is None:
         return None
@@ -257,8 +273,10 @@ def _locale_kind(text: str) -> str | None:
         return "a time or date-time"
     if _FRACTION.fullmatch(text) and " " in text.strip("+-"):
         return "a fraction"
-    if _OTHER_DATE.fullmatch(text):
+    if _is_locale_date(text):
         return "a date not written YYYY-MM-DD"
+    if _DOT_THOUSANDS.fullmatch(text):
+        return "a number with dots between thousands"
     if any(ch.isdecimal() and not ("0" <= ch <= "9") for ch in text):
         if _PLAIN_NUMBER.fullmatch(_ascii_digits(text)):
             return "a number written with digits other than 0-9"
@@ -277,6 +295,46 @@ def _locale_kind(text: str) -> str | None:
     if any(ch in _CURRENCY for ch in text):
         return "a currency amount"
     return "a number with spaces or separators"
+
+
+def _is_locale_date(text: str) -> bool:
+    """True when some locale reads ``text`` as a date: digits joined by / - . whose
+    parts can be a day (1-31), a month (1-12) and a year (1-2 digits, or 4 digits from
+    1900) in day-month-year, month-day-year or year-month-day order, or two of them;
+    or a month name with day and/or year numbers. ``123-45-6789`` is text everywhere."""
+    if _MONTH_DATE.fullmatch(text):
+        return any(ch.isdigit() for ch in text)
+    m = _OTHER_DATE.fullmatch(text)
+    if m is None:
+        return False
+    parts = [p for p in m.groups() if p is not None]
+
+    def day(p: str) -> bool:
+        return len(p) <= 2 and 1 <= int(p) <= 31
+
+    def month(p: str) -> bool:
+        return len(p) <= 2 and 1 <= int(p) <= 12
+
+    def year(p: str) -> bool:
+        return len(p) <= 2 or (len(p) == 4 and 1900 <= int(p) <= 9999)
+
+    def long_year(p: str) -> bool:
+        return len(p) == 4 and 1900 <= int(p) <= 9999
+
+    if len(parts) == 3:
+        a, b, c = parts
+        return (
+            (day(a) and month(b) and year(c))
+            or (month(a) and day(b) and year(c))
+            or (long_year(a) and month(b) and day(c))
+        )
+    a, b = parts
+    return (
+        (month(a) and day(b))
+        or (day(a) and month(b))
+        or (month(a) and long_year(b))
+        or (long_year(a) and month(b))
+    )
 
 
 def _ascii_digits(text: str) -> str:
@@ -442,19 +500,20 @@ def _input_use(
     formula graph sees it), for ``run.json``.
 
     Raises:
-        CalcInputError: naming every field whose cell no formula reads (ruling D5): its
+        CalcInputError: naming every field whose cell no formula reads: its
             value would change nothing, so each policy would get the stored inputs'
             answer as ``ok``. The id field is exempt (writing the id into a display cell
             is a documented use), and so is a cell on a sheet where the graph cannot see
             every read (:func:`_dynamic_sheets`).
     """
+    scanned = False
     dynamic: set[str] | None = set()
     problems: list[str] = []
     for name, cell in inputs.items():
         if name == id_field or graph.dependents(cell):
             continue
-        if dynamic is not None and not dynamic:
-            dynamic = _dynamic_sheets(graph)
+        if not scanned:  # one workbook scan, and only when a field looks unread
+            dynamic, scanned = _dynamic_sheets(graph), True
         if dynamic is None or cell.sheet in dynamic:
             continue
         problems.append(

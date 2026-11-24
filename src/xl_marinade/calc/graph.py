@@ -31,10 +31,17 @@ StoredValue = float | str | bool | None
 
 _BUCKET = 256
 IR_VERSION_FLOOR = "0.8.1"
-"""The oldest extractor whose IR ``--ir`` accepts (ruling D9): 0.8.1 keeps formulas'
+"""The oldest extractor whose IR ``--ir`` accepts: 0.8.1 keeps formulas'
 cached text exactly, where older IRs trimmed it and dropped ``""`` results (and before
 0.7.1 no cell was marked as an array formula)."""
-_VERSION_RE = re.compile(r"([0-9]+)\.([0-9]+)\.([0-9]+)")
+# A release ``X.Y.Z``, then a pre-release (a, b, rc, dev: before X.Y.Z), a post-release
+# or a local label (at X.Y.Z), as PEP 440 orders them.
+_VERSION_RE = re.compile(
+    r"v?([0-9]+)\.([0-9]+)\.([0-9]+)"
+    r"(?P<pre>[-_.]?(?:a|alpha|b|beta|c|rc|pre|preview|dev)[-_.]?[0-9]*)*"
+    r"(?:[-_.]?(?:post|rev|r)[-_.]?[0-9]*)?(?:[-_.]?dev[-_.]?[0-9]*)?(?:\+[A-Za-z0-9.]*)?",
+    re.IGNORECASE,
+)
 _TEXT_TYPES = frozenset({"s", "str", "inlineStr"})
 _RANGE_RE = re.compile(
     r"^(?:(?P<sheet>'(?:[^']|'')*'|[^'!]+)!)?"
@@ -918,9 +925,14 @@ def running_extractor_version() -> str:
     return get_extractor_version()
 
 
-def _release(version: str) -> tuple[int, int, int] | None:
-    m = _VERSION_RE.match(version)
-    return (int(m[1]), int(m[2]), int(m[3])) if m else None
+def _release(version: str) -> tuple[int, int, int, int] | None:
+    """``(X, Y, Z, 0)`` for a release (or post/local), ``(X, Y, Z, -1)`` for a
+    pre-release or development build of it; None when ``version`` is not one."""
+    m = _VERSION_RE.fullmatch(version.strip())
+    if m is None:
+        return None
+    pre = m["pre"] is not None or re.search(r"dev", version, re.IGNORECASE) is not None
+    return (int(m[1]), int(m[2]), int(m[3]), -1 if pre else 0)
 
 
 def _check_ir_version(ir: Path, version: str | None) -> None:
@@ -933,7 +945,8 @@ def _check_ir_version(ir: Path, version: str | None) -> None:
     Raises:
         CalcInputError: naming both versions and the fix.
     """
-    if version is not None and version == running_extractor_version():
+    running = running_extractor_version()
+    if version is not None and version == running and _release(running) is not None:
         return
     floor = _release(IR_VERSION_FLOOR)
     found = _release(version) if version is not None else None

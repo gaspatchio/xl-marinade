@@ -216,9 +216,11 @@ marinade values book.xlsx --variables vars.json [--map map.json] -o stored/
 - **Input values follow Excel's entry rules.** A number cell takes a plain
   decimal or an ISO date (its serial); an empty cell also takes `TRUE`/`FALSE`
   as a boolean and keeps other text as text. Locale-dependent spellings (`5%`,
-  `1,000`, `$100`, `30/06/2024`, times), error values, numbers outside Excel's
-  range and ISO dates before 1900-03-01 are errors naming the policy and field.
-  Also errors: a CSV row wider than its header, a repeated JSON key, two fields
+  `1,000`, `$100`, `30/06/2024`, `30-Jun-2024`, times), a leading apostrophe,
+  error values, numbers outside Excel's range and ISO dates before 1900-03-01
+  are errors naming the policy and field; ids like `123-45-6789` stay text.
+  Also errors: a CSV row wider than its header (or a value under an unnamed
+  column), a repeated JSON key, two fields
   (or two check outputs) on one cell, and a field no formula reads (the id
   field, and sheets `INDIRECT`/`OFFSET` can reach, are exempt; `run.json`
   `inputs` records whether a requested output reads each field).

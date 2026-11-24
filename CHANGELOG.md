@@ -132,21 +132,24 @@ schema is a versioned public contract.
   `policies.csv` row with more values than the header has names (an unquoted
   `250,000`) set the field to the first part and filed the rest under no column, so the
   output came back `ok` with the wrong number; it is now an error naming the policy
-  and the line (empty values past the last column are still accepted). A key repeated
-  in `map.json`, `vars.json` or `check.json` kept only its last value; it is now an
-  error naming the key. Two map fields that resolve to one cell (by address or by name)
-  and two `check.json` outputs on one cell are errors too: one value or one comparison
-  was dropped, and which one depended on key order.
+  and the line, and so is a value under a column the header leaves unnamed (`id,sa,`
+  with `A,250,000`). Empty values there, as exports write them, are still accepted. A
+  key repeated in `map.json`, `vars.json` or `check.json` kept only its last value; it
+  is now an error naming the key. Two map fields that resolve to one cell (by address
+  or by name) and two `check.json` outputs on one cell are errors too: one value or one
+  comparison was dropped, and which one depended on key order.
 - **`marinade calc`: policy values are converted by Excel's entry rules.** A value for
   a cell the workbook saved empty stayed text, so `2024-06-30` compared greater than
   every number, `TRUE` was not a boolean, and outputs came back `ok` with the wrong
   number; such a cell now takes an ISO date as its serial, `TRUE`/`FALSE` as a boolean
-  and a plain decimal as a number. Spellings Excel reads by the locale's rules (`5%`,
-  `1,000`, `$100`, `(100)`, `30/06/2024`, times, other scripts' digits), error values
-  and numbers outside Excel's range (`1e-400` used to become 0) are now errors that
-  name the policy and field, on empty and number cells, and so is `1_000` on a number
-  cell. ISO dates before 1900-03-01 are refused: their serial was one too high (a
-  1900-01-01 placeholder date became 2), and Excel has no dates before 1900.
+  and a plain decimal as a number; other text, such as an id like `123-45-6789`, stays
+  text. Spellings Excel reads by the locale's rules (`5%`, `1,000`, `$100`, `(100)`,
+  dates such as `30/06/2024` or `30-Jun-2024`, times, other scripts' digits), a leading
+  apostrophe, error values and numbers outside Excel's range (`1e-400` used to become
+  0) are now errors that name the policy and field, on empty and number cells, and so
+  is `1_000` on a number cell. ISO dates before 1900-03-01 are refused: their serial was
+  one too high (a 1900-01-01 placeholder date became 2), and Excel has no dates before
+  1900.
   `--check-against` table values keep their stored type: a stored `TRUE` was set as
   the text `"TRUE"`, which made a false mismatch and refused the output.
 - **`marinade values`: the stored row is labelled with the default id field.** With
@@ -176,8 +179,8 @@ schema is a versioned public contract.
   now an error naming the field and its cell. The id field is exempt (it may be written
   into a display cell), and so are cells on sheets an `INDIRECT` text or an `OFFSET` can
   reach, or that hold a cell read inside the arguments of those or of `CELL`, `INFO`
-  and `GETPIVOTDATA` (the formula graph has no edge for those reads). `run.json` gains `inputs`: per field, the
-  cell it sets and whether a requested output reads it.
+  and `GETPIVOTDATA` (the formula graph has no edge for those reads). `run.json` gains
+  `inputs`: per field, the cell it sets and whether a requested output reads it.
 
 ## [0.8.0] - 2026-11-24
 

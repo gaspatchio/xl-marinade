@@ -89,21 +89,33 @@ def load_input_map(path: Path) -> InputMap:
     return InputMap(fields=fields, id_field=id_field)
 
 
-def _no_extra_fields(
-    row: dict[str | Any, Any], pid: str, path: Path, line: int, width: int
+def _no_dropped_fields(
+    fields: list[str], header: list[str], pid: str, path: Path, line: int
 ) -> None:
-    """Refuse a row with more non-empty fields than the header has names.
+    """Refuse a row with a value nothing reads: past the header's last column, or under
+    a column with no name.
 
-    ``DictReader`` files the extra fields under the key None, where nothing reads them:
-    ``P1,40,250,000`` under ``id,age,sa`` would set sa to 250. Empty extra fields (a
-    trailing comma) drop nothing and are accepted.
+    ``P1,40,250,000`` under ``id,age,sa`` (or under ``id,age,sa,`` with the unnamed
+    column some exports add) would set sa to 250 and drop the rest. Empty fields there
+    (trailing commas) drop nothing and are accepted.
     """
-    extra: list[str] = row.get(None) or []
+    extra = fields[len(header) :]
     if any(v.strip() for v in extra):
         raise CalcInputError(
-            f"policy {pid!r} ({path} line {line}) has {width + len(extra)} fields but the "
-            f"header names {width}: quote a value that holds a comma"
+            f"policy {pid!r} ({path} line {line}) has {len(fields)} fields but the "
+            f"header names {len(header)}: quote a value that holds a comma"
         )
+    for i, name in enumerate(header[: len(fields)]):
+        if not name.strip() and fields[i].strip():
+            raise CalcInputError(
+                f"policy {pid!r} ({path} line {line}) has a value in column {i + 1}, which "
+                "has no name in the header, so nothing reads it: quote a value that holds "
+                "a comma, or name the column"
+            )
+
+
+def _field(fields: list[str], at: int) -> str:
+    return fields[at].strip() if at < len(fields) else ""
 
 
 def load_policies(path: Path, input_map: InputMap) -> list[Policy]:
@@ -111,8 +123,8 @@ def load_policies(path: Path, input_map: InputMap) -> list[Policy]:
     id_col = input_map.id_field or "id"
     try:
         with path.open(encoding="utf-8-sig", newline="") as fh:
-            reader = csv.DictReader(fh)
-            header = reader.fieldnames or []
+            reader = csv.reader(fh)
+            header = next(reader, [])
             # Unnamed columns (spreadsheet exports often end lines with ",,") are never
             # mapped, so only named columns can clash.
             named = [h for h in header if h.strip()]
@@ -124,19 +136,22 @@ def load_policies(path: Path, input_map: InputMap) -> list[Policy]:
             missing = [f for f in input_map.fields if f not in header]
             if missing:
                 raise CalcInputError(f"{path} is missing mapped field(s): {missing}")
+            at = {name: header.index(name) for name in named}
             policies: list[Policy] = []
             seen: set[str] = set()
-            for row in reader:
-                pid = (row[id_col] or "").strip()
+            for fields in reader:
+                if not fields:
+                    continue  # a blank line
+                pid = _field(fields, at[id_col])
                 if not pid:
                     raise CalcInputError(f"{path} has a row with a blank {id_col!r}")
-                _no_extra_fields(row, pid, path, reader.line_num, len(header))
+                _no_dropped_fields(fields, header, pid, path, reader.line_num)
                 if pid in seen:
                     raise CalcInputError(f"duplicate policy id {pid!r} in {path}")
                 seen.add(pid)
                 values: dict[str, str] = {}
                 for name in input_map.fields:
-                    val = (row[name] or "").strip()
+                    val = _field(fields, at[name])
                     if not val:
                         raise CalcInputError(f"policy {pid!r}: blank value for field {name!r}")
                     values[name] = val

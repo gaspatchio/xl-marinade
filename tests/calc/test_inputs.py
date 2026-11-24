@@ -211,6 +211,8 @@ def test_coerce_input_accepts(raw: str, stored: float | str | None, want: object
         ("1/2", _EMPTY, "YYYY-MM-DD"),  # Excel (en-US) makes it 2 January
         ("1 1/2", _EMPTY, "fraction"),  # Excel makes it 1.5
         ("4 000", _EMPTY, "separators"),
+        ("1.234.567", _EMPTY, "thousands"),  # de-DE reads 1234567
+        ("1.234.567,5", _NUMBER, "thousands"),
         ("2024-06-30 12:00:00", _NUMBER, "time"),
         ("2024-06-30T12:00", _EMPTY, "time"),
         ("12:30", _NUMBER, "time"),
@@ -431,7 +433,10 @@ def test_calc_still_clears_a_symlinked_output_and_keeps_its_target(
     out = tmp_path / "out"
     out.mkdir()
     target = _write(tmp_path, "elsewhere.csv", "mine")
-    (out / "results.csv").symlink_to(target)
+    try:
+        (out / "results.csv").symlink_to(target)
+    except OSError as exc:  # Windows without the symlink privilege
+        pytest.skip(f"cannot create a symlink here: {exc}")
     calc(_req(tmp_path, book, "id,x\np,7\n", _SIMPLE_MAP, ["Calc!B1"]))
     assert target.read_text(encoding="utf-8") == "mine"
     assert not (out / "results.csv").is_symlink()
@@ -723,3 +728,189 @@ def test_a_dynamic_reference_with_a_literal_sheet_exempts_only_that_sheet(
     imap = {"fields": {"age": "Other!B1"}}
     with pytest.raises(CalcInputError, match=r"map field 'age'.*Other!B1"):
         calc(_req(tmp_path, book, "id,age\np,25\n", imap, ["Calc!B1"]))
+
+
+# -- review round 1: only spellings some locale reads as a date are refused ---------
+#
+# Hand semantics: Excel reads digits joined by / - . as a date only when the parts can
+# be a day (1-31), a month (1-12) and a year (1-2 digits, or 4 digits from 1900), in
+# day-month-year, month-day-year or year-month-day order, or two of them (10-20 is
+# 20 October in en-US, 6/2024 is June 2024, 2024-06 is June 2024). Anything else stays
+# text in every locale: 123-45-6789, 1234-5678, 123-456, 100-200.
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["123-45-6789", "1234-5678", "123-456", "100-200", "12-3456-7", "0-0", "32-13", "13/13/2024"],
+)
+def test_digit_text_no_locale_reads_as_a_date_stays_text_on_an_empty_target(raw: str) -> None:
+    from xl_marinade.calc.run import coerce_input
+
+    assert coerce_input(raw, _EMPTY) == raw
+
+
+@pytest.mark.parametrize("raw", ["123-45-6789", "1234-5678"])
+def test_digit_text_no_locale_reads_as_a_date_is_not_a_number_on_a_number_target(
+    raw: str,
+) -> None:
+    from xl_marinade.calc.run import coerce_input
+
+    with pytest.raises(CalcInputError, match="not a number"):
+        coerce_input(raw, _NUMBER)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "30/06/2024",
+        "6/30/2024",
+        "30.06.2024",
+        "1.2.2024",
+        "30-06-24",
+        "2024/06/30",
+        "2024-6-30",
+        "10-20",
+        "6/2024",
+        "2024-06",
+        "30-Jun-2024",
+        "30-jun-2024",
+        "JUN 30",
+        "June 30, 2024",
+        "30 June 2024",
+        "Jun-24",
+        "Sept 2024",
+    ],
+)
+def test_spellings_some_locale_reads_as_a_date_are_refused(raw: str) -> None:
+    from xl_marinade.calc.run import coerce_input
+
+    for stored in (_EMPTY, _NUMBER):
+        with pytest.raises(CalcInputError, match="date"):
+            coerce_input(raw, stored)
+
+
+@pytest.mark.parametrize("raw", ["June", "Mayday", "May the 4th be", "Jan Smith", "Mar-A"])
+def test_month_words_that_are_not_dates_stay_text(raw: str) -> None:
+    from xl_marinade.calc.run import coerce_input
+
+    assert coerce_input(raw, _EMPTY) == raw
+
+
+@pytest.mark.parametrize("stored", [_EMPTY, _NUMBER])
+def test_a_leading_apostrophe_is_refused_by_name(stored: float | None) -> None:
+    # Excel takes '123 as the text 123 (the apostrophe is not kept); calc would keep it.
+    from xl_marinade.calc.run import coerce_input
+
+    with pytest.raises(CalcInputError, match="apostrophe"):
+        coerce_input("'123", stored)
+
+
+def test_a_leading_apostrophe_stays_on_a_text_target() -> None:
+    from xl_marinade.calc.run import coerce_input
+
+    assert coerce_input("'123", "x") == "'123"
+
+
+@pytest.mark.parametrize("raw", ["3:2", "3:02", "12:5:7"])
+def test_times_with_single_digit_minutes_are_refused(raw: str) -> None:
+    # Excel reads 3:2 as 03:02.
+    from xl_marinade.calc.run import coerce_input
+
+    with pytest.raises(CalcInputError, match="time"):
+        coerce_input(raw, _EMPTY)
+
+
+@pytest.mark.parametrize("raw", ["inf", "nan", "Infinity"])
+def test_inf_and_nan_stay_text_on_an_empty_target(raw: str) -> None:
+    from xl_marinade.calc.run import coerce_input
+
+    assert coerce_input(raw, _EMPTY) == raw
+
+
+def test_ids_written_into_a_blank_display_cell_pass(make_book: Book, tmp_path: Path) -> None:
+    # The reviewer's id_display_blank repro: SSN- and account-style ids into a blank
+    # cell (documented use); Calc!B1 = age*2 by hand.
+    book = make_book(
+        "iddisp",
+        {
+            "Inputs": {"A1": "policy no", "A2": "age", "B2": 40},
+            "Calc": {"B1": F("=Inputs!B2*2", 80)},
+        },
+    )
+    imap = {"fields": {"id": "Inputs!B1", "age": "Inputs!B2"}}
+    res = calc(
+        _req(tmp_path, book, "id,age\n123-45-6789,25\n1234-5678,30\nP-1,35\n", imap, ["Calc!B1"])
+    )
+    got = _results(res)
+    assert [got[(pid, "Calc!B1")]["value"] for pid in ("123-45-6789", "1234-5678", "P-1")] == [
+        "50.0",
+        "60.0",
+        "70.0",
+    ]
+
+
+def test_engine_keyboard_interrupt_propagates_untouched() -> None:
+    from xl_marinade.calc.engine import Engine
+
+    class _Model:
+        def get_worksheets_properties(self) -> list[dict[str, object]]:
+            return []
+
+        def evaluate(self) -> None:
+            raise KeyboardInterrupt
+
+    engine = Engine(_Model(), "x")
+    with pytest.raises(KeyboardInterrupt) as info:
+        engine.evaluate()
+    assert info.value.__cause__ is None
+
+
+def test_an_engine_panic_in_any_call_is_a_calc_error() -> None:
+    from xl_marinade.calc.engine import Engine
+    from xl_marinade.calc.models import CellRef
+    from xl_marinade.errors import CalcError
+
+    class PanicException(BaseException):  # pyo3_runtime's name, matched by name
+        pass
+
+    class _Model:
+        def get_worksheets_properties(self) -> list[dict[str, object]]:
+            return [{"name": "S"}]
+
+        def update_cell_with_formula(self, *args: object) -> None:
+            raise PanicException("boom")
+
+        def update_cell_with_number(self, *args: object) -> None:
+            raise PanicException("boom")
+
+    engine = Engine(_Model(), "x")
+    with pytest.raises(CalcError, match="crashed.*boom"):
+        engine.set_formula(CellRef("S", 1, 1), "=1")
+    with pytest.raises(CalcError, match="crashed.*boom"):
+        engine.set_value(CellRef("S", 1, 1), 1.0)
+
+
+@pytest.mark.parametrize(
+    ("version", "running", "accepted"),
+    [
+        ("0.8.1rc1", "0.9.0", False),  # a pre-release sorts below 0.8.1
+        ("0.8.1.dev3+g1234", "0.9.0", False),
+        ("0.8.1a1", "0.9.0", False),
+        ("0.8.1", "0.9.0", True),
+        ("0.8.1.post1", "0.9.0", True),
+        ("0.8.1+local", "0.9.0", True),
+        ("unknown", "unknown", False),  # no metadata: nothing vouches for the stamp
+        ("0.8.0", "0.8.0", True),  # the running install's own stamp
+    ],
+)
+def test_ir_floor_compares_versions_exactly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, version: str, running: str, accepted: bool
+) -> None:
+    from xl_marinade.calc import graph as graph_module
+
+    monkeypatch.setattr(graph_module, "running_extractor_version", lambda: running)
+    if accepted:
+        graph_module._check_ir_version(tmp_path / "ir.db", version)
+    else:
+        with pytest.raises(CalcInputError, match="re-extract"):
+            graph_module._check_ir_version(tmp_path / "ir.db", version)

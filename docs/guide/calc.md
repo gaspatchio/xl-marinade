@@ -30,7 +30,7 @@ pip install 'xl-marinade[calc]'
 | Option | File | What it holds |
 |---|---|---|
 | `WORKBOOK` | `.xlsx` / `.xlsm` | The model, saved by Excel so it carries stored values. |
-| `--policies` | `policies.csv` | One row per input set. An id column plus one column per mapped field. UTF-8 (save from Excel as "CSV UTF-8"). Ids stay text; a blank value, a duplicate id, a duplicate column name or a row with more values than the header has names (an unquoted `250,000`) is an error. Columns with no name (the empty trailing columns some exports add) are ignored, and so are empty values past the last column. |
+| `--policies` | `policies.csv` | One row per input set. An id column plus one column per mapped field. UTF-8 (save from Excel as "CSV UTF-8"). Ids stay text; a blank value, a duplicate id, a duplicate column name or a row with more values than the header has names (an unquoted `250,000`) is an error, and so is a value under a column with no name. Columns with no name (the empty trailing columns some exports add) are ignored while they are empty, and so are empty values past the last column. |
 | `--map` | `map.json` | Which cell or defined name each field sets. |
 | `--outputs` | repeatable | Output cells, ranges or defined names (`'Results!B5:B64'`). Ranges expand to cells. |
 | `--variables` | `vars.json` | Optional. Named output variables for `rows.csv`. |
@@ -110,19 +110,37 @@ the value the cell holds:
 On a number cell or an empty one, these are errors that name the policy, the field and
 what is wrong, rather than a guess:
 
-- spellings Excel reads by the locale's rules: `5%`, `1,000`, `1,5`, `$100`, `(100)`,
-  `4 000`, digits other than 0-9 (`٤٠`, `１２３`), dates not written `YYYY-MM-DD`
-  (`30/06/2024`, `1/2`), fractions (`1 1/2`), times and date-times (`12:30`,
-  `2024-06-30T12:00`). Give a plain decimal or an ISO date instead;
+- spellings Excel reads by the locale's rules: `5%`, `1,000`, `1,5`, `1.234.567`,
+  `$100`, `(100)`, `4 000`, digits other than 0-9 (`٤٠`, `１２３`), fractions (`1 1/2`),
+  times and date-times (`12:30`, `3:2`, `2024-06-30T12:00`), and dates not written
+  `YYYY-MM-DD`. Give a plain decimal or an ISO date instead;
+- a leading apostrophe (`'123`): Excel drops it and keeps the rest as text, so give
+  the value without it;
 - error values such as `#N/A`;
-- numbers outside the range Excel accepts (`1e-400`, `1e400`), and `inf` or `nan`;
+- numbers outside the range Excel accepts (`1e-400`, `1e400`);
 - ISO dates before 1900-03-01. Excel's 1900 date system counts a 29 February 1900 that
   never was, so its serials before March 1900 are a day off the calendar, and it has no
   dates before 1900. Give the serial number instead.
 
-A number cell also refuses any other text (`1_000`, `abc`). `--check-against` table
-values are set with the type they are stored with: a table cell holding `TRUE` sets a
-boolean.
+A date not written `YYYY-MM-DD` is text some locale reads as a date: digits joined by
+`/`, `-` or `.` whose parts can be a day (1-31), a month (1-12) and a year (one or two
+digits, or four from 1900), in day-month-year, month-day-year or year-month-day order
+(`30/06/2024`, `6/30/2024`, `30.06.2024`, `2024/06/30`), or two of them (`10-20`,
+`6/2024`, `2024-06`); or an English month name, in any case, with a day or year
+(`30-Jun-2024`, `June 30, 2024`, `Jun 2024`). Other text stays text on an empty cell,
+so ids and codes such as `123-45-6789`, `1234-5678` or `100-200` written into a blank
+display cell are kept as written.
+
+A number cell also refuses any other text (`1_000`, `abc`, `inf`, `nan`); on an empty
+cell those stay text, as in Excel. `--check-against` table values are set with the type
+they are stored with: a table cell holding `TRUE` sets a boolean.
+
+A number keeps every digit it is written with. Excel keeps 15 significant digits of a
+number typed into a cell and turns the rest to zeros (`1234567890123456789` becomes
+`1234567890123450000`), so a policy value with more than 15 significant digits (a long
+policy number used as a lookup key, or a value written by a script with 17 digits) can
+compute differently from Excel typing it. Values set by a macro or a query keep full
+precision in Excel too.
 
 The list is the validation's literal items, or the stored values of its source: a range,
 a whole column (the cells it holds) or a defined name over cells (the validation sheet's
