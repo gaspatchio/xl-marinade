@@ -350,17 +350,26 @@ Some refusals are per policy, read from the probes:
 | Detail | What triggers it |
 |---|---|
 | `lookup value type differs from keys` | An approximate lookup matches a key of a different type than its lookup value (text against numbers). Excel finds nothing there (`#N/A`); IronCalc 0.9.1 returns a row. |
-| `number-to-text at a decimal tie` | `TEXT`, `FIXED` or `DOLLAR` rounds a number that sits within about 1e-12 of a tie at the format's decimals: `TEXT(1234.5,"#,##0")`, `TEXT(0.0125,"0.0%")`, `FIXED(1.005,2)`. Excel rounds the tie away from zero on the 15-digit value (`1,235`); IronCalc 0.9.1 rounds the binary value, to even (`1,234`). At an exact binary tie `FIXED` and `DOLLAR` happen to agree with Excel; they are refused all the same. |
-| `number-to-text where Excel's 15-digit text differs` | A number becomes text through `&`, `CONCAT`, `CONCATENATE`, `TEXTJOIN` or a text function (`LEN`, `LEFT`, `MID`, `SUBSTITUTE`, `EXACT`, `FIND` and the like), and its text needs more than 15 significant digits (`7/12`, `0.1+0.2`) or the number lies outside 0.0001 to 1e15, where Excel may write scientific notation. Excel writes at most 15 significant digits; IronCalc up to 17. Also `TEXT`, `FIXED` or `DOLLAR` showing more than 15 digits. |
+| `number-to-text at a decimal tie` | `TEXT`, `FIXED` or `DOLLAR` rounds a number that sits within about 1e-12 of a tie at the format's decimals: `TEXT(1234.5,"#,##0")`, `TEXT(0.0125,"0.0%")`, `FIXED(1.005,2)`. Excel rounds the tie away from zero on the 15-digit value (`1,235`); IronCalc 0.9.1 rounds the binary value and can land on the other side (`1,234`). At an exact binary tie `FIXED` and `DOLLAR` happen to agree with Excel; they are refused all the same. |
+| `number-to-text of a negative value that rounds to zero or one unit` | `TEXT` with a one-section format shows a negative number that rounds to zero or to one unit of its last place: `TEXT(-0.01,"0%")`, `TEXT(-1,"0")`, `TEXT(-0.4,"0")`. Excel keeps the minus sign (`-1%`, `-1`, `-0`); IronCalc 0.9.1 drops it. A format with a negative section (`0;(0)`), `FIXED` and `DOLLAR` are not affected. |
+| `number-to-text where Excel's 15-digit text differs` | A number becomes text through `&`, `CONCAT`, `CONCATENATE`, `TEXTJOIN` or a text function (`LEN`, `LEFT`, `MID`, `SUBSTITUTE`, `EXACT`, `FIND`, `VALUETOTEXT`, the `REGEX` functions, `TEXTSPLIT` and the like), and its text needs more than 15 significant digits (`7/12`, `0.1+0.2`) or the number lies outside 0.0001 to 1e15, where Excel may write scientific notation. Excel writes at most 15 significant digits; IronCalc up to 17. Also `TEXT`, `FIXED` or `DOLLAR` showing more than 15 digits. |
 | `criterion built with & from a non-integer number` | A `SUMIF`, `SUMIFS`, `COUNTIF`, `COUNTIFS`, `AVERAGEIF`, `AVERAGEIFS`, `MAXIFS` or `MINIFS` criterion such as `"<="&x` where `x` is not a whole number. Excel compares against the 15-digit text it wrote. |
 
 Integers, and decimals with up to 15 significant digits that sit on no tie, stay `ok`.
-`TEXT` with a date or time format needs no check. A conversion calc cannot check is
-refused for every policy as `number-to-text not checked`: a `TEXT` format that is not
-literal text, or that calc cannot read (`General`, `@`, scientific, fractions,
-conditions, sections that round differently); a range or array handed to `CONCAT`,
-`TEXTJOIN` or a text function; or a conversion inside an array formula or beyond
-`--probe-cap`.
+`TEXT` with a date or time format needs no check, and a format's third section (shown
+only for an exact zero) does not decide the rounding. A range joined by `TEXTJOIN`,
+`CONCAT` or `CONCATENATE` is read cell by cell: constants that are text, booleans,
+blanks or numbers Excel writes as the engine does need nothing; formula cells, mapped
+inputs and other numbers are read per policy. A join calc cannot read cell by cell
+(an array from a function such as `FILTER` or `OFFSET`, or a range with more than
+1,000 cells to read) is refused as `number-to-text not checked` for the policies that
+evaluate it, not for those whose branch skips it.
+
+A conversion calc cannot check at all is refused for every policy as `number-to-text
+not checked`, whatever the policy: a `TEXT` format that is not literal text, or that
+calc cannot read (`General`, `@`, scientific, fractions, conditions, first two sections
+that round differently); a range given to a text function such as `LEN`; or a
+conversion inside an array formula, `LET`/`LAMBDA`, or beyond `--probe-cap`.
 
 ## Fixed points
 

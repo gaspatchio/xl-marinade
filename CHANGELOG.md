@@ -81,11 +81,15 @@ schema is a versioned public contract.
   differ.** IronCalc 0.9.1 rounds `TEXT`, `FIXED` and `DOLLAR` ties the other way
   (`TEXT(1234.5,"#,##0")` gives `1,234`, Excel `1,235`; `FIXED(1.005,2)` gives `1.00`,
   Excel `1.01`) and writes numbers turned into text with up to 17 significant digits
-  where Excel writes 15 (`"t="&(7/12)`), and these came back `ok`. Per policy, a value
-  is now refused (`number-to-text at a decimal tie`, `number-to-text where Excel's
+  where Excel writes 15 (`"t="&(7/12)`, `VALUETOTEXT`, `REGEXTEST`), and it drops the
+  minus sign of `TEXT(-1,"0")` or `TEXT(-0.01,"0%")`; these came back `ok`. Per policy,
+  a value is now refused (`number-to-text at a decimal tie`, `number-to-text of a
+  negative value that rounds to zero or one unit`, `number-to-text where Excel's
   15-digit text differs`, and `criterion built with & from a non-integer number` for
-  `SUMIF`-family criteria); a `TEXT` format calc cannot read is `number-to-text not
-  checked`. Integers and short decimals off a tie stay `ok`. Correcting the value
+  `SUMIF`-family criteria). A range joined by `TEXTJOIN` or `CONCAT` is read cell by
+  cell, so a range of text or integer constants stays `ok`. A `TEXT` format calc cannot
+  read is `number-to-text not checked`. Integers and short decimals off a tie stay
+  `ok`. Correcting the value
   instead of refusing it is planned for 0.9.
 
 ## [0.8.0] - 2026-11-24
