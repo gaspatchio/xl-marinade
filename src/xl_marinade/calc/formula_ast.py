@@ -108,6 +108,10 @@ _SPLIT_ERROR = re.compile(r"#(?:N/A|DIV/0!)", re.IGNORECASE)
 # Text where ``#`` is not an error literal: strings, quoted sheets, structured refs.
 _SKIPPED = re.compile(r"\"(?:[^\"]|\"\")*\"|'(?:[^']|'')*'|\[[^\]]*\]")
 
+# Text that may hold a dynamic reference: OFFSET, INDIRECT, or a ``:`` before a call
+# (a range built by one, ``B1:INDEX(...)``). A cheap filter before parsing.
+DYNAMIC_HINT = re.compile(r"OFFSET|INDIRECT|:[^:(),]*\(", re.IGNORECASE)
+
 UNKNOWN = object()
 """Sentinel returned by :func:`literal` for a non-literal argument."""
 

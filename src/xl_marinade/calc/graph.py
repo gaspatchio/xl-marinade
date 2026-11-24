@@ -13,7 +13,13 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 
-from xl_marinade.calc.formula_ast import SHEET, call_name, parse_formula
+from xl_marinade.calc.formula_ast import (
+    DYNAMIC_HINT,
+    SHEET,
+    built_range,
+    call_name,
+    parse_formula,
+)
 from xl_marinade.calc.models import ArrayRange, CellRef, _col_to_number
 from xl_marinade.calc.prepare import relative_names
 from xl_marinade.core.db_uri import connect_read_only
@@ -40,7 +46,6 @@ _MAX_ROW = 1_048_576
 _MAX_COL = 16_384
 # Functions whose arguments say where a reference lands.
 _DYNAMIC = frozenset({"OFFSET", "INDIRECT"})
-_DYNAMIC_TEXT = re.compile(r"OFFSET|INDIRECT", re.IGNORECASE)
 # Functions whose first argument is a reference they move within or from.
 _REFERENCE_FIRST = frozenset({"OFFSET", "INDEX"})
 
@@ -195,6 +200,9 @@ class WorkbookGraph:
         # Array formulas: anchor -> its range, and each other cell of a range -> anchor.
         self._arrays: dict[CellRef, ArrayRange] = {}
         self._member_anchor: dict[CellRef, CellRef] = {}
+        # Cells holding a dynamic reference -> what they read besides where it lands:
+        # references outside the dynamic calls, and the calls' arguments.
+        self._reads: dict[CellRef, list[_Rect]] = {}
         self._validations: list[tuple[list[_Rect], list[str] | None, str | None, str]] = []
         self._sheets: set[str] = set()
 
@@ -316,18 +324,30 @@ class WorkbookGraph:
         the cells deciding where it lands (rows, columns, height, width, the address
         text), so a failure or an unexercised branch there would not reach the cell.
         The reference an ``OFFSET`` starts from is not one of them: where it lands is
-        followed per policy by a probe.
+        followed per policy by a probe. Each such cell also keeps what it reads apart
+        from where its references land (:meth:`read_precedents`).
         """
         for cell, text in self._formula.items():
-            if _DYNAMIC_TEXT.search(text) is None:
+            if DYNAMIC_HINT.search(text) is None:
                 continue
             root = parse_formula(text)
             if root is None:
                 continue
-            for ref in _argument_refs(root):
-                self._add_ref_edge(cell, ref, max_row)
+            arguments, outside = _dynamic_reads(root)
+            if arguments is None:
+                continue
+            reads: list[_Rect] = []
+            for ref in arguments:
+                rects = self._ref_rects(cell, ref)
+                reads.extend(rects)
+                self._add_rect_edges(cell, rects, max_row)
+            for ref in outside:
+                reads.extend(self._ref_rects(cell, ref))
+            self._reads[cell] = reads
 
-    def _add_ref_edge(self, cell: CellRef, ref: str, max_row: dict[str, int]) -> None:
+    def _ref_rects(self, cell: CellRef, ref: str) -> list[_Rect]:
+        """The rectangles a reference in ``cell``'s formula covers (sheets as the
+        workbook spells them); empty when it is not one calc can read."""
         rects: list[_Rect] = []
         if (rect := _parse_rect(ref, cell.sheet)) is not None:
             rects.append(rect)
@@ -336,10 +356,15 @@ class WorkbookGraph:
                 rects.append(clipped)
         elif (found := self.lookup_name(ref, cell.sheet)) is not None and found.kind == "cells":
             rects.extend(found.rects)
+        out: list[_Rect] = []
         for written, r1, c1, r2, c2 in rects:
             sheet = self.sheet(written)
-            if sheet is None:
-                continue
+            if sheet is not None:
+                out.append((sheet, r1, c1, r2, c2))
+        return out
+
+    def _add_rect_edges(self, cell: CellRef, rects: list[_Rect], max_row: dict[str, int]) -> None:
+        for sheet, r1, c1, r2, c2 in rects:
             if (r1, c1) == (r2, c2):
                 target = CellRef(sheet, r1, c1)
                 if target != cell:
@@ -549,6 +574,30 @@ class WorkbookGraph:
                         seen.add(ref)
                         out.append(ref)
         return sorted(out)
+
+    def is_dynamic(self, cell: CellRef) -> bool:
+        """True when the cell's formula holds a dynamic reference: ``OFFSET``,
+        ``INDIRECT``, or a range built by a call."""
+        return cell in self._reads
+
+    def read_precedents(self, cell: CellRef) -> frozenset[CellRef]:
+        """What a cell with a dynamic reference reads apart from where its references
+        land: the references outside the dynamic calls and the calls' arguments. Unlike
+        :meth:`precedents` this leaves out the reference an ``OFFSET`` starts from and
+        the cells the references landed on with the stored inputs, which the
+        extraction records as edges. For any other cell, its precedents."""
+        reads = self._reads.get(cell)
+        if reads is None:
+            return self.precedents(cell)
+        out: set[CellRef] = set()
+        for rect in reads:
+            sheet, r1, c1, r2, c2 = rect
+            if (r1, c1) == (r2, c2):
+                out.add(CellRef(sheet, r1, c1))
+            else:
+                out.update(self._cells_in_rect(rect))
+        out.discard(cell)
+        return frozenset(out)
 
     def precedents(self, cell: CellRef) -> frozenset[CellRef]:
         """Direct cell edges plus every IR cell inside each range the formula reads."""
@@ -786,19 +835,22 @@ class WorkbookGraph:
         return None
 
 
-def _argument_refs(root: ASTNode) -> list[str]:
-    """References inside the arguments of every ``OFFSET`` and ``INDIRECT`` in the
-    formula (a range built by one, ``B1:OFFSET(...)``, included), except the reference
-    an ``OFFSET`` starts from (written plainly, or as the range of an ``INDEX``): its
-    probe follows where it lands."""
-    out: list[str] = []
+def _dynamic_reads(root: ASTNode) -> tuple[list[str] | None, list[str]]:
+    """``(arguments, outside)`` for a formula with a dynamic reference: the references
+    inside the arguments of each ``OFFSET``, ``INDIRECT`` and range built by a call
+    (except where an ``OFFSET`` or a built range starts from, written plainly or as an
+    ``INDEX``'s range there: its probe follows where it lands), and the references
+    outside those calls. ``arguments`` is None when the formula holds no dynamic
+    reference."""
+    arguments: list[str] = []
+    outside: list[str] = []
+    dynamic = False
 
     def collect(node: ASTNode, reference: bool) -> None:
-        # ``reference``: the node is where an OFFSET starts from (directly, or through
-        # the range of an INDEX there): its probe follows where it lands.
+        # ``reference``: the node is where a reference starts from.
         if isinstance(node, RefNode):
             if not reference:
-                out.append(node.ref)
+                arguments.append(node.ref)
         elif isinstance(node, FunctionNode):
             name = call_name(node.name)
             for i, arg in enumerate(node.args):
@@ -813,17 +865,21 @@ def _argument_refs(root: ASTNode) -> list[str]:
     stack: list[ASTNode] = [root]
     while stack:
         node = stack.pop()
-        if isinstance(node, FunctionNode):
+        if isinstance(node, RefNode):
+            outside.append(node.ref)
+        elif isinstance(node, FunctionNode):
             name = call_name(node.name)
-            if name in _DYNAMIC:
+            if built_range(node.name) is not None or name in _DYNAMIC:
+                dynamic = True
                 for i, arg in enumerate(node.args):
-                    collect(arg, i == 0 and name == "OFFSET")
-            stack.extend(node.args)
+                    collect(arg, i == 0 and name in _REFERENCE_FIRST)
+            else:
+                stack.extend(node.args)
         elif isinstance(node, BinaryNode):
             stack.extend([node.left, node.right])
         elif isinstance(node, UnaryNode):
             stack.append(node.operand)
-    return out
+    return (arguments if dynamic else None), outside
 
 
 def open_graph(workbook: Path, ir: Path | None, tmp: Path) -> WorkbookGraph:

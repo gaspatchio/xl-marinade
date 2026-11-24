@@ -205,7 +205,7 @@ All in the `-o` directory, UTF-8, `\n` line endings, no timestamps.
 |---|---|
 | `results.csv` | `policy_id`, `output` (`Sheet!A1`), `value`, `status`, `reasons`. One row per policy and output cell. |
 | `rows.csv` | With `--variables`: `policy`, `variable`, `period`, `value`, `status`, `reasons`. |
-| `paths.csv` | `policy_id`, `cell`, `family`, `kind`, `ordinal`, `outcome`, `exercised`. The branch or lookup edge each policy took, in the cells that fed its outputs (through the cells its dynamic references landed on, too); `ordinal` tells apart several probes of one kind in one cell; `exercised` is `true` when the trust run took it too. |
+| `paths.csv` | `policy_id`, `cell`, `family`, `kind`, `ordinal`, `outcome`, `exercised`. The branch or lookup edge each policy took, in the cells that fed its outputs: through the cells its dynamic references landed on for that policy, not the cell an `OFFSET` starts from or where it landed with the stored inputs; `ordinal` tells apart several probes of one kind in one cell; `exercised` is `true` when the trust run took it too. |
 | `trust_report.json` | `formula_cells`, `checked`, `reproduced`, `share`, `failures`, `refused_patterns`, `settings` (with `settings.refused`), `held_external_links`, `check_against` (`input_sets`, and `mismatches` with `input_set`, `cell`, `detail`, `stored`, `computed`, `relative_difference`). |
 | `run.json` | `ironcalc_version`, `marinade_version`, `workbook_sha256`, `tolerance`, `as_of`, `probe_cap`, `probes_unplaced`, and per variable its range, `period_start` and the cell period 0 falls on. |
 
@@ -250,7 +250,10 @@ Details worth knowing:
   refused pattern, exercises nothing for its family. A branch or lookup inside an arm
   the formula did not evaluate (the `FALSE` arm of an `IF` that went `TRUE`) is not
   exercised by the trust run and is not a path a policy took. A `--check-against` input
-  set exercises only the branches and lookups upstream of the outputs it was compared on.
+  set exercises only the branches and lookups upstream of the outputs it was compared on,
+  following its own dynamic references: the cells an `OFFSET` or `INDIRECT` landed on
+  for that set count, the cell an `OFFSET` starts from and the cell it lands on with the
+  stored inputs do not (unless the set landed there).
 - Because probes are placed only upstream of the requested outputs, asking for fewer
   outputs can make a status more conservative: a family member that is not upstream of
   any requested output is not probed, so it cannot vouch for the branches it took.
