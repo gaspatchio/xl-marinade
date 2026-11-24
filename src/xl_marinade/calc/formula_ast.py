@@ -173,6 +173,26 @@ def function_name(raw: str) -> str:
     return name
 
 
+def built_range(raw: str) -> tuple[str, str] | None:
+    """``(start, function)`` for a range whose end is a function call.
+
+    The core parser reads ``B1:OFFSET(B1,n,0)`` as one function named ``B1:OFFSET``:
+    a reference from ``B1`` to wherever the call lands. ``function`` is the call's name
+    as written (it may carry a sheet, ``Tab!OFFSET``, which Excel does not allow). None
+    for an ordinary function name.
+    """
+    start, sep, function = raw.rpartition(":")
+    if not sep or not start or not function:
+        return None
+    return start, function
+
+
+def call_name(raw: str) -> str:
+    """:func:`function_name` of a call, or of the end of a range built by one."""
+    built = built_range(raw)
+    return function_name(built[1] if built is not None else raw)
+
+
 def iter_nodes(root: ASTNode) -> Iterator[ASTNode]:
     """Every node of the tree in pre-order (a node before its children, left to right)."""
     stack: list[ASTNode] = [root]

@@ -1,0 +1,374 @@
+"""Dynamic references (``OFFSET``, ``INDIRECT``, ranges built by a call) are followed
+through their arguments, their built range ends and the cells they land on.
+
+The device for a wrong value is ``DATE(1900,1,1)``: Excel gives 1 (its 1900 date
+system starts there), IronCalc 0.9.1 gives 2. Every other value is worked by hand from
+Excel's documented semantics: ``OFFSET(base,r,c)`` is the cell ``r`` rows below and
+``c`` columns right of ``base``; ``INDIRECT(text)`` is the cell the address text names
+(on the formula's own sheet when the text names none); ``B1:OFFSET(...)`` is the
+smallest range holding ``B1`` and the cell ``OFFSET`` returns; ``ROUND`` rounds an exact
+half away from zero.
+"""
+
+from __future__ import annotations
+
+import csv
+import json
+from collections.abc import Callable
+from pathlib import Path
+
+import pytest
+
+pytest.importorskip("ironcalc")
+
+from tests.calc.conftest import F  # noqa: E402
+from xl_marinade.calc import CalcRequest, CalcResult, calc  # noqa: E402
+from xl_marinade.calc.graph import open_graph  # noqa: E402
+from xl_marinade.calc.models import CellRef  # noqa: E402
+from xl_marinade.calc.patterns import INPUT_KEYS, input_dependent_lookups  # noqa: E402
+from xl_marinade.calc.probes import ProbeKind, plan_probes  # noqa: E402
+
+Book = Callable[..., Path]
+_RANK = {"ok": 0, "unverified_path": 1, "uncertain": 2, "refused": 3}
+
+
+def _run(
+    tmp: Path,
+    book: Path,
+    policies: str,
+    fields: dict[str, str],
+    outputs: list[str],
+    *,
+    check: dict[str, object] | None = None,
+    tag: str = "out",
+) -> CalcResult:
+    (tmp / "p.csv").write_text(policies, encoding="utf-8")
+    (tmp / "m.json").write_text(json.dumps({"id_field": "id", "fields": fields}), encoding="utf-8")
+    check_path = None
+    if check is not None:
+        check_path = tmp / "c.json"
+        check_path.write_text(json.dumps(check), encoding="utf-8")
+    return calc(
+        CalcRequest(
+            workbook=book,
+            policies=tmp / "p.csv",
+            input_map=tmp / "m.json",
+            out_dir=tmp / tag,
+            outputs=outputs,
+            check_against=check_path,
+        )
+    )
+
+
+def _rows(res: CalcResult) -> dict[tuple[str, str], dict[str, str]]:
+    with res.results_csv.open(encoding="utf-8", newline="") as fh:
+        return {(r["policy_id"], r["output"]): r for r in csv.DictReader(fh)}
+
+
+# -- (a) arguments --------------------------------------------------------------
+
+_BAND = [100, 200, 300, 300, 500, 600, 700, 800]  # Tab!A1:A8, flat at rows 3-4
+
+
+def _argument_book(make_book: Book) -> Path:
+    # Stored x = 3. C1 = x - DATE(1900,1,1) + 1: Excel 3 (IronCalc 2). C2 = IF(x>4,
+    # DATE(1900,1,1)+2, 1): Excel 1 (the FALSE arm). D1 = OFFSET(Tab!A1, C1, 0) = A4 =
+    # 300, which IronCalc reproduces by landing on A3 = 300. D2 the same through
+    # INDIRECT's text. D8 = OFFSET(Tab!A1, C2, 0) = A2 = 200.
+    tab = {f"A{i}": v for i, v in enumerate(_BAND, 1)}
+    return make_book(
+        "args",
+        {
+            "Inputs": {"B1": 3},
+            "Calc": {
+                "C1": F("=Inputs!$B$1-DATE(1900,1,1)+1", 3),
+                "C2": F("=IF(Inputs!$B$1>4,DATE(1900,1,1)+2,1)", 1),
+                "D1": F("=OFFSET(Tab!$A$1,Calc!C1,0)", 300),
+                "D2": F('=INDIRECT("Tab!A"&(Calc!C1+1))', 300),
+                "D8": F("=OFFSET(Tab!$A$1,Calc!C2,0)", 200),
+            },
+            "Tab": tab,
+        },
+    )
+
+
+def test_an_argument_that_fails_the_trust_run_refuses_the_reference(
+    make_book: Book, tmp_path: Path
+) -> None:
+    # x = 5: Excel C1 = 5, D1 = D2 = A6 = 600; IronCalc lands on A5 = 500.
+    book = _argument_book(make_book)
+    res = _run(tmp_path, book, "id,x\nP,5\n", {"x": "Inputs!B1"}, ["Calc!D1", "Calc!D2"])
+    rows = _rows(res)
+    for out in ("Calc!D1", "Calc!D2"):
+        row = rows[("P", out)]
+        assert row["status"] == "refused", (out, row)
+        assert "silently_wrong@Calc!C1" in row["reasons"], (out, row)
+
+
+def test_an_argument_on_an_unexercised_arm_is_unverified(make_book: Book, tmp_path: Path) -> None:
+    # x = 5: Excel C2 = DATE(1900,1,1)+2 = 3, D8 = A4 = 300 (IronCalc 4 -> 500). The
+    # trust run never took C2's TRUE arm.
+    book = _argument_book(make_book)
+    res = _run(tmp_path, book, "id,x\nP,5\nS,3\n", {"x": "Inputs!B1"}, ["Calc!D8"])
+    rows = _rows(res)
+    row = rows[("P", "Calc!D8")]
+    assert row["status"] == "unverified_path", row
+    assert "unexercised_branch@Calc!C2:IF #0 took 'TRUE'" in row["reasons"]
+    assert rows[("S", "Calc!D8")]["status"] == "ok"  # the stored path: A2 = 200
+
+
+def test_argument_cells_are_precedents(make_book: Book, tmp_path: Path) -> None:
+    book = make_book(
+        "edges",
+        {
+            "Inputs": {"B1": 1, "B2": 2, "B3": 1, "B4": "A"},
+            "Calc": {
+                "A1": 10,
+                "A2": 20,
+                "A3": 30,
+                "B1": F("=SUM(OFFSET(A1,Inputs!B1,0,Inputs!B2,Inputs!B3))", 50),
+                "B2": F('=INDIRECT(Inputs!B4&"2")', 20),
+                "B3": F("=SUM(A1:OFFSET(A1,Inputs!B1,0))", 30),
+                "B4": F("=OFFSET(A1,INDEX(Inputs!B1:B2,2),0)", 30),
+            },
+        },
+    )
+    graph = open_graph(book, None, tmp_path / "ir")
+    assert {CellRef("Inputs", r, 2) for r in (1, 2, 3)} <= graph.precedents(CellRef("Calc", 1, 2))
+    assert CellRef("Inputs", 4, 2) in graph.precedents(CellRef("Calc", 2, 2))
+    assert CellRef("Inputs", 1, 2) in graph.precedents(CellRef("Calc", 3, 2))
+    # An INDEX whose value is an argument reads its whole range.
+    assert {CellRef("Inputs", 1, 2), CellRef("Inputs", 2, 2)} <= graph.precedents(
+        CellRef("Calc", 4, 2)
+    )
+
+
+def test_keys_moved_by_an_offset_argument_are_input_dependent(
+    make_book: Book, tmp_path: Path
+) -> None:
+    # K1:K3 = OFFSET(Base!A1..A3, In!B1, 0): the keys move with In!B1 only through
+    # OFFSET's argument; L1 looks them up approximately.
+    book = make_book(
+        "keys",
+        {
+            "In": {"B1": 0},
+            "Base": {f"A{i}": 10 * i for i in range(1, 7)},
+            "S": {
+                "K1": F("=OFFSET(Base!A1,In!B1,0)", 10),
+                "K2": F("=OFFSET(Base!A2,In!B1,0)", 20),
+                "K3": F("=OFFSET(Base!A3,In!B1,0)", 30),
+                "V1": 1,
+                "V2": 2,
+                "V3": 3,
+                "L1": F("=VLOOKUP(25,K1:V3,2,TRUE)", 2),
+            },
+        },
+    )
+    graph = open_graph(book, None, tmp_path / "ir")
+    found = input_dependent_lookups(graph, {CellRef("In", 1, 2)})
+    assert [r.detail for r in found.get(CellRef("S", 1, 12), [])] == [INPUT_KEYS]
+
+
+# -- (b) built range ends -------------------------------------------------------
+
+
+def test_range_ends_built_by_offset_and_indirect_are_followed(
+    make_book: Book, tmp_path: Path
+) -> None:
+    # G1:G3 = 10, 20, DATE(1900,1,1)*3 (Excel 3, IronCalc 6). Stored n = 0: E1 = E2 =
+    # SUM(G1:G1) = 10, which IronCalc reproduces. n = 2: Excel 33 (IronCalc 36).
+    book = make_book(
+        "ends",
+        {
+            "Inputs": {"B2": 0},
+            "Tab": {
+                "G1": 10,
+                "G2": 20,
+                "G3": F("=DATE(1900,1,1)*3", 3),
+                "E1": F("=SUM(G1:OFFSET(G1,Inputs!$B$2,0))", 10),
+                "E2": F('=SUM(G1:INDIRECT("G"&(Inputs!$B$2+1)))', 10),
+            },
+        },
+    )
+    res = _run(tmp_path, book, "id,n\nP,2\n", {"n": "Inputs!B2"}, ["Tab!E1", "Tab!E2"])
+    rows = _rows(res)
+    for out in ("Tab!E1", "Tab!E2"):
+        row = rows[("P", out)]
+        assert row["value"] == "36.0", (out, row)
+        assert row["status"] == "refused", (out, row)
+        assert "silently_wrong@Tab!G3" in row["reasons"], (out, row)
+
+
+def test_a_range_end_that_cannot_be_read_is_refused(make_book: Book, tmp_path: Path) -> None:
+    # A sheet on the called function is not something calc can lift: refused by name.
+    book = make_book(
+        "unread",
+        {"S": {"A1": 1, "A2": 2, "B1": F("=SUM(A1:OFFSET(A1,1,0))", 3)}},
+    )
+    graph = open_graph(book, None, tmp_path / "ir")
+    cell = CellRef("S", 1, 2)
+    graph._formula[cell] = "SUM(A1:S!OFFSET(A1,1,0))"  # as the parser would hand it over
+    plan = plan_probes(graph, [cell], cap=100)
+    assert plan.unplaced.get(cell) == [ProbeKind.dynamic_ref]
+    graph._formula[cell] = "SUM(A1:OFFSET(A1,1,0))"
+    plan = plan_probes(graph, [cell], cap=100)
+    assert [p.kind for p in plan.probes] == [ProbeKind.dynamic_ref]
+    assert plan.probes[0].meta["function"] == "range"
+
+
+# -- (c) landing cells ----------------------------------------------------------
+
+
+def _landing_book(make_book: Book) -> Path:
+    # Stored k = 1, x = 5, r = 1.2.
+    #   Calc!A1 = IF(x>1, 10, 20) = 10; A2 = IF(x>100, DATE(1900,1,1), 40) = 40;
+    #   A3 = ROUND(r, 0) = 1; C2 = IF(x>100, DATE(1900,1,1), 7) = 7; D1 = 3;
+    #   D2 = C2*2 = 14.
+    #   Out!B1 = OFFSET(Calc!A1, k-1, 0)        -> A1 = 10
+    #   Out!B2 = INDIRECT("Calc!A"&k)            -> A1 = 10 (a literal sheet)
+    #   Out!B3 = OFFSET(Calc!A2, k-1, 0)        -> A2 = 40
+    #   Out!B4 = OFFSET(Calc!D1, k-1, 0)        -> D1 = 3
+    #   Calc!E1 = INDIRECT("A"&k)                -> A1 = 10 (no sheet in the text)
+    #   Calc!E3 = INDIRECT("A"&(k+2))            -> A3 = 1
+    #   Calc!F1 = INDIRECT("D"&k)                -> D1 = 3
+    return make_book(
+        "landing",
+        {
+            "Inputs": {"B1": 1, "B2": 5, "B3": 1.2},
+            "Calc": {
+                "A1": F("=IF(Inputs!$B$2>1,10,20)", 10),
+                "A2": F("=IF(Inputs!$B$2>100,DATE(1900,1,1),40)", 40),
+                "A3": F("=ROUND(Inputs!$B$3,0)", 1),
+                "C2": F("=IF(Inputs!$B$2>100,DATE(1900,1,1),7)", 7),
+                "D1": 3,
+                "D2": F("=Calc!C2*2", 14),
+                "E1": F('=INDIRECT("A"&Inputs!$B$1)', 10),
+                "E3": F('=INDIRECT("A"&(Inputs!$B$1+2))', 1),
+                "F1": F('=INDIRECT("D"&Inputs!$B$1)', 3),
+            },
+            "Out": {
+                "B1": F("=OFFSET(Calc!$A$1,Inputs!$B$1-1,0)", 10),
+                "B2": F('=INDIRECT("Calc!A"&Inputs!$B$1)', 10),
+                "B3": F("=OFFSET(Calc!$A$2,Inputs!$B$1-1,0)", 40),
+                "B4": F("=OFFSET(Calc!$D$1,Inputs!$B$1-1,0)", 3),
+            },
+        },
+    )
+
+
+_FIELDS = {"k": "Inputs!B1", "x": "Inputs!B2", "r": "Inputs!B3"}
+
+
+def test_landing_cells_are_probed(make_book: Book, tmp_path: Path) -> None:
+    # Policy k = 2, x = 500, r = 2.5. Excel: B1 = B2 = A2 = DATE(1900,1,1) = 1, the TRUE
+    # arm the trust run never took; B3 = A3 = ROUND(2.5,0) = 3, an exact half; B4 = D2 =
+    # C2*2 = 2, whose precedent took the untried arm.
+    book = _landing_book(make_book)
+    outputs = ["Out!B1", "Out!B2", "Out!B3", "Out!B4"]
+    res = _run(tmp_path, book, "id,k,x,r\nP,2,500,2.5\n", _FIELDS, outputs)
+    rows = _rows(res)
+    want = {
+        "Out!B1": ("unverified_path", "unexercised_branch@Calc!A2:IF #0 took 'TRUE'"),
+        "Out!B2": ("unverified_path", "unexercised_branch@Calc!A2:IF #0 took 'TRUE'"),
+        "Out!B3": ("uncertain", "near_rounding_flip@Calc!A3"),
+        "Out!B4": ("unverified_path", "unexercised_branch@Calc!C2:IF #0 took 'TRUE'"),
+    }
+    for out, (status, reason) in want.items():
+        row = rows[("P", out)]
+        assert row["status"] == status, (out, row)
+        assert reason in row["reasons"], (out, row)
+
+
+def test_an_indirect_naming_no_sheet_lands_unchecked(make_book: Book, tmp_path: Path) -> None:
+    # INDIRECT text that names no sheet can land anywhere: the cells it lands on are
+    # not probed (ruling D1), so a landing on formulas is never ok. Each such cell is
+    # not_checked_path, and its probes count as unplaced: the IF's comparison gives
+    # not_checked_value (uncertain), as an unplaced comparison probe does. Policy k =
+    # 2, x = 500: E1 = A2 = 1, F1 = D2 = C2*2 = 2. k = 1, x = 5 lands where the stored
+    # inputs do: A1 (an IF the plan did not probe) and D1 (a constant).
+    book = _landing_book(make_book)
+    outputs = ["Calc!E1", "Calc!F1"]
+    res = _run(tmp_path, book, "id,k,x,r\nP,2,500,2.5\nQ,1,5,1.2\n", _FIELDS, outputs)
+    rows = _rows(res)
+    p_e1 = rows[("P", "Calc!E1")]
+    assert p_e1["value"] == "2.0"  # IronCalc's DATE(1900,1,1); Excel 1
+    assert p_e1["status"] == "uncertain", p_e1
+    assert "not_checked_path@Calc!A2:reached through a dynamic reference" in p_e1["reasons"]
+    assert "not_checked_value@Calc!A2:comparison not checked" in p_e1["reasons"]
+    p_f1 = rows[("P", "Calc!F1")]
+    assert p_f1["status"] == "uncertain", p_f1
+    assert "not_checked_path@Calc!C2:reached through a dynamic reference" in p_f1["reasons"]
+    assert "not_checked_path@Calc!D2:reached through a dynamic reference" in p_f1["reasons"]
+    assert rows[("Q", "Calc!E1")]["status"] == "uncertain"
+    assert rows[("Q", "Calc!F1")]["status"] == "ok"  # a constant: nothing to check
+
+
+def test_an_unprobed_landing_on_rounding_is_uncertain(make_book: Book, tmp_path: Path) -> None:
+    # Calc!E3 = INDIRECT("A"&(k+2)): k = 1 lands on A3 = ROUND(r,0). The rounding is not
+    # probed, so the value is uncertain, as an unplaced rounding probe is.
+    book = _landing_book(make_book)
+    res = _run(tmp_path, book, "id,k,x,r\nP,1,5,2.5\n", _FIELDS, ["Calc!E3"])
+    row = _rows(res)[("P", "Calc!E3")]
+    assert row["value"] == "3.0"
+    assert row["status"] == "uncertain", row
+    assert "not_checked_value@Calc!A3:rounding not checked" in row["reasons"]
+
+
+def test_fewer_outputs_are_never_less_conservative(make_book: Book, tmp_path: Path) -> None:
+    # Each output alone, then all of them with every cell they can land on: asking for
+    # fewer outputs may make a status more conservative, never less (guide).
+    book = _landing_book(make_book)
+    policies = "id,k,x,r\nP,2,500,2.5\nQ,1,5,2.5\nS,1,5,1.2\nT,3,500,1.2\n"
+    alone = ["Out!B1", "Out!B2", "Out!B3", "Out!B4", "Calc!E1", "Calc!E3", "Calc!F1"]
+    every = [*alone, "Calc!A1:A3", "Calc!C2", "Calc!D2"]
+    full = _rows(_run(tmp_path, book, policies, _FIELDS, every, tag="all"))
+    for out in alone:
+        rows = _rows(_run(tmp_path, book, policies, _FIELDS, [out], tag=out.replace("!", "_")))
+        for pid in ("P", "Q", "S", "T"):
+            few, many = rows[(pid, out)], full[(pid, out)]
+            assert few["value"] == many["value"], (pid, out)
+            assert _RANK[few["status"]] >= _RANK[many["status"]], (pid, out, few, many)
+
+
+def test_a_check_set_exercises_the_cells_it_landed_on(make_book: Book, tmp_path: Path) -> None:
+    # Calc!A2 = IF(x>100, 77, 40). Out!B1 = OFFSET(Calc!A1, k-1, 0). A results sheet
+    # stores Out!B1 for input set C (k = 2, x = 500): 77, which the engine reproduces.
+    # Policy P (k = 2, x = 700) takes the same arm: 77, checked by set C.
+    book = make_book(
+        "check",
+        {
+            "Inputs": {"B1": 1, "B2": 5},
+            "Calc": {
+                "A1": F("=IF(Inputs!$B$2>1,10,20)", 10),
+                "A2": F("=IF(Inputs!$B$2>100,77,40)", 40),
+            },
+            "Out": {"B1": F("=OFFSET(Calc!$A$1,Inputs!$B$1-1,0)", 10)},
+            "Sets": {"A2": "C", "B2": 2, "C2": 500},
+            "Results": {"A2": "C", "B2": 77},
+        },
+    )
+    fields = {"k": "Inputs!B1", "x": "Inputs!B2"}
+    check = {
+        "results": {
+            "sheet": "Results",
+            "id_column": "A",
+            "first_row": 2,
+            "outputs": {"Out!B1": "B"},
+        },
+        "inputs": {
+            "table": {
+                "sheet": "Sets",
+                "id_column": "A",
+                "first_row": 2,
+                "fields": {"k": "B", "x": "C"},
+            }
+        },
+    }
+    without = _rows(_run(tmp_path, book, "id,k,x\nP,2,700\n", fields, ["Out!B1"], tag="a"))
+    assert without[("P", "Out!B1")]["status"] == "unverified_path"
+    checked = _rows(
+        _run(tmp_path, book, "id,k,x\nP,2,700\n", fields, ["Out!B1"], check=check, tag="b")
+    )
+    row = checked[("P", "Out!B1")]
+    assert row["value"] == "77.0"
+    assert row["status"] == "ok", row

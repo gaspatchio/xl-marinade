@@ -228,6 +228,11 @@ marinade values book.xlsx --variables vars.json [--map map.json] -o stored/
   must have hit the first row, last row and not-found in the trust run to be `ok`
   there. Probes go upstream of the requested outputs only, so fewer outputs can
   mean a more conservative status.
+- `OFFSET`/`INDIRECT` (and ranges ending in a call, `C5:OFFSET(...)`) are followed per
+  policy; their argument cells are precedents; every formula cell on the sheet an
+  `OFFSET` starts from or an `INDIRECT` text names literally is probed. An `INDIRECT`
+  naming no sheet that lands on unprobed formulas gives `not_checked_path` (and
+  `not_checked_value` for their roundings/comparisons) — never `ok`.
 - **Refused even when they reproduce:** approximate lookups on unsorted, mixed,
   whole-column or non-plain-text keys (and `XLOOKUP`/`XMATCH` binary search);
   implicit intersection on a multi-cell name or on a range outside a function

@@ -287,3 +287,31 @@ def test_a_spill_that_grows_carries_its_anchors_status(make_book: Book, tmp_path
         row = rows[("P", out)]
         assert row["status"] == "refused", (out, row)
         assert "refused_pattern@Data!A1:TODAY" in row["reasons"], (out, row)
+
+
+def test_a_spill_grown_from_an_unprobed_formula_is_not_ok(make_book: Book, tmp_path: Path) -> None:
+    # Calc!B1 = SEQUENCE(Inputs!B1)*IF(Inputs!B2>0,1,2): stored n = 3, b = 1 (B1:B3 =
+    # 1, 2, 3). G1 = B5*2 reads a cell only a larger spill reaches, so nothing upstream
+    # of G1 leads to the formula and it is not probed. n = 5: B5 = 5 and G1 = 10, from
+    # a formula whose IF no probe checked.
+    book = make_book(
+        "spill_branch",
+        {
+            "Inputs": {"B1": 3, "B2": 1},
+            "Calc": {
+                "B1": F("=_xlfn.SEQUENCE(Inputs!B1)*IF(Inputs!B2>0,1,2)", 1),
+                "B2": 0,
+                "B3": 0,
+                "G1": F("=Calc!B5*2", 0),
+            },
+        },
+    )
+    formula = "_xlfn.SEQUENCE(Inputs!B1)*IF(Inputs!B2&gt;0,1,2)"
+    book = _arrays(
+        book, "xl/worksheets/sheet2.xml", [("B1", "B1:B3", formula, {"B2": 2.0, "B3": 3.0}, True)]
+    )
+    res = _run(tmp_path, book, "id,n\nP,5\n", {"n": "Inputs!B1"}, ["Calc!G1"])
+    row = _rows(res)[("P", "Calc!G1")]
+    assert row["value"] == "10.0"
+    assert row["status"] != "ok", row
+    assert "not_checked_path@Calc!B1:" in row["reasons"], row

@@ -14,6 +14,7 @@ import hashlib
 import math
 import re
 import tempfile
+from collections.abc import Container
 from dataclasses import asdict, dataclass, field
 from datetime import date
 from pathlib import Path
@@ -58,6 +59,8 @@ from xl_marinade.calc.probes import (
     engine_error_code,
     place_probes,
     plan_probes,
+    probe_kinds,
+    reach_sheets,
     read_probes,
 )
 from xl_marinade.calc.rows import VariableCells, expand_variables, rows_for, variables_record
@@ -67,6 +70,7 @@ from xl_marinade.calc.status import (
     NAME_OFF_PATH,
     Exercised,
     ExercisedBuilder,
+    LandingCheck,
     PathKey,
     PathSignature,
     StaticLabels,
@@ -323,6 +327,10 @@ class _Session:
     """Outputs that are ``#NAME?`` in the trust run (on the stored inputs)."""
     spills: list[ArrayRange] = field(default_factory=list)
     """Dynamic arrays, whose spill can grow past the range the workbook stored."""
+    landing: LandingCheck | None = None
+    """Roots for landed cells the plan did not probe."""
+    static_up: frozenset[CellRef] = frozenset()
+    """The outputs' upstream in the static graph."""
 
     def reset(self) -> None:
         """Put every mapped input (and the selector) back to its stored value."""
@@ -484,8 +492,9 @@ def _check_against(
             )
             matched = False
         if matched:
-            # Only an input set the engine reproduced vouches for the paths it took.
-            evidence.add(reading, only=compared)
+            # Only an input set the engine reproduced vouches for the paths it took,
+            # through the cells its dynamic references landed on too.
+            evidence.add(reading, only=_reached(graph, compared, reading.dynamic_refs))
     return scoped, {"input_sets": len(results), "mismatches": mismatches}
 
 
@@ -506,11 +515,39 @@ def _mismatch_roots(
             bucket.extend(r for r in reasons if r not in seen)
 
 
+def _reached(
+    graph: WorkbookGraph,
+    cells: set[CellRef] | frozenset[CellRef],
+    dynamic: dict[CellRef, list[CellRef]],
+) -> set[CellRef] | frozenset[CellRef]:
+    """``cells`` (an upstream-closed set) plus everything upstream of where their
+    dynamic references landed this recalculation."""
+    stack = [t for cell, targets in dynamic.items() if cell in cells for t in targets]
+    if not stack:
+        return cells
+    extra: set[CellRef] = set()
+    while stack:
+        cur = stack.pop()
+        if cur in cells or cur in extra:
+            continue
+        extra.add(cur)
+        stack.extend(graph.precedents(cur))
+        stack.extend(dynamic.get(cur, ()))
+    return cells | extra
+
+
 def _paths(
-    pid: str, plan: ProbePlan, readings: ProbeReadings, exercised: Exercised
+    pid: str,
+    plan: ProbePlan,
+    readings: ProbeReadings,
+    exercised: Exercised,
+    reached: Container[CellRef],
 ) -> list[PathRecord]:
+    """The branch and lookup edges this policy took in cells that fed its outputs."""
     records: list[PathRecord] = []
     for probe in plan.probes:
+        if probe.cell not in reached:
+            continue
         key = (probe.cell, probe.ordinal)
         if probe.kind is ProbeKind.branch:
             outcome = readings.branch.get(key)
@@ -605,6 +642,10 @@ def _policy_loop(
         dynamic = dict(readings.dynamic_refs)
         for cell, anchors in _spill_growth(s).items():
             dynamic[cell] = sorted({*dynamic.get(cell, ()), *anchors})
+        if s.landing is not None:
+            for cell, reasons in s.landing.roots(dynamic).items():
+                bucket = roots.setdefault(cell, [])
+                bucket.extend(r for r in reasons if r not in bucket)
         assigned = assign(s.graph, outputs, roots, dynamic, static=static)
         computed: dict[CellRef, tuple[EngineValue, Status, list[Reason]]] = {}
         results: list[OutputValue] = []
@@ -617,7 +658,7 @@ def _policy_loop(
             results.append(OutputValue(policy.id, cell, value, status, reasons))
         writer.write_policy(
             results,
-            _paths(policy.id, s.plan, readings, exercised),
+            _paths(policy.id, s.plan, readings, exercised, _reached(s.graph, s.static_up, dynamic)),
             rows_for(policy.id, variables, computed.__getitem__),
         )
 
@@ -714,13 +755,16 @@ def calc(req: CalcRequest) -> CalcResult:
             engine = Engine.load(prepared.path)
         # Refused cells refuse their dependants anyway: probing them would only use up
         # the cap (and their readings vouch for nothing).
-        upstream = [
-            c for c in graph.upstream(outputs) if graph.formula(c) is not None and c not in patterns
-        ]
+        static_up = frozenset(graph.upstream(outputs))
+        upstream = [c for c in static_up if graph.formula(c) is not None and c not in patterns]
         moving = set(inputs.values())
         if check is not None and check.selector is not None:
             moving.add(_input_cell(graph, check.selector, "selector"))
-        plan = plan_probes(graph, upstream, cap=req.probe_cap, as_of=req.as_of, inputs=moving)
+        region = _landing_region(graph, set(upstream), patterns)
+        plan = plan_probes(
+            graph, upstream, cap=req.probe_cap, as_of=req.as_of, inputs=moving, extra=region
+        )
+        covered = frozenset({*upstream, *region, *patterns})
         place_probes(engine, plan)
         with quiet_native_output():
             engine.evaluate()
@@ -749,6 +793,8 @@ def calc(req: CalcRequest) -> CalcResult:
             list(dict.fromkeys(resets)),
             stored_names,
             [a for a in graph.arrays() if a.dynamic],
+            LandingCheck(graph, covered, lambda cell: probe_kinds(graph, cell)),
+            static_up,
         )
         mismatches: dict[CellRef, _Mismatches] = {}
         check_record: dict[str, Any] | None = None
@@ -790,6 +836,31 @@ def calc(req: CalcRequest) -> CalcResult:
         out / "paths.csv",
         out / "run.json",
     )
+
+
+def _landing_region(
+    graph: WorkbookGraph, planned: set[CellRef], patterns: dict[CellRef, list[Reason]]
+) -> list[CellRef]:
+    """Formula cells to probe because a dynamic reference may land on them (ruling D1):
+    every formula cell on a sheet an ``OFFSET``, a built range or an ``INDIRECT`` with a
+    literal sheet reaches from the planned cells, and everything upstream of those, to
+    a fixed point. Probing them lets the trust run and ``--check-against`` exercise
+    their branches and lookups, as for any cell upstream of an output."""
+    covered = set(planned)
+    region: list[CellRef] = []
+    done: set[str] = set()
+    queue = sorted(planned)
+    while queue:
+        cell = queue.pop()
+        for sheet in sorted(reach_sheets(graph, cell) - done):
+            done.add(sheet)
+            for found in sorted(graph.upstream(graph.formula_cells_on(sheet))):
+                if found in covered or found in patterns or graph.formula(found) is None:
+                    continue
+                covered.add(found)
+                region.append(found)
+                queue.append(found)
+    return region
 
 
 def _merge_patterns(

@@ -18,7 +18,7 @@ order. Roots that do not change between policies can be propagated once per run
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Container, Iterable
+from collections.abc import Callable, Container, Iterable
 from dataclasses import dataclass
 
 from xl_marinade.calc.graph import WorkbookGraph
@@ -34,6 +34,7 @@ MAX_REASONS_PER_KIND = 5
 DYNAMIC_NOT_CHECKED = "dynamic reference not checked"
 LOOKUP_TYPE = "lookup value type differs from keys"
 NAME_OFF_PATH = "engine #NAME? the trust run did not give: a function the engine lacks"
+DYNAMIC_LANDING = "reached through a dynamic reference, not probed"
 
 _NO_ROOT = CellRef("", 0, 0)
 _RANK: dict[Status, int] = {
@@ -240,6 +241,63 @@ def unplaced_roots(plan: ProbePlan) -> dict[CellRef, list[Reason]]:
             reason_kind, detail = _UNPLACED[kind]
             _add(roots, cell, Reason(reason_kind, cell, detail))
     return _sorted_roots(roots)
+
+
+class LandingCheck:
+    """Roots for the formula cells a dynamic reference reaches that the plan did not
+    probe (ruling D1, for an ``INDIRECT`` whose text names no sheet, or any landing
+    the plan did not foresee).
+
+    Each such cell gets ``not_checked_path``, plus what each probe its formula would
+    have had gives when it cannot be placed (``not_checked_value`` for rounding and
+    comparisons, ``refused_pattern`` for a dynamic reference or a number-to-text
+    conversion). So a landing the plan missed is never less conservative than one it
+    probed. The walk goes upstream from each landed cell and stops at cells the plan
+    covers; results are kept per landed cell.
+    """
+
+    def __init__(
+        self,
+        graph: WorkbookGraph,
+        covered: Container[CellRef],
+        kinds: Callable[[CellRef], list[ProbeKind]],
+    ) -> None:
+        self._graph = graph
+        self._covered = covered
+        self._kinds = kinds
+        self._found: dict[CellRef, list[Reason]] = {}
+
+    def roots(self, dynamic_refs: dict[CellRef, list[CellRef]]) -> dict[CellRef, list[Reason]]:
+        """Roots for every cell reached through ``dynamic_refs`` (cell -> landed cells)."""
+        out: dict[CellRef, list[Reason]] = {}
+        for targets in dynamic_refs.values():
+            for target in targets:
+                for reason in self._uncovered(target):
+                    if reason.root is not None:
+                        _add(out, reason.root, reason)
+        return _sorted_roots(out)
+
+    def _uncovered(self, target: CellRef) -> list[Reason]:
+        cached = self._found.get(target)
+        if cached is not None:
+            return cached
+        found: list[Reason] = []
+        seen: set[CellRef] = set()
+        stack = [target]
+        while stack:
+            cur = stack.pop()
+            if cur in seen or cur in self._covered:
+                continue
+            seen.add(cur)
+            if self._graph.formula(cur) is not None:
+                found.append(Reason(ReasonKind.not_checked_path, cur, DYNAMIC_LANDING))
+                for kind in sorted(set(self._kinds(cur))):
+                    reason_kind, detail = _UNPLACED[kind]
+                    if reason_kind is not ReasonKind.not_checked_path:
+                        found.append(Reason(reason_kind, cur, detail))
+            stack.extend(self._graph.precedents(cur))
+        self._found[target] = found
+        return found
 
 
 def policy_roots(
