@@ -47,6 +47,7 @@ from xl_marinade.calc.output import (
     PathRecord,
     PolicyWriter,
     clear_outputs,
+    guard_out_dir,
     write_run,
     write_trust_report,
 )
@@ -90,7 +91,7 @@ from xl_marinade.calc.status import (
     unplaced_roots,
 )
 from xl_marinade.calc.trust import TrustResult, run_trust, same
-from xl_marinade.errors import CalcInputError, WorkbookRefused
+from xl_marinade.errors import CalcError, CalcInputError, WorkbookRefused
 
 _ISO_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 # Excel's number entry, in ASCII: optional sign, digits with an optional fraction (or a
@@ -669,7 +670,10 @@ def _check_against(
                 stored_input = graph.stored(src)
                 if stored_input is not None:
                     s.engine.set_value(cell, stored_input)
-        reading = s.recalc()
+        try:
+            reading = s.recalc()
+        except CalcError as exc:
+            raise CalcError(f"input set {pid!r}: {exc}") from exc
         matched = True
         for cell, col in outputs.items():
             stored = graph.stored(CellRef(results_sheet, row, col))
@@ -838,7 +842,10 @@ def _policy_loop(
             except CalcInputError:
                 # Refused anyway; the cell keeps its stored value for this policy.
                 continue
-        readings = s.recalc()
+        try:
+            readings = s.recalc()
+        except CalcError as exc:
+            raise CalcError(f"policy {policy.id!r}: {exc}") from exc
         roots = policy_roots(s.plan, readings, exercised, include_unplaced=False)
         _mismatch_roots(roots, readings, mismatches)
         values = {cell: s.engine.value(cell) for cell in outputs}
@@ -933,6 +940,11 @@ def calc(req: CalcRequest) -> CalcResult:
         raise CalcInputError(f"tolerance must be a finite number >= 0, got {req.tolerance}")
     if req.probe_cap < 0:
         raise CalcInputError(f"probe_cap must be >= 0, got {req.probe_cap}")
+    guard_out_dir(
+        req.out_dir,
+        CALC_OUTPUTS,
+        [req.workbook, req.policies, req.input_map, req.variables, req.check_against, req.ir],
+    )
     clear_outputs(req.out_dir, CALC_OUTPUTS)
     sha = _sha256(req.workbook)
     settings = read_settings(req.workbook)
@@ -964,7 +976,7 @@ def calc(req: CalcRequest) -> CalcResult:
             _relative_lists(graph, inputs),
         )
         with quiet_native_output():
-            engine = Engine.load(prepared.path)
+            engine = Engine.load(prepared.path, req.workbook)
         # Refused cells refuse their dependants anyway: probing them would only use up
         # the cap (and their readings vouch for nothing).
         static_up = frozenset(graph.upstream(outputs))

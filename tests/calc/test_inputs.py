@@ -365,3 +365,158 @@ def test_values_writes_a_boolean_id_as_calc_reads_it(make_book: Book, tmp_path: 
     mp = _write(tmp_path, "vmap.json", json.dumps({"fields": {"id": "In!A1"}}))
     stored = _rows(values(ValuesRequest(book, variables, tmp_path / "v", input_map=mp)))
     assert stored[0]["policy"] == "TRUE"
+
+
+# -- never touch the user's files or sheets ----------------------------------------
+
+_SIMPLE = {"Inputs": {"B1": 3}, "Calc": {"B1": F("=IF(Inputs!B1>1,Inputs!B1+1,0)", 4)}}
+_SIMPLE_MAP = {"fields": {"x": "Inputs!B1"}}
+
+
+@pytest.mark.parametrize(
+    ("kind", "name"),
+    [
+        ("policies", "results.csv"),
+        ("input_map", "run.json"),
+        ("variables", "rows.csv"),
+        ("check_against", "trust_report.json"),
+        ("ir", "paths.csv"),
+        ("workbook", "results.csv"),
+    ],
+)
+def test_calc_refuses_an_input_it_would_clear_and_deletes_nothing(
+    make_book: Book, ir_for: Callable[[Path], Path], tmp_path: Path, kind: str, name: str
+) -> None:
+    # The run clears its known output names from -o first; an input stored under one
+    # of those names was deleted, then the run failed to read it (data loss).
+    book = make_book("keep", _SIMPLE)
+    out = tmp_path / "out"
+    out.mkdir()
+    req = _req(tmp_path, book, "id,x\np,7\n", _SIMPLE_MAP, ["Calc!B1"])
+    sources = {
+        "policies": req.policies,
+        "input_map": req.input_map,
+        "variables": _write(tmp_path, "vars.json", json.dumps({"v": {"cell": "Calc!B1"}})),
+        "check_against": _write(tmp_path, "check.json", "{}"),
+        "ir": ir_for(book),
+        "workbook": book,
+    }
+    moved = out / name
+    moved.write_bytes(sources[kind].read_bytes())
+    before = moved.read_bytes()
+    setattr(req, kind, moved)
+    with pytest.raises(CalcInputError, match=rf"{name}.*-o|-o.*{name}"):
+        calc(req)
+    assert moved.read_bytes() == before
+
+
+def test_calc_refuses_a_hard_link_to_an_input_under_an_output_name(
+    make_book: Book, tmp_path: Path
+) -> None:
+    book = make_book("keep", _SIMPLE)
+    out = tmp_path / "out"
+    out.mkdir()
+    req = _req(tmp_path, book, "id,x\np,7\n", _SIMPLE_MAP, ["Calc!B1"])
+    (out / "results.csv").hardlink_to(req.policies)
+    with pytest.raises(CalcInputError, match="results.csv"):
+        calc(req)
+    assert req.policies.read_text(encoding="utf-8") == "id,x\np,7\n"
+
+
+def test_calc_still_clears_a_symlinked_output_and_keeps_its_target(
+    make_book: Book, tmp_path: Path
+) -> None:
+    book = make_book("keep", _SIMPLE)
+    out = tmp_path / "out"
+    out.mkdir()
+    target = _write(tmp_path, "elsewhere.csv", "mine")
+    (out / "results.csv").symlink_to(target)
+    calc(_req(tmp_path, book, "id,x\np,7\n", _SIMPLE_MAP, ["Calc!B1"]))
+    assert target.read_text(encoding="utf-8") == "mine"
+    assert not (out / "results.csv").is_symlink()
+
+
+def test_values_refuses_an_input_it_would_clear(make_book: Book, tmp_path: Path) -> None:
+    from xl_marinade.calc.values import ValuesRequest, values
+
+    book = make_book("keep", _SIMPLE)
+    out = tmp_path / "out"
+    out.mkdir()
+    imap = _write(out, "run.json", json.dumps(_SIMPLE_MAP))
+    variables = _write(tmp_path, "vars.json", json.dumps({"v": {"cell": "Calc!B1"}}))
+    with pytest.raises(CalcInputError, match="run.json"):
+        values(ValuesRequest(book, variables, out, input_map=imap))
+    assert imap.exists()
+
+
+def test_an_out_dir_that_is_a_file_is_refused_before_the_run(
+    make_book: Book, tmp_path: Path
+) -> None:
+    from xl_marinade.calc.values import ValuesRequest, values
+
+    book = make_book("keep", _SIMPLE)
+    afile = _write(tmp_path, "afile", "x")
+    req = _req(tmp_path, book, "id,x\np,7\n", _SIMPLE_MAP, ["Calc!B1"])
+    req.out_dir = afile
+    with pytest.raises(CalcInputError, match="afile.*not a directory"):
+        calc(req)
+    variables = _write(tmp_path, "vars.json", json.dumps({"v": {"cell": "Calc!B1"}}))
+    with pytest.raises(CalcInputError, match="afile.*not a directory"):
+        values(ValuesRequest(book, variables, afile))
+    req.out_dir = afile / "sub"
+    with pytest.raises(CalcInputError, match="afile.*not a directory"):
+        calc(req)
+    assert afile.read_text(encoding="utf-8") == "x"
+
+
+def test_a_workbook_sheet_named_like_the_probe_sheet_is_an_input_error(
+    make_book: Book, tmp_path: Path
+) -> None:
+    book = make_book("probe", {**_SIMPLE, "_Marinade_Probes": {"A1": 1}})
+    with pytest.raises(CalcInputError, match="_Marinade_Probes"):
+        calc(_req(tmp_path, book, "id,x\np,7\n", _SIMPLE_MAP, ["Calc!B1"]))
+
+
+def test_an_engine_panic_is_a_calc_error_naming_the_workbook(
+    make_book: Book, tmp_path: Path
+) -> None:
+    # IronCalc 0.9.1 panics (index out of bounds) on XNPV(1,1); the panic is a
+    # BaseException, which used to escape as a raw traceback.
+    from xl_marinade.errors import CalcError
+
+    book = make_book(
+        "xnpv", {"Inputs": {"B1": 1}, "Calc": {"B1": F("=XNPV(Inputs!B1,1)", "#NUM!")}}
+    )
+    with pytest.raises(CalcError, match=r"engine.*xnpv\.xlsx"):
+        calc(_req(tmp_path, book, "id,x\np,2\n", _SIMPLE_MAP, ["Calc!B1"]))
+
+
+def test_cli_exits_1_without_a_traceback_on_an_engine_panic(
+    make_book: Book, tmp_path: Path
+) -> None:
+    from typer.testing import CliRunner
+
+    from xl_marinade.cli.main import app
+
+    book = make_book(
+        "xnpv", {"Inputs": {"B1": 1}, "Calc": {"B1": F("=XNPV(Inputs!B1,1)", "#NUM!")}}
+    )
+    req = _req(tmp_path, book, "id,x\np,2\n", _SIMPLE_MAP, ["Calc!B1"])
+    args = ["calc", str(book), "--policies", str(req.policies), "--map", str(req.input_map)]
+    args += ["--outputs", "Calc!B1", "-o", str(tmp_path / "out")]
+    result = CliRunner().invoke(app, args)
+    assert result.exit_code == 1, result.output
+    assert "Traceback" not in result.output
+    assert "xnpv.xlsx" in result.stderr
+
+
+def test_an_engine_panic_for_one_policy_names_the_policy(make_book: Book, tmp_path: Path) -> None:
+    from xl_marinade.errors import CalcError
+
+    book = make_book(
+        "xnpv2", {"Inputs": {"B1": 3}, "Calc": {"B1": F("=IF(Inputs!B1>5,XNPV(1,1),0)", 0)}}
+    )
+    req = _req(tmp_path, book, "id,x\nfine,2\nboom,7\n", _SIMPLE_MAP, ["Calc!B1"])
+    with pytest.raises(CalcError, match=r"policy 'boom'.*crashed.*xnpv2\.xlsx"):
+        calc(req)
+    assert not (tmp_path / "out" / "results.csv").exists()  # no partial results

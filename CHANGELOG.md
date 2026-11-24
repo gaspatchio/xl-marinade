@@ -153,6 +153,16 @@ schema is a versioned public contract.
   `fields.id` mapped and no `id_field`, `values` labelled its row `stored` while `calc`
   used the id, so the two files did not join; it now reads the same default (`id`). A
   boolean id cell is written `TRUE`, as `calc` reads it, not `True`.
+- **`marinade calc` / `marinade values`: a run never touches your files or sheets.** The
+  run clears its own output names from `-o` before reading its inputs, so an input
+  stored there under one of those names (a `map.json` saved as `run.json`) was deleted
+  and the run then failed; such an input, through any path or link, is now refused
+  before anything is cleared. An `-o` that is a file is refused up front instead of
+  failing with a traceback after the whole run. A workbook with a sheet named
+  `_marinade_probes` is refused by name instead of failing with a traceback when the
+  probe sheet is added. An IronCalc panic (`XNPV(1,1)` raises one) is a calc error
+  naming the workbook and the policy or input set, exit code 1, instead of a raw
+  traceback.
 
 ## [0.8.0] - 2026-11-24
 

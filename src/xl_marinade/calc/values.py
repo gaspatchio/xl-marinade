@@ -10,7 +10,7 @@ from pathlib import Path
 from xl_marinade.calc.config import load_input_map, load_variables
 from xl_marinade.calc.graph import StoredValue, WorkbookGraph, open_graph
 from xl_marinade.calc.models import CellRef, Reason, Status
-from xl_marinade.calc.output import VALUES_OUTPUTS, clear_outputs, write_rows
+from xl_marinade.calc.output import VALUES_OUTPUTS, clear_outputs, guard_out_dir, write_rows
 from xl_marinade.calc.rows import expand_variables, rows_for, variables_record
 from xl_marinade.calc.run import _as_text
 from xl_marinade.errors import CalcInputError
@@ -50,6 +50,7 @@ def values(req: ValuesRequest) -> Path:
     Raises:
         CalcInputError: on bad input files, a 2-D range, or an IR from another workbook.
     """
+    guard_out_dir(req.out_dir, VALUES_OUTPUTS, [req.workbook, req.variables, req.input_map, req.ir])
     clear_outputs(req.out_dir, VALUES_OUTPUTS)
     specs = load_variables(req.variables)
     with tempfile.TemporaryDirectory(prefix="marinade-values-") as tmp:

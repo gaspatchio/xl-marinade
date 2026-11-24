@@ -136,14 +136,14 @@ marinade calc [OPTIONS] WORKBOOK
 
 At least one of `--outputs` and `--variables` is required. Writes `results.csv`,
 `rows.csv` (with `--variables`), `paths.csv`, `trust_report.json` and `run.json`, after
-clearing those names from `--out`.
+clearing those names from `--out`; an input file that is one of them is refused first.
 
 **Exit codes**
 
 | Code | Meaning |
 |---|---|
 | 0 | Success. |
-| 1 | Error (bad input, unknown sheet, IR from another workbook). |
+| 1 | Error (bad input, unknown sheet, IR from another workbook, an input that is one of the output files, an `-o` that is a file, the engine crashing on a formula). |
 | 5 | `xl-marinade[calc]` is not installed. |
 | 6 | The workbook is refused outright (1904 dates, precision as displayed, Strict Open XML). |
 
@@ -177,7 +177,7 @@ marinade values [OPTIONS] WORKBOOK
 | Code | Meaning |
 |---|---|
 | 0 | Success. |
-| 1 | Error (bad input, unknown sheet, IR from another workbook). |
+| 1 | Error (bad input, unknown sheet, IR from another workbook, an input that is one of the output files, an `-o` that is a file). |
 
 **Example**
 

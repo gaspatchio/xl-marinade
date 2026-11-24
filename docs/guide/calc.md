@@ -226,7 +226,13 @@ checked points, 100% came back `ok`, and all of them were correct.
 The extraction database is never written by `calc`. The run clears its own known output
 files from `-o` at the start (`results.csv`, `rows.csv`, `paths.csv`, `trust_report.json`,
 `run.json`), so a failed run cannot leave stale ones behind. Nothing else in the directory
-is touched.
+is touched. Before clearing anything, the run refuses (exit code 1) an `-o` that is a file
+rather than a directory, and an input file that is one of those output files (the same
+name in `-o`, or the same file through a link): clearing it would delete your input.
+
+The probe cells go on a hidden sheet named `_marinade_probes`. A workbook that already
+has a sheet of that name (in any case) is refused when the run needs probes; rename the
+sheet in a copy of the workbook.
 
 ## The files out
 
@@ -495,7 +501,7 @@ it, are listed in `ref/calc/upstream/` in the repository.
 | Code | Meaning |
 |---|---|
 | 0 | Success. |
-| 1 | Error: bad input file, unknown sheet or name, a target that covers no cells, mapping onto a formula, IR from another workbook. |
+| 1 | Error: bad input file, unknown sheet or name, a target that covers no cells, mapping onto a formula, IR from another workbook, an input that is one of the output files, an `-o` that is a file, a sheet named `_marinade_probes`, or the engine crashing on a formula (an IronCalc panic, such as on `XNPV(1,1)`; the error names the workbook and the policy or input set, not the cell). |
 | 5 | The `[calc]` extra is not installed. |
 | 6 | The workbook is refused outright (1904 dates, precision as displayed, Strict Open XML). `trust_report.json` and `run.json` are still written. |
 
