@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 import re
 import sqlite3
 from bisect import bisect_left
@@ -46,6 +45,15 @@ _NAME_REF_RE = re.compile(rf"^(?:(?P<sheet>{SHEET})!)?(?P<name>(?:[^\W\d]|\\)[\w
 _Rect = tuple[str, int, int, int, int]
 
 NameKind = Literal["cells", "formula", "external"]
+
+
+@dataclass(slots=True, frozen=True)
+class ListItems:
+    """A list validation's items. ``literal`` items are the list's own text, exactly as
+    written; otherwise they are the source cells' stored values, with their types."""
+
+    items: list[float | str | bool]
+    literal: bool
 
 
 @dataclass(slots=True, frozen=True)
@@ -139,15 +147,6 @@ def _spelled(defs: list[NameDef], name: str) -> NameDef:
     """The definition spelled exactly ``name`` (as formula text writes it), else the
     first: a file normally holds one spelling per name."""
     return next((d for d in defs if d.name == name), defs[0])
-
-
-def _list_item(text: str) -> float | str:
-    """A literal dropdown item as Excel reads it: a number when it is one, else text."""
-    try:
-        number = float(text)
-    except ValueError:
-        return text
-    return number if math.isfinite(number) else text
 
 
 def _convert(raw: str, data_type: str | None) -> StoredValue:
@@ -605,12 +604,12 @@ class WorkbookGraph:
         options = " or ".join(f"{_quoted(s)}!{n}" for s, n in zip(owners, spelled, strict=True))
         return f"write {options}"
 
-    def allowed_values(self, cell: CellRef) -> list[float | str | bool] | None:
+    def allowed_values(self, cell: CellRef) -> ListItems | None:
         """List-validation values for the cell, or None when it has no list validation
         that can be read.
 
-        The list is the literal items (numbers where they read as one), or the typed
-        stored values of the source: a range, a whole column or row (the cells it
+        The list is the literal items as written, or the typed stored values of the
+        source: a range, a whole column or row (the cells it
         holds), or a defined name over cells, read from the validation's sheet as a
         formula there would read it. A source that is
         a formula (``INDIRECT``, ``OFFSET``, a name holding one) is not read: its list
@@ -623,12 +622,14 @@ class WorkbookGraph:
             ):
                 continue
             if literals is not None:
-                return [_list_item(v) for v in literals]
+                return ListItems(list(literals), literal=True)
             source = self._list_source(str(f1 or ""), sheet)
             if source is None:
                 continue
             cells = [c for rect in source for c in self._cells_in_rect(rect)]
-            return [v for c in cells if (v := self._stored.get(c)) is not None]
+            return ListItems(
+                [v for c in cells if (v := self._stored.get(c)) is not None], literal=False
+            )
         return None
 
     def _list_source(self, formula1: str, sheet: str) -> list[_Rect] | None:

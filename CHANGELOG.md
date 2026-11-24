@@ -38,11 +38,13 @@ schema is a versioned public contract.
 - **`marinade calc`: data-validation lists are checked the way Excel checks them.** A
   list whose source is a defined name (a sheet's own name first), `=Name` or a whole
   column was never checked, so a value outside it came back `ok`; it is now read from
-  the cells the source covers. The check compares the value as entered in its cell:
-  text ignores case (`yes` against `Yes,No` is accepted), and a number (an ISO date
-  typed into a date cell is its serial) matches number items only, so `1` no longer
-  matches the text `001`. Lists fed by a formula (`INDIRECT`, `OFFSET`, cascading
-  dropdowns) are still not checked; the guide now says so.
+  the cells the source covers. The check compares the value as entered in its cell,
+  and text ignores case (`yes` against `Yes,No` is accepted). Items typed into the
+  validation (`"01,02"`) are text as written and also match a number entry by value
+  (an ISO date typed into a date cell is its serial); items read from cells keep their
+  type, so `1` no longer matches a cell holding the text `001`. Lists fed by a formula
+  (`INDIRECT`, `OFFSET`, cascading dropdowns) or by a table column are still not
+  checked; the guide now says so.
 
 ## [0.8.0] - 2026-11-24
 

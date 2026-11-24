@@ -27,7 +27,7 @@ from xl_marinade.calc.config import (
     parse_outputs,
 )
 from xl_marinade.calc.engine import Engine, EngineValue, engine_version, quiet_native_output
-from xl_marinade.calc.graph import StoredValue, WorkbookGraph, open_graph
+from xl_marinade.calc.graph import ListItems, StoredValue, WorkbookGraph, open_graph
 from xl_marinade.calc.models import (
     CellRef,
     CheckAgainst,
@@ -174,15 +174,33 @@ def _as_text(value: StoredValue) -> str:
     return str(value)
 
 
-def _allowed(raw: str, value: float | str | bool | None, allowed: list[float | str | bool]) -> bool:
-    """Excel's list check on the value entered: a number (an ISO date typed into a date
-    cell is its serial) matches a number item; text or a boolean matches a non-number
-    item ignoring case. ``value`` is ``raw`` converted for its cell, None if it does
-    not convert (then ``raw`` is compared as text)."""
+_NUMBER_TEXT = re.compile(r"^[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$")
+
+
+def _allowed(raw: str, value: float | str | bool | None, allowed: ListItems) -> bool:
+    """Excel's list check on the value entered (``value`` is ``raw`` converted for its
+    cell, None when it does not convert).
+
+    A literal item is the list's text: it matches the entry as text ignoring case, or,
+    when the entry is a number (an ISO date typed into a date cell is its serial), an
+    item that reads as that number. An item read from a cell keeps the cell's type: a
+    number matches number items only, text or a boolean non-number items ignoring case.
+    """
+    if allowed.literal:
+        folded = raw.lower()
+        for item in allowed.items:
+            text = _as_text(item)
+            if text.lower() == folded:
+                return True
+            if isinstance(value, float) and _NUMBER_TEXT.match(text) and _number(text) == value:
+                return True
+        return False
     if isinstance(value, float):
-        return any(isinstance(item, float) and item == value for item in allowed)
+        return any(isinstance(item, float) and item == value for item in allowed.items)
     text = (_as_text(value) if value is not None else raw).lower()
-    return any(not isinstance(item, float) and _as_text(item).lower() == text for item in allowed)
+    return any(
+        not isinstance(item, float) and _as_text(item).lower() == text for item in allowed.items
+    )
 
 
 # -- resolving targets ---------------------------------------------------------
@@ -584,7 +602,7 @@ def _policy_loop(
             if options is None or _allowed(raw, s.converted(cell, raw), options):
                 s.set_input(cell, raw, what)
                 continue
-            detail = f"{name}={raw!r} not in {[_as_text(o) for o in options]!r}"
+            detail = f"{name}={raw!r} not in {[_as_text(o) for o in options.items]!r}"
             outside.append(Reason(ReasonKind.input_outside_allowed_values, cell, detail))
             try:
                 s.set_input(cell, raw, what)

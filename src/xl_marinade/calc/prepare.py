@@ -56,13 +56,14 @@ _ANY_EXT_RE = re.compile(
 )
 
 # References in a defined name's text, outside string literals and quoted sheet names:
-# a cell, a whole column, a whole row. A part written without ``$`` is relative.
+# a cell, a whole column, a whole row (not a table name before ``[``, as in
+# ``Tbl1[Amount]``). A part written without ``$`` is relative.
 _NAME_REF_RE = re.compile(
     r'(?P<str>"(?:[^"]|"")*")'
     r"|(?P<qname>'(?:[^']|'')*')"
-    r"|(?<![\w.$\\])(?P<cd>\$?)[A-Za-z]{1,3}(?P<rd>\$?)[0-9]+(?![\w(.!])"
-    r"|(?<![\w.$\\:])(?P<c1>\$?)[A-Za-z]{1,3}:(?P<c2>\$?)[A-Za-z]{1,3}(?![\w(.!])"
-    r"|(?<![\w.$\\:])(?P<r1>\$?)[0-9]+:(?P<r2>\$?)[0-9]+(?![\w(.!])"
+    r"|(?<![\w.$\\])(?P<cd>\$?)[A-Za-z]{1,3}(?P<rd>\$?)[0-9]+(?![\w(.!\[])"
+    r"|(?<![\w.$\\:])(?P<c1>\$?)[A-Za-z]{1,3}:(?P<c2>\$?)[A-Za-z]{1,3}(?![\w(.!\[])"
+    r"|(?<![\w.$\\:])(?P<r1>\$?)[0-9]+:(?P<r2>\$?)[0-9]+(?![\w(.!\[])"
 )
 
 _ExtCache = dict[int, dict[str, dict[tuple[int, int], str]]]

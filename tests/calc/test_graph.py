@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from tests.calc.conftest import F
-from xl_marinade.calc.graph import WorkbookGraph
+from xl_marinade.calc.graph import ListItems, WorkbookGraph
 from xl_marinade.calc.models import CellRef
 from xl_marinade.errors import CalcInputError
 
@@ -106,7 +106,7 @@ def test_resolve_target(graph: WorkbookGraph) -> None:
 
 
 def test_allowed_values_and_flags(graph: WorkbookGraph) -> None:
-    assert graph.allowed_values(CellRef("S", 1, 5)) == ["M", "F"]
+    assert graph.allowed_values(CellRef("S", 1, 5)) == ListItems(["M", "F"], literal=True)
     assert graph.allowed_values(A1) is None
     assert graph.udf_cells == frozenset()
     assert graph.external_cells == {}
@@ -124,7 +124,7 @@ def test_allowed_values_from_range_source(make_book: Book, ir_for: IrFor) -> Non
     wb.save(path)
     g = WorkbookGraph.from_ir(ir_for(path))
     # Items keep their stored type: a number cell is a number item.
-    assert g.allowed_values(CellRef("S", 1, 2)) == ["x", "y", 3.0]
+    assert g.allowed_values(CellRef("S", 1, 2)) == ListItems(["x", "y", 3.0], literal=False)
 
 
 def test_range_target_includes_empty_cells(make_book: Book, ir_for: IrFor) -> None:

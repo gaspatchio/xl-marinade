@@ -179,3 +179,56 @@ def test_numbers_match_number_items_only(make_book: Book, tmp_path: Path) -> Non
     assert "@In!B2" not in reasons["text"] and "@In!B3" not in reasons["text"]
     # Policy "num": "001" typed into a number cell is the number 1 -> not "001" either.
     assert "input_outside_allowed_values@In!B1" in reasons["num"]
+
+
+def test_literal_items_are_text_as_written(make_book: Book, tmp_path: Path) -> None:
+    # Code lists typed into the dropdown ("01,02", "1,2") on cells that hold text: an
+    # item picked from the list (and the stored value) passes; "3" is not an item. On a
+    # number cell, 2 matches the item "02" by number.
+    book = make_book(
+        "codes",
+        {
+            "In": {"B1": "01", "B2": "1", "B3": 1},
+            "Out": {
+                "A1": F('=In!B1&""', "01"),
+                "A2": F('=In!B2&""', "1"),
+                "A3": F("=In!B3*10", 10),
+            },
+        },
+        list_sources=[("In!B1", '"01,02"'), ("In!B2", '"1,2"'), ("In!B3", '"01,02"')],
+    )
+    policies = tmp_path / "policies.csv"
+    policies.write_text(
+        "id,c,d,n\nsame,01,1,1\nother,02,2,2\nout_c,3,1,1\nout_d,01,3,1\nout_n,01,1,3\n",
+        encoding="utf-8",
+    )
+    imap = tmp_path / "map.json"
+    imap.write_text(
+        json.dumps({"fields": {"c": "In!B1", "d": "In!B2", "n": "In!B3"}}), encoding="utf-8"
+    )
+    res = calc(CalcRequest(book, policies, imap, tmp_path / "out", outputs=["Out!A1"]))
+    with res.results_csv.open(encoding="utf-8", newline="") as fh:
+        reasons = {r["policy_id"]: r["reasons"] for r in csv.DictReader(fh)}
+    assert reasons["same"] == "" and reasons["other"] == ""
+    assert "input_outside_allowed_values@In!B1:c='3' not in ['01', '02']" in reasons["out_c"]
+    assert "input_outside_allowed_values@In!B2:d='3' not in ['1', '2']" in reasons["out_d"]
+    assert "input_outside_allowed_values@In!B3:n='3' not in ['01', '02']" in reasons["out_n"]
+
+
+def test_a_structured_reference_list_is_not_checked(make_book: Book, tmp_path: Path) -> None:
+    # A name over a table column (Tbl1[Amount]) is not an A1 reference: like a list fed
+    # by a formula, it is not checked in this version (ruling D8), and not "relative".
+    book = make_book(
+        "tbl",
+        {"In": {"B1": "a"}, "Out": {"A1": F('=In!B1&"!"', "a!")}},
+        names={"Amounts": "Tbl1[Amount]"},
+        list_sources=[("In!B1", "Amounts")],
+    )
+    policies = tmp_path / "policies.csv"
+    policies.write_text("id,x\nP,anything\n", encoding="utf-8")
+    imap = tmp_path / "map.json"
+    imap.write_text(json.dumps({"fields": {"x": "In!B1"}}), encoding="utf-8")
+    res = calc(CalcRequest(book, policies, imap, tmp_path / "out", outputs=["Out!A1"]))
+    with res.results_csv.open(encoding="utf-8", newline="") as fh:
+        (row,) = list(csv.DictReader(fh))
+    assert (row["value"], row["status"], row["reasons"]) == ("anything!", "ok", "")

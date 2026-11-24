@@ -250,6 +250,9 @@ def test_prepare_external_in_defined_name(make_book, tmp_path):
         ("LOG10($A$1)", False),
         ("0.05", False),
         ("#REF!", False),
+        ("Tbl1[Amount]", False),
+        ("T1[[#This Row],[x]]", False),
+        ("Table1[Column]", False),
     ],
 )
 def test_has_relative_reference(text: str, relative: bool) -> None:

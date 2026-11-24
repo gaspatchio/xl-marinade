@@ -86,12 +86,16 @@ data-validation list refuses that input set's outputs.
 The list is the validation's literal items, or the stored values of its source: a range,
 a whole column (the cells it holds) or a defined name over cells (the validation sheet's
 own name first, as in a formula). As in Excel, the check compares the value as it is
-entered in its cell: text ignores case, and a number matches number items only, so
-`2025-01-01` typed into a date cell matches a list holding that date, while `1` typed
-into a number cell does not match the text `001`. What is not checked:
+entered in its cell. Items typed into the validation itself (`"01,02"`) are text as
+written: they match ignoring case, or by value when the entry is a number. Items read
+from cells keep the cells' types: text ignores case, and a number matches number items
+only, so `2025-01-01` typed into a date cell matches a list of cells holding that date,
+while `1` typed into a number cell does not match a cell holding the text `001`. What is
+not checked:
 
 - A list fed by a formula (`INDIRECT`, `OFFSET`, a name holding one, as in cascading
-  dropdowns) is not checked in this version: any value is accepted there.
+  dropdowns) or by a table column (`Table1[Code]`, or a name over one) is not checked
+  in this version: any value is accepted there.
 - A list held in formula cells is read from the values the workbook stored, not
   recomputed for the input set.
 - Only list validations are checked. Whole-number, decimal, date, length and custom
@@ -244,6 +248,9 @@ Details worth knowing:
   comparison probe `uncertain`, and a dynamic-reference probe `refused`.
 - `OFFSET` and `INDIRECT` are followed to where they point for each input set; if that
   cannot be read, the outputs behind it are refused (`dynamic reference not checked`).
+  An `OFFSET` whose base is a sheet's own (sheet-scoped) name is always refused this
+  way, and a branch, lookup, rounding or comparison on such a name is never `ok`: the
+  probe sheet cannot read the name as the formula's sheet does.
 - An error code Excel does not have (IronCalc's `#N/IMPL!`, `#ERROR!`, `#CIRC!` and the
   like) in an output or in a probe is an `engine_error` for that policy, so the output is
   `refused`, even when an `IFERROR` around it would have turned it into a plausible
