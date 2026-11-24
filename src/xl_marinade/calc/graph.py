@@ -13,11 +13,12 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 
-from xl_marinade.calc.formula_ast import SHEET
+from xl_marinade.calc.formula_ast import SHEET, call_name, parse_formula
 from xl_marinade.calc.models import ArrayRange, CellRef, _col_to_number
 from xl_marinade.calc.prepare import relative_names
 from xl_marinade.core.db_uri import connect_read_only
 from xl_marinade.core.new_arch.cell_identity import unpack as unpack_cell_id
+from xl_marinade.core.parser import ASTNode, BinaryNode, FunctionNode, RefNode, UnaryNode
 from xl_marinade.errors import CalcInputError
 
 StoredValue = float | str | bool | None
@@ -37,6 +38,11 @@ _WHOLE_RE = re.compile(
 )
 _MAX_ROW = 1_048_576
 _MAX_COL = 16_384
+# Functions whose arguments say where a reference lands.
+_DYNAMIC = frozenset({"OFFSET", "INDIRECT"})
+_DYNAMIC_TEXT = re.compile(r"OFFSET|INDIRECT", re.IGNORECASE)
+# Functions whose first argument is a reference they move within or from.
+_REFERENCE_FIRST = frozenset({"OFFSET", "INDEX"})
 
 # ``Name`` or ``Sheet!Name``. Excel names start with a letter of any script, ``_`` or
 # ``\``, then letters, digits, ``_``, ``.`` or ``\`` (``?`` is kept as the parser does).
@@ -301,6 +307,51 @@ class WorkbookGraph:
             literals = [str(v) for v in json.loads(lit)] if lit else None
             self._validations.append((rects, literals, f1, sheet))
 
+        self._add_argument_edges(max_row)
+
+    def _add_argument_edges(self, max_row: dict[str, int]) -> None:
+        """Make every cell an ``OFFSET`` or ``INDIRECT`` argument reads a precedent.
+
+        The extraction records only where the reference lands on the stored inputs, not
+        the cells deciding where it lands (rows, columns, height, width, the address
+        text), so a failure or an unexercised branch there would not reach the cell.
+        The reference an ``OFFSET`` starts from is not one of them: where it lands is
+        followed per policy by a probe.
+        """
+        for cell, text in self._formula.items():
+            if _DYNAMIC_TEXT.search(text) is None:
+                continue
+            root = parse_formula(text)
+            if root is None:
+                continue
+            for ref in _argument_refs(root):
+                self._add_ref_edge(cell, ref, max_row)
+
+    def _add_ref_edge(self, cell: CellRef, ref: str, max_row: dict[str, int]) -> None:
+        rects: list[_Rect] = []
+        if (rect := _parse_rect(ref, cell.sheet)) is not None:
+            rects.append(rect)
+        elif (whole := _parse_whole(ref, cell.sheet)) is not None:
+            if (clipped := self._clip(whole)) is not None:
+                rects.append(clipped)
+        elif (found := self.lookup_name(ref, cell.sheet)) is not None and found.kind == "cells":
+            rects.extend(found.rects)
+        for written, r1, c1, r2, c2 in rects:
+            sheet = self.sheet(written)
+            if sheet is None:
+                continue
+            if (r1, c1) == (r2, c2):
+                target = CellRef(sheet, r1, c1)
+                if target != cell:
+                    self._direct[cell].add(target)
+                    self._direct_rev[target].add(cell)
+                continue
+            rect = (sheet, r1, c1, r2, c2)
+            self._ranges[cell].append(rect)
+            last = min(r2, max_row.get(sheet, 0))
+            for bucket in range(r1 // _BUCKET, last // _BUCKET + 1):
+                self._range_grid[(sheet, bucket)].append((rect, cell))
+
     @staticmethod
     def _decode(cell_id: int, sheet_names: dict[int, str]) -> CellRef | None:
         sheet_id, row, col = unpack_cell_id(int(cell_id))
@@ -395,6 +446,14 @@ class WorkbookGraph:
         """Every formula cell, sorted: cells holding a formula, and every other cell of
         an array formula's range (see :meth:`add_arrays`)."""
         return sorted([*self._formula, *self._member_anchor])
+
+    def formula_cells_on(self, sheet: str) -> list[CellRef]:
+        """Every cell on ``sheet`` that holds a formula, sorted."""
+        return [
+            ref
+            for r, c in self._cells_by_sheet.get(sheet, [])
+            if (ref := CellRef(sheet, r, c)) in self._formula
+        ]
 
     def array_anchor(self, cell: CellRef) -> CellRef | None:
         """The anchor of the array formula whose range holds ``cell`` (not itself the
@@ -725,6 +784,46 @@ class WorkbookGraph:
             if found is not None:
                 return found
         return None
+
+
+def _argument_refs(root: ASTNode) -> list[str]:
+    """References inside the arguments of every ``OFFSET`` and ``INDIRECT`` in the
+    formula (a range built by one, ``B1:OFFSET(...)``, included), except the reference
+    an ``OFFSET`` starts from (written plainly, or as the range of an ``INDEX``): its
+    probe follows where it lands."""
+    out: list[str] = []
+
+    def collect(node: ASTNode, reference: bool) -> None:
+        # ``reference``: the node is where an OFFSET starts from (directly, or through
+        # the range of an INDEX there): its probe follows where it lands.
+        if isinstance(node, RefNode):
+            if not reference:
+                out.append(node.ref)
+        elif isinstance(node, FunctionNode):
+            name = call_name(node.name)
+            for i, arg in enumerate(node.args):
+                starts = name == "OFFSET" or (reference and name in _REFERENCE_FIRST)
+                collect(arg, i == 0 and starts)
+        elif isinstance(node, BinaryNode):
+            collect(node.left, False)
+            collect(node.right, False)
+        elif isinstance(node, UnaryNode):
+            collect(node.operand, False)
+
+    stack: list[ASTNode] = [root]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, FunctionNode):
+            name = call_name(node.name)
+            if name in _DYNAMIC:
+                for i, arg in enumerate(node.args):
+                    collect(arg, i == 0 and name == "OFFSET")
+            stack.extend(node.args)
+        elif isinstance(node, BinaryNode):
+            stack.extend([node.left, node.right])
+        elif isinstance(node, UnaryNode):
+            stack.append(node.operand)
+    return out
 
 
 def open_graph(workbook: Path, ir: Path | None, tmp: Path) -> WorkbookGraph:

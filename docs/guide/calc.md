@@ -183,7 +183,8 @@ checked points, 100% came back `ok`, and all of them were correct.
    `--check-against` input set.
 5. Add probe cells on a hidden sheet that report which branch, lookup row, rounding
    input and dynamic reference each input set reaches. Probes go only into cells upstream
-   of the requested outputs, and never into a cell that is already refused. A probe is
+   of the requested outputs and into the cells a dynamic reference among them can land
+   on (see [Statuses](#statuses)), and never into a cell that is already refused. A probe is
    the part of the cell's formula it reports on, lifted onto that sheet so it computes
    what the cell computes: references keep their sheet (quoted where Excel needs it,
    as for `'2024'`), operators keep Excel's precedence (`A&B="x"` is `(A&B)="x"`), and
@@ -204,7 +205,7 @@ All in the `-o` directory, UTF-8, `\n` line endings, no timestamps.
 |---|---|
 | `results.csv` | `policy_id`, `output` (`Sheet!A1`), `value`, `status`, `reasons`. One row per policy and output cell. |
 | `rows.csv` | With `--variables`: `policy`, `variable`, `period`, `value`, `status`, `reasons`. |
-| `paths.csv` | `policy_id`, `cell`, `family`, `kind`, `ordinal`, `outcome`, `exercised`. The branch or lookup edge each policy took; `ordinal` tells apart several probes of one kind in one cell; `exercised` is `true` when the trust run took it too. |
+| `paths.csv` | `policy_id`, `cell`, `family`, `kind`, `ordinal`, `outcome`, `exercised`. The branch or lookup edge each policy took, in the cells that fed its outputs (through the cells its dynamic references landed on, too); `ordinal` tells apart several probes of one kind in one cell; `exercised` is `true` when the trust run took it too. |
 | `trust_report.json` | `formula_cells`, `checked`, `reproduced`, `share`, `failures`, `refused_patterns`, `settings` (with `settings.refused`), `held_external_links`, `check_against` (`input_sets`, and `mismatches` with `input_set`, `cell`, `detail`, `stored`, `computed`, `relative_difference`). |
 | `run.json` | `ironcalc_version`, `marinade_version`, `workbook_sha256`, `tolerance`, `as_of`, `probe_cap`, `probes_unplaced`, and per variable its range, `period_start` and the cell period 0 falls on. |
 
@@ -259,9 +260,27 @@ Details worth knowing:
   `refused`.
 - `OFFSET` and `INDIRECT` are followed to where they point for each input set; if that
   cannot be read, the outputs behind it are refused (`dynamic reference not checked`).
+  So is a range whose end is a call, such as `SUM(C5:OFFSET(C5,Term-1,0))`,
+  `B1:INDIRECT(...)` or `A1:INDEX(...)`: it covers the smallest rectangle holding both
+  ends, read per input set. The cells that decide where a reference points (`OFFSET`'s
+  rows, columns, height and width, the cells `INDIRECT`'s text is built from) are
+  precedents of the cell, so a failure or an untried branch there reaches it.
   An `OFFSET` whose base is a sheet's own (sheet-scoped) name is always refused this
   way, and a branch, lookup, rounding or comparison on such a name is never `ok`: the
   probe sheet cannot read the name as the formula's sheet does.
+- The cells a dynamic reference lands on are checked like cells upstream of an output.
+  Every formula cell on the sheet an `OFFSET` starts from (or a built range lies on),
+  or that an `INDIRECT` text names literally (`"Rates!B"&row`), is probed, with
+  everything upstream of it, so the trust run and `--check-against` input sets exercise
+  their branches and lookups and a policy landing on an untried arm is
+  `unverified_path`. These probes count toward `--probe-cap` after those of the
+  requested outputs. An `INDIRECT` whose text names no sheet (`"A"&row`, or a sheet
+  name read from a cell) can land anywhere, so its landing cells are not probed: each
+  formula cell it lands on that no probe covers, and each such cell upstream of it,
+  gives `not_checked_path` (`reached through a dynamic reference, not probed`), plus
+  what its own probes give when they cannot be placed (`not_checked_value` for a
+  rounding or comparison, `refused` for a dynamic reference or number-to-text). A
+  landing on a constant needs no check.
   An `INDIRECT` text that addresses a cell off the grid (row 0, below row 1,048,576 or
   right of column `XFD`) counts as unread: Excel gives `#REF!` there, while IronCalc
   0.9.1 reads `Rates!B0` as 0.
@@ -325,7 +344,8 @@ the sheet uses.
 
 The files on disk do grow with the policies. `paths.csv` has one row per policy per
 branch or lookup probe it reached, which for an actuarial projection can be over a
-thousand rows per policy (about 1.2 million rows and 126 MB for 1,000 lifelib BasicTerm_S
+thousand rows per policy (more when an `OFFSET` sums over a projection, since every
+row it covers fed the output) (about 1.2 million rows and 126 MB for 1,000 lifelib BasicTerm_S
 policies). Leave room in `-o` for it.
 
 A run that stops part-way (a bad value in `policies.csv`, for instance) deletes

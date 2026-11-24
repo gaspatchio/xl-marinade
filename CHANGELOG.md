@@ -103,6 +103,23 @@ schema is a versioned public contract.
   `checked` and `share` in `trust_report.json` count them), and is an error as an input
   target. A dynamic array that spills past the range the workbook stored, for a policy,
   carries its formula's status to the cells it spills into.
+- **`marinade calc`: dynamic references are followed through their arguments, built
+  range ends and landing cells.** Three gaps let a value come back `ok` where Excel
+  computes another. The cells deciding where an `OFFSET` or `INDIRECT` points (rows,
+  columns, height, width, the address text) were not precedents, so a failure or an
+  untried branch there never reached the output. A range ending in a call
+  (`SUM(C5:OFFSET(C5,Term-1,0))`, `B1:INDIRECT(…)`, `A1:INDEX(…)`) was read as a
+  function named `C5:OFFSET` and never followed. And the cells a policy landed on away
+  from the stored inputs' landing cell were never probed, so their branches, lookups
+  and roundings went unchecked unless those cells were requested too, which made asking
+  for fewer outputs give a less conservative status. Now argument cells are precedents
+  (including for the input-dependent-keys scan), built ranges are probed at both ends,
+  and every formula cell on the sheet an `OFFSET` starts from or an `INDIRECT` names
+  literally is probed, so the trust run and `--check-against` input sets exercise it.
+  An `INDIRECT` whose text names no sheet is not probed where it lands: a landing on
+  formula cells gives `not_checked_path` (`not_checked_value` for their roundings and
+  comparisons), never `ok`. Books with `OFFSET` or `INDIRECT` get more probes, and
+  `paths.csv` lists the cells each policy's references reached.
 
 ## [0.8.0] - 2026-11-24
 

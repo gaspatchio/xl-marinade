@@ -39,7 +39,9 @@ from xl_marinade.calc.formula_ast import (
     EXTERNAL,
     SHEET,
     UNKNOWN,
+    built_range,
     function_name,
+    iter_nodes,
     literal,
     parse_formula,
     quote_sheet,
@@ -93,6 +95,10 @@ _X_MODES: dict[str, tuple[int, int]] = {"XLOOKUP": (4, 5), "XMATCH": (2, 3)}
 # XLOOKUP's if_not_found arm, guarded like IFERROR's error arm.
 _NOT_FOUND = "not_found"
 _DYNAMIC = frozenset({"OFFSET", "INDIRECT"})
+# A dynamic-ref probe of a range built by a call (``B1:OFFSET(...)``).
+_RANGE = "range"
+# Text that may hold a dynamic reference: OFFSET, INDIRECT, or a ``:`` before a call.
+_REACHES = re.compile(r"OFFSET|INDIRECT|:[^:(),]*\(", re.IGNORECASE)
 
 _REF = re.compile(rf"^(?:(?P<s1>{SHEET})!)?(?P<a>{END})(?::(?:(?P<s2>{SHEET})!)?(?P<b>{END}))?$")
 _CELL_END = re.compile(r"^\$?(?P<col>[A-Za-z]{1,3})\$?(?P<row>[0-9]+)$")
@@ -749,6 +755,10 @@ class _Planner:
             self.guards = outer
 
     def _probe_function(self, node: FunctionNode, name: str, scoped: bool) -> None:
+        if built_range(node.name) is not None:
+            # ``B1:OFFSET(...)``: a reference from B1 to where the call lands.
+            self.add(ProbeKind.dynamic_ref, scoped, lambda: self._built_range(node))
+            return
         if name == "XLOOKUP" and _is_branch(node, name):
             # Found or not decides whether the if_not_found arm is used.
             self.add(ProbeKind.branch, scoped, lambda: self._not_found(node))
@@ -847,6 +857,7 @@ class _Planner:
             self.join_uses.extend(
                 JoinUse(cell, guards, check, index) for cell, guards, check in uses
             )
+        self.sources.clear()
         for cell in sorted(lost):
             self.unplaced.setdefault(cell, []).append(ProbeKind.number_text)
 
@@ -917,6 +928,8 @@ class _Planner:
         """True when ``node`` may hold more than one value: a range, a multi-cell name
         or, as a joined argument, a function that can return a reference or an array."""
         if isinstance(node, FunctionNode):
+            if built_range(node.name) is not None:
+                return True
             name = function_name(node.name)
             if name in _PASS_THROUGH:
                 return any(self._multi(arg, joins) for arg in node.args[1:])
@@ -1045,33 +1058,120 @@ class _Planner:
         return formulas, {"function": name, "sheet": self._static_sheet(node.args[0])}
 
     def _static_sheet(self, node: ASTNode) -> str:
-        """The sheet a reference expression lands on, when knowable without running it."""
-        if isinstance(node, FunctionNode) and node.args:
-            if function_name(node.name) in {"OFFSET", "INDEX"}:
-                return self._static_sheet(node.args[0])
-        if not isinstance(node, RefNode):
-            raise ValueError("OFFSET base is not a static reference")
-        m = _REF.match(node.ref)
-        if m is None:
-            raise ValueError(f"cannot lift reference {node.ref!r}")
-        if _end(m.group("a"))[0] == "name" and m.group("b") is None:
-            found = self.graph.lookup_name(node.ref, self.cell.sheet)
-            sheets = {r[0] for r in found.rects} if found is not None else set()
-            if found is None or found.kind != "cells" or found.whole or len(sheets) != 1:
-                # A whole column or row would land on up to a million cells per reading.
-                raise ValueError(f"name {node.ref!r} is not a bounded range on one sheet")
-            return sheets.pop()
-        s1 = m.group("s1")
-        if s1 is None:
-            return self.cell.sheet
-        written = _unquote(s1)
-        return self.graph.sheet(written) or written
+        return _static_sheet(self.graph, self.cell, node)
+
+    def _built_range(self, node: FunctionNode) -> tuple[tuple[str, ...], dict[str, str]]:
+        """Both corners of a range built by a call (``B1:OFFSET(...)``): the start's
+        and the call's first cell and size. The range is the smallest rectangle holding
+        both, as Excel's ``:`` makes it."""
+        parts = built_range(node.name)
+        if parts is None or "!" in parts[1]:
+            raise ValueError(f"cannot read range end {node.name!r}")
+        start_text, function = parts
+        start = RefNode(start_text)
+        sheet = self._static_sheet(start)
+        end = FunctionNode(function, node.args)
+        if function_name(function) in {"OFFSET", "INDEX"} and node.args:
+            if self._static_sheet(node.args[0]) != sheet:
+                raise ValueError(f"range {node.name!r} spans two sheets")
+        formulas: list[str] = []
+        for ref in (self.lift(start), self.lift(end)):
+            corner = f"OFFSET({ref},0,0,1,1)"
+            formulas += [f"ROW({corner})", f"COLUMN({corner})", f"ROWS({ref})", f"COLUMNS({ref})"]
+        return tuple(formulas), {"function": _RANGE, "sheet": sheet}
 
 
 def _unquote(sheet: str) -> str:
     if len(sheet) >= 2 and sheet.startswith("'") and sheet.endswith("'"):
         return sheet[1:-1].replace("''", "'")
     return sheet
+
+
+def _static_sheet(graph: WorkbookGraph, cell: CellRef, node: ASTNode) -> str:
+    """The sheet a reference expression in ``cell``'s formula lands on, when knowable
+    without running it.
+
+    Raises:
+        ValueError: when it is not (the expression is not a reference, or a name over
+            several sheets or a whole column or row).
+    """
+    if isinstance(node, FunctionNode) and node.args:
+        if function_name(node.name) in {"OFFSET", "INDEX"}:
+            return _static_sheet(graph, cell, node.args[0])
+    if not isinstance(node, RefNode):
+        raise ValueError("OFFSET base is not a static reference")
+    m = _REF.match(node.ref)
+    if m is None:
+        raise ValueError(f"cannot lift reference {node.ref!r}")
+    if _end(m.group("a"))[0] == "name" and m.group("b") is None:
+        found = graph.lookup_name(node.ref, cell.sheet)
+        sheets = {r[0] for r in found.rects} if found is not None else set()
+        if found is None or found.kind != "cells" or found.whole or len(sheets) != 1:
+            # A whole column or row would land on up to a million cells per reading.
+            raise ValueError(f"name {node.ref!r} is not a bounded range on one sheet")
+        return sheets.pop()
+    s1 = m.group("s1")
+    if s1 is None:
+        return cell.sheet
+    written = _unquote(s1)
+    return graph.sheet(written) or written
+
+
+def _text_sheet(graph: WorkbookGraph, text: ASTNode) -> str | None:
+    """The sheet an ``INDIRECT`` text names literally: its leading text literal holds
+    ``Sheet!`` (``"Rates!B"&row``). None when the text names no sheet that way."""
+    node = text
+    while True:
+        if isinstance(node, BinaryNode) and node.operator == "&":
+            node = node.left
+        elif (
+            isinstance(node, FunctionNode)
+            and function_name(node.name) in {"CONCAT", "CONCATENATE"}
+            and node.args
+        ):
+            node = node.args[0]
+        else:
+            break
+    value = literal(node)
+    if not isinstance(value, str) or "!" not in value:
+        return None
+    return graph.sheet(_unquote(value.partition("!")[0]))
+
+
+def reach_sheets(graph: WorkbookGraph, cell: CellRef) -> set[str]:
+    """The sheets the dynamic references in ``cell``'s formula can land on, where that
+    is known without running them (ruling D1): an ``OFFSET``'s starting sheet, the sheet
+    an ``INDIRECT`` text names literally, a built range's sheet. Other ``INDIRECT``
+    texts can land anywhere; they are not listed."""
+    text = graph.formula(cell)
+    if text is None or _REACHES.search(text) is None:
+        return set()
+    root = parse_formula(text)
+    if root is None:
+        return set()
+    out: set[str] = set()
+    for node in iter_nodes(root):
+        if not isinstance(node, FunctionNode) or not node.args:
+            continue
+        try:
+            parts = built_range(node.name)
+            if parts is not None:
+                out.add(_static_sheet(graph, cell, RefNode(parts[0])))
+                continue
+            name = function_name(node.name)
+            if name == "OFFSET":
+                out.add(_static_sheet(graph, cell, node.args[0]))
+            elif name == "INDIRECT" and (sheet := _text_sheet(graph, node.args[0])) is not None:
+                out.add(sheet)
+        except ValueError:
+            continue
+    return {sheet for sheet in out if graph.sheet(sheet) is not None}
+
+
+def probe_kinds(graph: WorkbookGraph, cell: CellRef) -> list[ProbeKind]:
+    """The probes ``cell``'s formula would get, placed or not."""
+    plan = plan_probes(graph, [cell], cap=1 << 30)
+    return [p.kind for p in plan.probes] + plan.unplaced.get(cell, [])
 
 
 def _condition_args(name: str, n: int) -> set[int]:
@@ -1165,9 +1265,11 @@ def plan_probes(
     cap: int,
     as_of: date | None = None,
     inputs: Iterable[CellRef] = (),
+    extra: Iterable[CellRef] = (),
 ) -> ProbePlan:
     """Plan probes for the branch, lookup, rounding, comparison, dynamic-ref and
-    number-to-text nodes of each cell's formula; cells are taken in sorted order.
+    number-to-text nodes of each cell's formula; cells are taken in sorted order, then
+    the ``extra`` cells not among them (so they are the first to go past ``cap``).
     ``as_of`` is the run's ``--as-of`` date, which lifted ``TODAY()``/``NOW()`` read;
     ``inputs`` are the mapped input cells (constants a policy changes).
 
@@ -1177,20 +1279,23 @@ def plan_probes(
     Unparseable formulas produce no probes (the pattern scan refuses them).
     """
     planner = _Planner(graph, cap, as_of, inputs=frozenset(inputs))
-    for cell in sorted(set(cells)):
-        text = graph.formula(cell)
-        if text is None:
-            continue
-        root = parse_formula(text)
-        if root is None:
-            logger.debug("no probes for {}: unparseable formula", cell.a1())
-            continue
-        planner.cell = cell
-        planner.family = graph.family(cell)
-        planner.counters = {}
-        planner.criteria = set()
-        planner.visit(root, False, graph.is_array_formula(cell))
-    planner.place_sources()
+    first = set(cells)
+    for group in (sorted(first), sorted(set(extra) - first)):
+        for cell in group:
+            text = graph.formula(cell)
+            if text is None:
+                continue
+            root = parse_formula(text)
+            if root is None:
+                logger.debug("no probes for {}: unparseable formula", cell.a1())
+                continue
+            planner.cell = cell
+            planner.family = graph.family(cell)
+            planner.counters = {}
+            planner.criteria = set()
+            planner.visit(root, False, graph.is_array_formula(cell))
+        # Each group's join sources go after its cells' own probes.
+        planner.place_sources()
     sheets = {name.lower(): name for name in graph.sheets()}
     return ProbePlan(planner.probes, planner.unplaced, sheets, planner.join_uses)
 
@@ -1317,11 +1422,28 @@ def _dynamic_cells(
     """The cells a dynamic reference landed on; None when the reading is unusable."""
     if probe.meta["function"] == "INDIRECT":
         return _text_cells(values[0], probe.meta["sheet"], sheets)
+    if probe.meta["function"] == _RANGE:
+        return _range_cells(probe.meta["sheet"], values)
     nums = [v for v in values if isinstance(v, float)]
     if len(nums) != 4 or nums[2] < 1 or nums[3] < 1:
         return None
     row, col, rows, cols = (int(v) for v in nums)
     return _rect(probe.meta["sheet"], row, col, rows, cols)
+
+
+def _range_cells(sheet: str, values: list[EngineValue]) -> list[CellRef] | None:
+    """The rectangle spanning a built range's two corners (first cell and size each)."""
+    nums = [v for v in values if isinstance(v, float)]
+    if len(nums) != 8 or min(nums) < 1:
+        return None
+    tops, lefts, bottoms, rights = [], [], [], []
+    for row, col, rows, cols in (nums[:4], nums[4:]):
+        tops.append(int(row))
+        lefts.append(int(col))
+        bottoms.append(int(row + rows) - 1)
+        rights.append(int(col + cols) - 1)
+    top, left = min(tops), min(lefts)
+    return _rect(sheet, top, left, max(bottoms) - top + 1, max(rights) - left + 1)
 
 
 def _live(probe: Probe, outcomes: dict[tuple[CellRef, int], str]) -> bool | None:
