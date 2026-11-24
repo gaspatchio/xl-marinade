@@ -131,7 +131,7 @@ marinade calc [OPTIONS] WORKBOOK
 | `--ir FILE` | Reuse this IR database (must match the workbook). | extract afresh |
 | `--as-of TEXT` | Valuation date `YYYY-MM-DD`; replaces `TODAY`/`NOW`. | unset (those cells are refused) |
 | `--tolerance FLOAT` | Numeric comparison tolerance, relative or absolute. | `1e-09` |
-| `--probe-cap INT` | Maximum number of probe cells. | `50000` |
+| `--probe-cap INT` | Maximum number of probe cells. When probes do not fit, a warning on stderr gives the cap that holds them all. | `50000` |
 | `-o`, `--out PATH` | Output directory. Required. | |
 
 At least one of `--outputs` and `--variables` is required. Writes `results.csv`,

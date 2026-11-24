@@ -232,7 +232,9 @@ marinade values book.xlsx --variables vars.json [--map map.json] -o stored/
   policy; their argument cells are precedents; every formula cell on the sheet an
   `OFFSET` starts from or an `INDIRECT` text names literally is probed. An `INDIRECT`
   naming no sheet that lands on unprobed formulas gives `not_checked_path` (and
-  `not_checked_value` for their roundings/comparisons) — never `ok`.
+  `not_checked_value` for their roundings/comparisons) — never `ok`. Large `OFFSET`
+  projections can exceed `--probe-cap` (default 50,000): check `probes_over_cap` in
+  `trust_report.json`; stderr names the cap that places every probe.
 - **Refused even when they reproduce:** approximate lookups on unsorted, mixed,
   whole-column or non-plain-text keys (and `XLOOKUP`/`XMATCH` binary search);
   implicit intersection on a multi-cell name or on a range outside a function

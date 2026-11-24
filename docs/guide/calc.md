@@ -206,7 +206,7 @@ All in the `-o` directory, UTF-8, `\n` line endings, no timestamps.
 | `results.csv` | `policy_id`, `output` (`Sheet!A1`), `value`, `status`, `reasons`. One row per policy and output cell. |
 | `rows.csv` | With `--variables`: `policy`, `variable`, `period`, `value`, `status`, `reasons`. |
 | `paths.csv` | `policy_id`, `cell`, `family`, `kind`, `ordinal`, `outcome`, `exercised`. The branch or lookup edge each policy took, in the cells that fed its outputs: through the cells its dynamic references landed on for that policy, not the cell an `OFFSET` starts from or where it landed with the stored inputs; `ordinal` tells apart several probes of one kind in one cell; `exercised` is `true` when the trust run took it too. |
-| `trust_report.json` | `formula_cells`, `checked`, `reproduced`, `share`, `failures`, `refused_patterns`, `settings` (with `settings.refused`), `held_external_links`, `check_against` (`input_sets`, and `mismatches` with `input_set`, `cell`, `detail`, `stored`, `computed`, `relative_difference`). |
+| `trust_report.json` | `formula_cells`, `checked`, `reproduced`, `share`, `failures`, `refused_patterns`, `settings` (with `settings.refused`), `held_external_links`, `check_against` (`input_sets`, and `mismatches` with `input_set`, `cell`, `detail`, `stored`, `computed`, `relative_difference`), `probes_unplaced` (probes that could not be placed, for any reason) and `probes_over_cap` (those left out only because `--probe-cap` was reached). |
 | `run.json` | `ironcalc_version`, `marinade_version`, `workbook_sha256`, `tolerance`, `as_of`, `probe_cap`, `probes_unplaced`, and per variable its range, `period_start` and the cell period 0 falls on. |
 
 `marinade values` writes `rows.csv` and `run.json` (variables only). Its rows carry status
@@ -256,7 +256,10 @@ Details worth knowing:
   stored inputs do not (unless the set landed there).
 - Because probes are placed only upstream of the requested outputs, asking for fewer
   outputs can make a status more conservative: a family member that is not upstream of
-  any requested output is not probed, so it cannot vouch for the branches it took.
+  any requested output is not probed, so it cannot vouch for the branches it took. This
+  holds while every probe fits under `--probe-cap`; past it, more outputs means more
+  probes competing for the cap, and a status can become more conservative with more
+  outputs too.
 - A probe that cannot be placed (cap hit, or inside `LET`/`LAMBDA`/an array context)
   never yields `ok`: a branch or lookup probe gives `unverified_path`, a rounding or
   comparison probe `uncertain`, and a dynamic-reference or number-to-text probe
@@ -350,6 +353,28 @@ branch or lookup probe it reached, which for an actuarial projection can be over
 thousand rows per policy (more when an `OFFSET` sums over a projection, since every
 row it covers fed the output) (about 1.2 million rows and 126 MB for 1,000 lifelib BasicTerm_S
 policies). Leave room in `-o` for it.
+
+### `--probe-cap`
+
+`--probe-cap` (default 50,000) bounds the probe cells a run places. A probe left out
+because the cap was reached never yields `ok` (see [Statuses](#statuses)), so a run
+that hits the cap is more conservative, not wrong. When it happens, `probes_over_cap`
+in `trust_report.json` counts the probes left out, and `marinade calc` prints one line
+on stderr with the cap that would place them all:
+
+```
+warning: 73006 probes did not fit under --probe-cap 50000, so the values behind them
+are not ok; rerun with --probe-cap 123006 to place them all
+```
+
+`OFFSET` projections use the cap fastest. Every formula cell on the sheet an `OFFSET`
+starts from is probed, with everything upstream of it, so a projection of 3,000 rows by
+40 columns needs well over 50,000 probes. Those landing-region probes are planned after
+the probes of the requested outputs' own cells, in sheet, row and column order, so the
+end of the projection is the first to go past the cap: policies landing late in the
+term come back `uncertain` or `unverified_path` with `not checked` reasons. Raise the
+cap to the number the warning gives; a larger cap costs memory and run time roughly in
+proportion, and `paths.csv` grows with the probes each policy reaches.
 
 A run that stops part-way (a bad value in `policies.csv`, for instance) deletes
 `results.csv`, `paths.csv` and `rows.csv`, so partial results never look complete.

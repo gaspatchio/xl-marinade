@@ -238,6 +238,9 @@ class ProbePlan:
     sheets: dict[str, str] = field(default_factory=dict)
     join_uses: list[JoinUse] = field(default_factory=list)
     """Joins that read a shared source probe (one per source cell, planned last)."""
+    over_cap: int = 0
+    """Probes left unplaced only because the cap was reached: a cap of
+    ``len(probes) + over_cap`` holds them all."""
 
 
 @dataclass(slots=True, frozen=True)
@@ -699,6 +702,7 @@ class _Planner:
     ranges: dict[tuple[str, str], list[CellRef] | None] = field(default_factory=dict)
     """(formula sheet, reference) -> the cells a joined range holds that need a probe."""
     join_uses: list[JoinUse] = field(default_factory=list)
+    over_cap: int = 0
     criteria: set[int] = field(default_factory=set)
     """``id`` of the nodes a SUMIF-family criterion joins as text, in this cell."""
 
@@ -709,6 +713,7 @@ class _Planner:
         ordinal = self.counters.get(kind, 0)
         self.counters[kind] = ordinal + 1
         if scoped or len(self.probes) >= self.cap:
+            self.over_cap += not scoped
             self.unplaced.setdefault(self.cell, []).append(kind)
             return
         try:
@@ -846,6 +851,7 @@ class _Planner:
         for source in sorted(self.sources):
             uses = self.sources[source]
             if len(self.probes) >= self.cap:
+                self.over_cap += 1
                 lost.update(cell for cell, _guards, _check in uses)
                 continue
             index = len(self.probes)
@@ -1299,7 +1305,7 @@ def plan_probes(
         # Each group's join sources go after its cells' own probes.
         planner.place_sources()
     sheets = {name.lower(): name for name in graph.sheets()}
-    return ProbePlan(planner.probes, planner.unplaced, sheets, planner.join_uses)
+    return ProbePlan(planner.probes, planner.unplaced, sheets, planner.join_uses, planner.over_cap)
 
 
 # -- placing and reading -------------------------------------------------------

@@ -462,3 +462,39 @@ def test_unprobed_landings_are_walked_once_per_cell(make_book: Book, tmp_path: P
     for r in range(2, rows + 2):
         reasons = first[CellRef("P", r, 2)]
         assert {x.kind.value for x in reasons} == {"not_checked_path", "not_checked_value"}
+
+
+def test_probes_past_the_cap_are_reported_with_the_cap_needed(
+    make_book: Book, tmp_path: Path
+) -> None:
+    # The OFFSET in Out!B1 brings every formula of Calc into the plan; a cap of 2 cannot
+    # hold them. The run says how many probes went past the cap and which cap holds them
+    # all, in trust_report.json and on stderr; rerunning with that cap places them all.
+    import re
+
+    from typer.testing import CliRunner
+
+    from xl_marinade.cli.main import app
+
+    book = _landing_book(make_book)
+    (tmp_path / "p.csv").write_text("id,k,x,r\nP,2,500,2.5\n", encoding="utf-8")
+    (tmp_path / "m.json").write_text(json.dumps({"fields": _FIELDS}), encoding="utf-8")
+
+    def cli(cap: int, out: str) -> tuple[str, dict[str, object]]:
+        args = ["calc", str(book), "--policies", str(tmp_path / "p.csv"), "--map"]
+        args += [str(tmp_path / "m.json"), "--outputs", "Out!B1", "-o", str(tmp_path / out)]
+        result = CliRunner().invoke(app, [*args, "--probe-cap", str(cap)])
+        assert result.exit_code == 0, result.output
+        report = json.loads((tmp_path / out / "trust_report.json").read_text(encoding="utf-8"))
+        return result.stderr, report
+
+    stderr, report = cli(2, "a")
+    over = report["probes_over_cap"]
+    assert isinstance(over, int) and over > 0
+    assert isinstance(report["probes_unplaced"], int) and report["probes_unplaced"] >= over
+    m = re.search(r"rerun with --probe-cap (\d+)", stderr)
+    assert m is not None, stderr
+    assert int(m.group(1)) == 2 + over
+    stderr, report = cli(2 + over, "b")
+    assert report["probes_over_cap"] == 0
+    assert "--probe-cap" not in stderr
