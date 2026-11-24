@@ -149,3 +149,179 @@ def test_a_map_field_on_the_selector_cell_is_accepted(make_book: Book, tmp_path:
         )
     )
     assert _results(res)[("5", "Calc!B1")]["value"] == "70.0"
+
+
+# -- policy values by Excel's entry rules (rulings D3, D4) -------------------------
+#
+# Hand values: Excel 1900 date system, where 1900-01-01 is serial 1 and the calendar
+# gains a 29 February 1900, so 1900-03-01 is serial 61 and 2024-06-30 is 45473
+# (2024-06-30 - 1899-12-30 = 45473 days). Typing ``TRUE`` into a cell makes a boolean.
+
+_EMPTY, _NUMBER = None, 1.0
+
+
+@pytest.mark.parametrize(
+    ("raw", "stored", "want"),
+    [
+        ("2024-06-30", _EMPTY, 45473.0),
+        ("1900-03-01", _EMPTY, 61.0),
+        ("1900-03-01", _NUMBER, 61.0),
+        ("TRUE", _EMPTY, True),
+        ("true", _EMPTY, True),
+        ("False", _EMPTY, False),
+        ("40", _EMPTY, 40.0),
+        (" 0042 ", _EMPTY, 42.0),
+        ("4e1", _EMPTY, 40.0),
+        ("-1.5", _EMPTY, -1.5),
+        (".5", _EMPTY, 0.5),
+        ("1e3", _NUMBER, 1000.0),
+        ("-0", _NUMBER, 0.0),
+        ("abc", _EMPTY, "abc"),
+        ("1_000", _EMPTY, "1_000"),  # Excel keeps it as text
+        ("A5%", _EMPTY, "A5%"),
+        ("5%", "code", "5%"),  # a text cell takes text as written
+    ],
+)
+def test_coerce_input_accepts(raw: str, stored: float | str | None, want: object) -> None:
+    from xl_marinade.calc.run import coerce_input
+
+    got = coerce_input(raw, stored)
+    assert got == want and type(got) is type(want)
+    if isinstance(got, float):
+        assert str(got) == str(want)  # -0 is 0, not -0.0
+
+
+@pytest.mark.parametrize(
+    ("raw", "stored", "named"),
+    [
+        # Locale-dependent spellings (D3): refused by name rather than guessed.
+        ("5%", _EMPTY, "percent"),
+        ("1,000", _EMPTY, "comma"),
+        ("1,5", _EMPTY, "comma"),
+        ("$100", _EMPTY, "currency"),
+        ("€5", _EMPTY, "currency"),
+        ("(100)", _EMPTY, "parentheses"),
+        ("5%", _NUMBER, "percent"),
+        ("1,000", _NUMBER, "comma"),
+        ("٤٠", _EMPTY, "digits other than 0-9"),
+        ("１２３", _NUMBER, "digits other than 0-9"),
+        ("30/06/2024", _EMPTY, "YYYY-MM-DD"),
+        ("30/06/2024", _NUMBER, "YYYY-MM-DD"),
+        ("1/2", _EMPTY, "YYYY-MM-DD"),  # Excel (en-US) makes it 2 January
+        ("1 1/2", _EMPTY, "fraction"),  # Excel makes it 1.5
+        ("4 000", _EMPTY, "separators"),
+        ("2024-06-30 12:00:00", _NUMBER, "time"),
+        ("2024-06-30T12:00", _EMPTY, "time"),
+        ("12:30", _NUMBER, "time"),
+        ("#N/A", _EMPTY, "error value"),
+        ("#n/a", _NUMBER, "error value"),
+        # Outside Excel's number grammar or range.
+        ("1_000", _NUMBER, "not a number"),
+        ("1e-400", _EMPTY, "smallest"),
+        ("1e-400", _NUMBER, "smallest"),
+        ("1e-310", _NUMBER, "smallest"),
+        ("1e400", _NUMBER, "largest"),
+        ("1e308", _EMPTY, "largest"),
+        ("inf", _NUMBER, "not a number"),
+        ("nan", _NUMBER, "not a number"),
+        # ISO dates in Excel's 1900 leap-year region (D4).
+        ("1900-01-01", _EMPTY, "1900-03-01"),
+        ("1900-01-01", _NUMBER, "1900-03-01"),
+        ("1900-02-28", _NUMBER, "1900-03-01"),
+        ("1900-02-29", _NUMBER, "1900-03-01"),
+        ("1899-12-31", _EMPTY, "1900-03-01"),
+        ("2023-02-30", _NUMBER, "not a valid date"),
+    ],
+)
+def test_coerce_input_refuses_by_name(raw: str, stored: float | None, named: str) -> None:
+    from xl_marinade.calc.run import coerce_input
+
+    with pytest.raises(CalcInputError, match=named):
+        coerce_input(raw, stored)
+
+
+def _empty_target_book(make_book: Book) -> Path:
+    # Inputs!B1 and B3 were saved empty; B2 and B4 are siblings so both arms of each
+    # IF family are exercised by the trust run.
+    return make_book(
+        "empty",
+        {
+            "Inputs": {"A1": "start", "B2": 60000, "A3": "flag", "B4": True},
+            "Calc": {
+                "B1": F("=IF(Inputs!B1>50000,1,2)", 2),
+                "B2": F("=IF(Inputs!B2>50000,1,2)", 1),
+                "B3": F("=IF(Inputs!B3=TRUE,1,2)", 2),
+                "B4": F("=IF(Inputs!B4=TRUE,1,2)", 1),
+                "C1": F("=COUNT(Inputs!B1:B2)", 1),
+                "C2": F("=Inputs!B3*100", 0),
+            },
+            "Results": {"A2": "k1", "B2": True, "C2": 1},
+        },
+    )
+
+
+def test_an_empty_target_takes_dates_and_booleans_as_excel_does(
+    make_book: Book, tmp_path: Path
+) -> None:
+    # Typed into the empty cells: 2024-06-30 is 45473, not over 50000, so B1 = 2, and
+    # COUNT sees two numbers; TRUE is a boolean, so B3 = 1 and TRUE*100 = 100.
+    book = _empty_target_book(make_book)
+    imap = {"fields": {"start": "Inputs!B1", "flag": "Inputs!B3"}}
+    outs = ["Calc!B1:B4", "Calc!C1:C2"]
+    got = _results(calc(_req(tmp_path, book, "id,start,flag\np,2024-06-30,TRUE\n", imap, outs)))
+    values = {out: row["value"] for (_pid, out), row in got.items()}
+    assert values["Calc!B1"] == "2.0"
+    assert values["Calc!C1"] == "2.0"
+    assert values["Calc!B3"] == "1.0"
+    assert values["Calc!C2"] == "100.0"
+
+
+def test_an_empty_target_refuses_a_locale_spelling_naming_policy_and_field(
+    make_book: Book, tmp_path: Path
+) -> None:
+    book = _empty_target_book(make_book)
+    imap = {"fields": {"start": "Inputs!B1"}}
+    with pytest.raises(CalcInputError, match=r"policy 'p' field 'start'.*'1,000'.*comma"):
+        calc(_req(tmp_path, book, 'id,start\np,"1,000"\n', imap, ["Calc!B1"]))
+
+
+def test_a_1900_sentinel_date_is_refused_naming_the_leap_year_region(
+    make_book: Book, tmp_path: Path
+) -> None:
+    # Excel holds 1900-01-01 as serial 1; the old conversion gave 2 and reported ok.
+    book = make_book("dob", {"Inputs": {"B1": 29221}, "Calc": {"B1": F("=Inputs!B1+0", 29221)}})
+    imap = {"fields": {"dob": "Inputs!B1"}}
+    with pytest.raises(CalcInputError, match=r"policy 'p' field 'dob'.*1900-03-01.*leap"):
+        calc(_req(tmp_path, book, "id,dob\np,1900-01-01\n", imap, ["Calc!B1"]))
+
+
+def test_check_table_values_keep_their_stored_type(make_book: Book, tmp_path: Path) -> None:
+    # The table holds the boolean TRUE for k1; set into the empty Inputs!B3 it makes
+    # Calc!B3 = 1, which is what the results sheet stored. As the text "TRUE" it was a
+    # false mismatch (engine 2) that refused the output.
+    book = _empty_target_book(make_book)
+    check = {
+        "results": {
+            "sheet": "Results",
+            "id_column": "A",
+            "first_row": 2,
+            "outputs": {"Calc!B3": "C"},
+        },
+        "inputs": {
+            "table": {"sheet": "Results", "id_column": "A", "first_row": 2, "fields": {"flag": "B"}}
+        },
+    }
+    res = calc(
+        _req(
+            tmp_path,
+            book,
+            "id,flag\np,TRUE\n",
+            {"fields": {"flag": "Inputs!B3"}},
+            ["Calc!B3"],
+            check_against=_write(tmp_path, "check.json", json.dumps(check)),
+        )
+    )
+    report = json.loads(res.trust_report.read_text(encoding="utf-8"))
+    assert report["check_against"]["mismatches"] == []
+    row = _results(res)[("p", "Calc!B3")]
+    assert (row["value"], row["status"]) == ("1.0", "ok")

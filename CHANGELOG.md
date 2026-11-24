@@ -137,6 +137,18 @@ schema is a versioned public contract.
   error naming the key. Two map fields that resolve to one cell (by address or by name)
   and two `check.json` outputs on one cell are errors too: one value or one comparison
   was dropped, and which one depended on key order.
+- **`marinade calc`: policy values are converted by Excel's entry rules.** A value for
+  a cell the workbook saved empty stayed text, so `2024-06-30` compared greater than
+  every number, `TRUE` was not a boolean, and outputs came back `ok` with the wrong
+  number; such a cell now takes an ISO date as its serial, `TRUE`/`FALSE` as a boolean
+  and a plain decimal as a number. Spellings Excel reads by the locale's rules (`5%`,
+  `1,000`, `$100`, `(100)`, `30/06/2024`, times, other scripts' digits), error values
+  and numbers outside Excel's range (`1e-400` used to become 0) are now errors that
+  name the policy and field, on empty and number cells, and so is `1_000` on a number
+  cell. ISO dates before 1900-03-01 are refused: their serial was one too high (a
+  1900-01-01 placeholder date became 2), and Excel has no dates before 1900.
+  `--check-against` table values keep their stored type: a stored `TRUE` was set as
+  the text `"TRUE"`, which made a false mismatch and refused the output.
 
 ## [0.8.0] - 2026-11-24
 

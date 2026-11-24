@@ -85,9 +85,35 @@ mapping onto any cell of an array formula's range (Excel cannot hold a constant 
 The same holds for a `check.json` selector. Mapping two fields onto one cell (by
 address, by name, or one of each), the id field included, is an error too, since the
 cell can hold only one of their values. Before each
-input set, every mapped input is reset to its stored value. Values are converted to the
-target cell's stored type, and ISO dates become Excel serials. A value outside the cell's
+input set, every mapped input is reset to its stored value. A value outside the cell's
 data-validation list refuses that input set's outputs.
+
+Values are converted the way Excel converts what is typed into the cell, by the type of
+the value the cell holds:
+
+- A number cell takes a plain decimal (`40`, `-1.5`, `.5`, `4e1`, `0042`) or an ISO date
+  (`2024-06-30`), which becomes its Excel serial (45473).
+- A boolean cell takes `TRUE` or `FALSE`, in any case.
+- A text cell takes the text as written, even when it looks like a number.
+- A cell the workbook saved empty takes an ISO date as its serial, `TRUE`/`FALSE` (any
+  case) as a boolean and a plain decimal as a number; any other text stays text.
+
+On a number cell or an empty one, these are errors that name the policy, the field and
+what is wrong, rather than a guess:
+
+- spellings Excel reads by the locale's rules: `5%`, `1,000`, `1,5`, `$100`, `(100)`,
+  `4 000`, digits other than 0-9 (`٤٠`, `１２３`), dates not written `YYYY-MM-DD`
+  (`30/06/2024`, `1/2`), fractions (`1 1/2`), times and date-times (`12:30`,
+  `2024-06-30T12:00`). Give a plain decimal or an ISO date instead;
+- error values such as `#N/A`;
+- numbers outside the range Excel accepts (`1e-400`, `1e400`), and `inf` or `nan`;
+- ISO dates before 1900-03-01. Excel's 1900 date system counts a 29 February 1900 that
+  never was, so its serials before March 1900 are a day off the calendar, and it has no
+  dates before 1900. Give the serial number instead.
+
+A number cell also refuses any other text (`1_000`, `abc`). `--check-against` table
+values are set with the type they are stored with: a table cell holding `TRUE` sets a
+boolean.
 
 The list is the validation's literal items, or the stored values of its source: a range,
 a whole column (the cells it holds) or a defined name over cells (the validation sheet's

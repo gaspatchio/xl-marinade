@@ -92,7 +92,40 @@ from xl_marinade.calc.status import (
 from xl_marinade.calc.trust import TrustResult, run_trust, same
 from xl_marinade.errors import CalcInputError, WorkbookRefused
 
-_ISO_DATE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+_ISO_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+# Excel's number entry, in ASCII: optional sign, digits with an optional fraction (or a
+# bare fraction), optional exponent. No "_" separators, no inf/nan, no other scripts.
+_PLAIN_NUMBER = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
+_EXCEL_MAX = 9.99999999999999e307  # the largest number Excel accepts typed into a cell
+_EXCEL_MIN = 2.2251e-308  # the smallest positive number Excel holds
+_TIME = re.compile(r"[0-9]{1,2}:[0-9]{2}(?::[0-9]{2}(?:\.[0-9]+)?)?(?:\s*[AaPp][Mm])?")
+_DATE_TIME = re.compile(
+    r"[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}[Tt ]+[0-9]{1,2}:[0-9]{2}(?::[0-9]{2}(?:\.[0-9]+)?)?Z?"
+)
+# Day, month and year in any order or with two parts (``30/06/2024``, ``1/2``, ``2024-6``).
+_OTHER_DATE = re.compile(r"[0-9]{1,4}[/.-][0-9]{1,4}(?:[/.-][0-9]{1,4})?")
+_FRACTION = re.compile(r"[+-]?(?:[0-9]+ +)?[0-9]+/[0-9]+")  # 1 1/2 is 1.5 in Excel
+_CURRENCY = "$€£¥"
+_DECORATION = "%,()'" + _CURRENCY
+_ERROR_VALUES = frozenset(
+    {
+        "#NULL!",
+        "#DIV/0!",
+        "#VALUE!",
+        "#REF!",
+        "#NAME?",
+        "#NUM!",
+        "#N/A",
+        "#GETTING_DATA",
+        "#SPILL!",
+        "#CALC!",
+        "#FIELD!",
+        "#BLOCKED!",
+        "#CONNECT!",
+        "#BUSY!",
+        "#UNKNOWN!",
+    }
+)
 _COLUMN = re.compile(r"^[A-Za-z]{1,3}$")
 _EXCEL_EPOCH = date(1899, 12, 30)
 _TRUE, _FALSE = "TRUE", "FALSE"
@@ -133,14 +166,23 @@ class CalcResult:
 
 
 def coerce_input(raw: str, stored: StoredValue) -> float | str | bool:
-    """Convert a policy value to the type of the target cell's stored value.
+    """Convert a policy value as Excel converts what is typed into the target cell.
 
-    A number cell takes a number, or an ISO ``YYYY-MM-DD`` date as its Excel 1900
-    serial; a boolean cell takes ``TRUE``/``FALSE`` in any case; any other cell takes
-    text. An empty target cell takes a number when the text is one, else text.
+    The target's stored type decides:
+
+    - a number cell takes a plain ASCII decimal (optional sign, digits, optional
+      fraction and exponent) or an ISO ``YYYY-MM-DD`` date as its Excel 1900 serial;
+    - a boolean cell takes ``TRUE``/``FALSE`` in any case;
+    - a text cell takes the text as written;
+    - a cell the workbook saved empty takes an ISO date as its serial, ``TRUE``/``FALSE``
+      as a boolean, a plain decimal as a number, and any other text as text (ruling D3).
 
     Raises:
-        CalcInputError: if the value does not fit a number or boolean cell.
+        CalcInputError: for a value that does not fit a number or boolean cell; on a
+            number or empty cell, for a spelling whose meaning depends on the locale
+            (``5%``, ``1,000``, ``$100``, ``(100)``, digits other than 0-9, a date not
+            written ``YYYY-MM-DD``, a time), an error value, a number outside Excel's
+            range, and an ISO date before 1900-03-01 (ruling D4).
     """
     text = raw.strip()
     if isinstance(stored, bool):
@@ -148,28 +190,94 @@ def coerce_input(raw: str, stored: StoredValue) -> float | str | bool:
         if upper not in (_TRUE, _FALSE):
             raise CalcInputError(f"{raw!r} is not TRUE or FALSE")
         return upper == _TRUE
-    if isinstance(stored, float):
-        if _ISO_DATE.match(text):
-            try:
-                return float((date.fromisoformat(text) - _EXCEL_EPOCH).days)
-            except ValueError as exc:
-                raise CalcInputError(f"{raw!r} is not a valid date") from exc
-        number = _number(text)
-        if number is None:
-            raise CalcInputError(f"{raw!r} is not a number")
-        return number
+    if isinstance(stored, str):
+        return raw
+    if _ISO_DATE.fullmatch(text):
+        return _iso_serial(raw, text)
+    if stored is None and text.upper() in (_TRUE, _FALSE):
+        return text.upper() == _TRUE
+    if _PLAIN_NUMBER.fullmatch(text):
+        return _excel_number(raw, text)
+    spelling = _locale_spelling(text)
+    if spelling is not None:
+        raise CalcInputError(f"{raw!r} is {spelling}")
     if stored is None:
-        number = _number(text)
-        return number if number is not None else raw
-    return raw
+        return raw
+    raise CalcInputError(f"{raw!r} is not a number")
 
 
-def _number(text: str) -> float | None:
+def _iso_serial(raw: str, text: str) -> float:
+    """An ISO date's Excel 1900 serial; dates before 1900-03-01 are refused (D4)."""
+    year, month, day = (int(part) for part in text.split("-"))
+    if (year, month, day) < (1900, 3, 1):
+        raise CalcInputError(
+            f"{raw!r} is before 1900-03-01: Excel's 1900 date system counts a "
+            "29 February 1900 (the 1900 leap-year error), so its serials before March "
+            "1900 are a day off the calendar, and it has no dates before 1900; give the "
+            "serial number instead"
+        )
     try:
-        value = float(text)
-    except ValueError:
+        return float((date(year, month, day) - _EXCEL_EPOCH).days)
+    except ValueError as exc:
+        raise CalcInputError(f"{raw!r} is not a valid date") from exc
+
+
+def _excel_number(raw: str, text: str) -> float:
+    """A plain decimal as Excel holds it; refused outside the range Excel accepts."""
+    value = float(text) + 0.0  # Excel has no negative zero
+    if not math.isfinite(value) or abs(value) > _EXCEL_MAX:
+        raise CalcInputError(f"{raw!r} is beyond Excel's largest number (9.99999999999999E+307)")
+    mantissa = re.split(r"[eE]", text)[0]
+    if (value == 0.0 and any(ch in "123456789" for ch in mantissa)) or (
+        0.0 < abs(value) < _EXCEL_MIN
+    ):
+        raise CalcInputError(f"{raw!r} is below Excel's smallest number (2.2251E-308)")
+    return value
+
+
+def _locale_spelling(text: str) -> str | None:
+    """Why Excel would type ``text`` into a number, date, time or error by rules calc
+    does not apply (most of them the locale's); None when Excel keeps it as text."""
+    if text.upper() in _ERROR_VALUES:
+        return "an error value; calc cannot set one as an input"
+    kind = _locale_kind(text)
+    if kind is None:
         return None
-    return value if math.isfinite(value) else None
+    return (
+        f"{kind}, which Excel reads by the locale's rules; give a plain decimal "
+        "(0.05, 1000, -100) or an ISO date (YYYY-MM-DD)"
+    )
+
+
+def _locale_kind(text: str) -> str | None:
+    if _TIME.fullmatch(text) or _DATE_TIME.fullmatch(text):
+        return "a time or date-time"
+    if _FRACTION.fullmatch(text) and " " in text.strip("+-"):
+        return "a fraction"
+    if _OTHER_DATE.fullmatch(text):
+        return "a date not written YYYY-MM-DD"
+    if any(ch.isdecimal() and not ("0" <= ch <= "9") for ch in text):
+        if _PLAIN_NUMBER.fullmatch(_ascii_digits(text)):
+            return "a number written with digits other than 0-9"
+        return None
+    bare = "".join(ch for ch in text if ch not in _DECORATION and not ch.isspace())
+    if bare == text or not _PLAIN_NUMBER.fullmatch(bare):
+        return None
+    kinds = [
+        ("%", "a percent"),
+        (",", "a number with a comma (thousands or decimal)"),
+        ("(", "a number in parentheses"),
+    ]
+    for mark, kind in kinds:
+        if mark in text:
+            return kind
+    if any(ch in _CURRENCY for ch in text):
+        return "a currency amount"
+    return "a number with spaces or separators"
+
+
+def _ascii_digits(text: str) -> str:
+    return "".join(str(int(ch)) if ch.isdecimal() else ch for ch in text)
 
 
 def _as_text(value: StoredValue) -> str:
@@ -201,7 +309,7 @@ def _allowed(raw: str, value: float | str | bool | None, allowed: ListItems) -> 
             text = _as_text(item)
             if text.lower() == folded:
                 return True
-            if isinstance(value, float) and _NUMBER_TEXT.match(text) and _number(text) == value:
+            if isinstance(value, float) and _NUMBER_TEXT.match(text) and float(text) == value:
                 return True
         return False
     if isinstance(value, float):
@@ -556,7 +664,11 @@ def _check_against(
                 src = CellRef(table_sheet, trow, col)
                 if not graph.has_stored(src):
                     raise CalcInputError(f"input set {pid!r}: no value in {src.a1()}")
-                s.set_input(cell, _as_text(graph.stored(src)), f"input set {pid!r}")
+                # The table's value as stored (a TRUE stays a boolean): it is what
+                # was in the cell when Excel computed that input set's results.
+                stored_input = graph.stored(src)
+                if stored_input is not None:
+                    s.engine.set_value(cell, stored_input)
         reading = s.recalc()
         matched = True
         for cell, col in outputs.items():
