@@ -25,6 +25,9 @@ schema is a versioned public contract.
   whole-row targets (`Calc!B:B`, and names over them) are accepted and cover the rows
   the sheet uses. A single-cell use of a whole-column or whole-row name is refused as
   implicit intersection, which an `IFERROR` around it used to hide (K9).
+- **`marinade calc` / `marinade values`: a variable range across two sheets is an
+  error.** A `vars.json` range naming a defined name whose areas lie on two sheets
+  passed the one-column check and its periods alternated between the sheets.
 
 ## [0.8.0] - 2026-11-24
 

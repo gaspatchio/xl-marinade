@@ -32,10 +32,11 @@ class Row:
 
 
 def expand_variables(specs: list[VariableSpec], graph: WorkbookGraph) -> list[VariableCells]:
-    """Resolve each spec to its cells; a range must be one row or one column.
+    """Resolve each spec to its cells; a range must be one row or one column of one sheet.
 
     Raises:
-        CalcInputError: for a 2-D range, or a ``cell`` entry that spans several cells.
+        CalcInputError: for a 2-D range, a range over more than one sheet (a name with
+            areas on several sheets), or a ``cell`` entry that spans several cells.
     """
     out: list[VariableCells] = []
     for spec in specs:
@@ -45,6 +46,13 @@ def expand_variables(specs: list[VariableSpec], graph: WorkbookGraph) -> list[Va
                 raise CalcInputError(f"variable {spec.name!r}: 'cell' must be a single cell")
             out.append(VariableCells(spec.name, cells, None))
             continue
+        sheets = sorted({c.sheet for c in cells})
+        if len(sheets) > 1:
+            # Periods follow rows, so cells from two sheets would interleave.
+            raise CalcInputError(
+                f"variable {spec.name!r}: range {spec.target!r} spans more than one sheet "
+                f"({', '.join(sheets)}); give one row or one column of one sheet"
+            )
         if len({c.col for c in cells}) > 1 and len({c.row for c in cells}) > 1:
             raise CalcInputError(
                 f"variable {spec.name!r}: 2-D range {spec.target!r}; use one row or one column"

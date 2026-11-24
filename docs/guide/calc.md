@@ -86,7 +86,8 @@ data-validation list refuses that input set's outputs.
 }
 ```
 
-A range runs down one column or across one row; a 2-D range is an error.
+A range runs down one column or across one row of one sheet; a 2-D range, or a name
+whose areas lie on more than one sheet, is an error.
 **`period_start` is required on every range and has no default**, because workbooks differ
 on whether periods count from 0 or 1. Periods count from it: the first cell of the range is
 period `period_start`, the next one `period_start + 1`. A single `cell` has no period (the

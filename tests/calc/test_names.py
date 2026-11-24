@@ -422,3 +422,53 @@ def test_formula_name_as_a_variable_range_is_refused(lines: Path, tmp_path: Path
         _run(tmp_path, lines, "id,x\nP,3\n", {"x": "In!A1"}, [], variables=vars_json)
     with pytest.raises(CalcInputError, match="'Dyn'"):
         values(ValuesRequest(lines, vars_json, tmp_path / "vout"))
+
+
+# -- a variable range lies on one sheet ----------------------------------------
+
+
+@pytest.fixture
+def unions(make_book: Book) -> Path:
+    # P1!A1:A2 = x*10, x*20 and P2!A1:A2 = x*30, x*40, with x = In!A1 = 2.
+    return make_book(
+        "unions",
+        {
+            "In": {"A1": 2},
+            "P1": {"A1": F("=In!A1*10", 20), "A2": F("=In!A1*20", 40)},
+            "P2": {"A1": F("=In!A1*30", 60), "A2": F("=In!A1*40", 80)},
+            "S": {"A1": 1, "A2": 2, "A4": 4, "A5": 5},
+        },
+        names={"Both": "P1!$A$1:$A$2,P2!$A$1:$A$2", "Gap": "S!$A$1:$A$2,S!$A$4:$A$5"},
+    )
+
+
+def test_a_variable_range_across_two_sheets_is_refused(unions: Path, tmp_path: Path) -> None:
+    from xl_marinade.calc import ValuesRequest, values
+
+    # Sorted by row, the periods would alternate between P1 and P2 (20, 60, 40, 80).
+    vars_json = _write(
+        tmp_path, "vars.json", json.dumps({"both": {"range": "Both", "period_start": 1}})
+    )
+    with pytest.raises(CalcInputError, match="more than one sheet"):
+        _run(tmp_path, unions, "id,x\nP,3\n", {"x": "In!A1"}, [], variables=vars_json)
+    with pytest.raises(CalcInputError, match="more than one sheet"):
+        values(ValuesRequest(unions, vars_json, tmp_path / "vout"))
+
+
+def test_one_sheet_unions_and_multi_sheet_outputs_still_resolve(
+    unions: Path, tmp_path: Path
+) -> None:
+    from xl_marinade.calc import ValuesRequest, values
+
+    # A one-sheet union in one column runs down the rows; --outputs is a set of cells,
+    # so a union across sheets is fine there.
+    vars_json = _write(
+        tmp_path, "vars.json", json.dumps({"gap": {"range": "Gap", "period_start": 1}})
+    )
+    rows = values(ValuesRequest(unions, vars_json, tmp_path / "vout"))
+    with rows.open(encoding="utf-8", newline="") as fh:
+        got = [(r["period"], r["value"]) for r in csv.DictReader(fh)]
+    assert got == [("1", "1.0"), ("2", "2.0"), ("3", "4.0"), ("4", "5.0")]
+    res = _run(tmp_path, unions, "id,x\nP,3\n", {"x": "In!A1"}, ["Both"])
+    values_by_cell = {out: r["value"] for (_p, out), r in _results(res).items()}
+    assert values_by_cell == {"P1!A1": "30.0", "P1!A2": "60.0", "P2!A1": "90.0", "P2!A2": "120.0"}
