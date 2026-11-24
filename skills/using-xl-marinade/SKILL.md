@@ -232,7 +232,10 @@ marinade values book.xlsx --variables vars.json [--map map.json] -o stored/
   formulas (an error literal such as `#N/A` typed into a formula is a known
   cause); external references that cannot be held (ranges, no cached value,
   names pointing into another workbook); approximate lookups on input-dependent
-  keys. Per policy: `lookup value type differs from keys` (text against numbers).
+  keys; a call to a function IronCalc lacks (`AGGREGATE`, `BAHTTEXT`, the `CUBE…`
+  functions and a few more; the detail names it). Per policy: `lookup value type
+  differs from keys` (text against numbers); an `INDIRECT` address off the grid
+  (row 0) is `dynamic reference not checked`.
 - **Exit codes:** 0 ok, 1 error, 5 `[calc]` missing, 6 workbook refused outright
   (1904 dates, precision as displayed, Strict Open XML).
 - A pass on the stored inputs proves only the paths those inputs take; never

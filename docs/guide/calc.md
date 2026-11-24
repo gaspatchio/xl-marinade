@@ -235,11 +235,17 @@ Details worth knowing:
   comparison probe `uncertain`, and a dynamic-reference probe `refused`.
 - `OFFSET` and `INDIRECT` are followed to where they point for each input set; if that
   cannot be read, the outputs behind it are refused (`dynamic reference not checked`).
+  An `INDIRECT` text that addresses a cell off the grid (row 0, below row 1,048,576 or
+  right of column `XFD`) counts as unread: Excel gives `#REF!` there, while IronCalc
+  0.9.1 reads `Rates!B0` as 0.
 - An error code Excel does not have (IronCalc's `#N/IMPL!`, `#ERROR!`, `#CIRC!` and the
   like) in an output or in a probe is an `engine_error` for that policy, so the output is
   `refused`, even when an `IFERROR` around it would have turned it into a plausible
   value. Excel's own error codes (`#N/A`, `#DIV/0!`, `#VALUE!` and the rest) are values
-  like any other.
+  like any other, with one exception: a `#NAME?` in an output for a policy, where the
+  trust run had none in that cell, is an `engine_error`. Excel's `#NAME?` comes from
+  the formula's text, not its inputs, so one only a new policy reaches is a function
+  the engine lacks on an arm the trust run never took.
 - A passing trust run proves only the paths the stored inputs take. That is what
   `unverified_path` and `--check-against` are for.
 
@@ -311,6 +317,7 @@ the next. They are refused even when the trust run reproduces them. The `detail`
 | `unparseable formula` | The formula could not be parsed. Error literals typed into a formula, such as `#N/A`, are a known source of these. |
 | `external reference not held` | The formula reads an external reference the engine copy cannot hold: a range, one with no cached value (IronCalc returns `#ERROR!` or `#REF!` for those), or a defined name that points into another workbook. |
 | `approximate lookup on input-dependent keys` | An approximate lookup whose key cells change with a mapped input (an input cell, or a formula that depends on one). The keys may be sorted for the stored inputs and not for the next policy. |
+| `function IronCalc does not implement: NAME` | The formula calls an Excel function IronCalc 0.9.1 does not have: `AGGREGATE`, `BAHTTEXT`, `CALL`, the `CUBE…` functions, `DBCS`, `DETECTLANGUAGE`, `EUROCONVERT`, `FIELDVALUE`, `FILTERXML`, `GETPIVOTDATA`, `GROUPBY`, `IMAGE`, `JIS`, `PHONETIC`, `PIVOTBY`, `REGISTER.ID`, `RTD`, `SQL.REQUEST`, `STOCKHISTORY`, `TRANSLATE`, `WEBSERVICE`. The engine answers `#NAME?`, an Excel error code, so an `IFERROR`, `ISERROR` or `ISNUMBER` around the call would turn it into a plausible value. |
 
 One more refusal is per policy, read from the probes: `lookup value type differs from
 keys`, when an approximate lookup matches a key of a different type than its lookup value

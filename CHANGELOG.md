@@ -35,6 +35,19 @@ schema is a versioned public contract.
   accepted) and compares the converted value, so an ISO date matches a list of dates
   (K21). Lists fed by a formula (`INDIRECT`, `OFFSET`, cascading dropdowns) are still
   not checked; the guide now says so.
+- **`marinade calc`: a function IronCalc lacks is refused by name.** IronCalc 0.9.1
+  answers `#NAME?` for `AGGREGATE`, `BAHTTEXT` and 25 other Excel functions, and
+  `#NAME?` is an Excel error code too, so an `IFERROR`, `IF(ISERROR(…))` or
+  `IF(ISNUMBER(…))` around the call (the `AGGREGATE(14,6,…)` "largest ignoring errors"
+  idiom) came back `ok` with the error arm's value where Excel computes a number. Such a
+  call is now a refused pattern, `function IronCalc does not implement: AGGREGATE`; the
+  list is pinned to the installed IronCalc by a test. A `#NAME?` that appears in an output
+  for a policy, where the trust run had none, is an `engine_error`.
+- **`marinade calc`: an `INDIRECT` address off the grid is refused.** IronCalc reads
+  `INDIRECT("Rates!B0")` as 0 (and a range from row 0 as starting on row 1) where Excel
+  gives `#REF!`, so a policy just below a table's first row came back `ok` with 0. An
+  address on row 0, below row 1,048,576 or right of column `XFD` now counts as an unread
+  dynamic reference (`dynamic reference not checked`).
 
 ## [0.8.0] - 2026-11-24
 
