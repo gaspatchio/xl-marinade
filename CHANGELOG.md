@@ -28,6 +28,13 @@ schema is a versioned public contract.
 - **`marinade calc` / `marinade values`: a variable range across two sheets is an
   error.** A `vars.json` range naming a defined name whose areas lie on two sheets
   passed the one-column check and its periods alternated between the sheets.
+- **`marinade calc`: data-validation lists are checked the way Excel checks them.** A
+  list whose source is a defined name (a sheet's own name first), `=Name` or a whole
+  column was never checked, so a value outside it came back `ok`; it is now read from
+  the cells the source covers. The check ignores case (`yes` against `Yes,No` is
+  accepted) and compares the converted value, so an ISO date matches a list of dates
+  (K21). Lists fed by a formula (`INDIRECT`, `OFFSET`, cascading dropdowns) are still
+  not checked; the guide now says so.
 
 ## [0.8.0] - 2026-11-24
 

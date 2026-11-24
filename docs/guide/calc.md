@@ -76,6 +76,19 @@ input set, every mapped input is reset to its stored value. Values are converted
 target cell's stored type, and ISO dates become Excel serials. A value outside the cell's
 data-validation list refuses that input set's outputs.
 
+The list is the validation's literal items, or the stored values of its source: a range,
+a whole column (the cells it holds) or a defined name over cells (the validation sheet's
+own name first, as in a formula). As in Excel, the check ignores case, and numbers and
+dates match by value: `2025-01-01` typed into a date cell matches a list holding that
+date. What is not checked:
+
+- A list fed by a formula (`INDIRECT`, `OFFSET`, a name holding one, as in cascading
+  dropdowns) is not checked in this version: any value is accepted there.
+- A list held in formula cells is read from the values the workbook stored, not
+  recomputed for the input set.
+- Only list validations are checked. Whole-number, decimal, date, length and custom
+  validations are not.
+
 ### `vars.json`
 
 ```json

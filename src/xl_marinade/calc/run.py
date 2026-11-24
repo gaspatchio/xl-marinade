@@ -169,11 +169,18 @@ def _as_text(value: StoredValue) -> str:
     return str(value)
 
 
-def _allowed(raw: str, allowed: list[str]) -> bool:
-    if raw in allowed:
+def _allowed(raw: str, value: float | str | bool | None, allowed: list[str]) -> bool:
+    """Excel's list check: the entry matches an item ignoring case, or by number.
+
+    ``value`` is the entry converted for its cell (None if it does not convert), so an
+    ISO date typed into a date cell matches a list of date serials.
+    """
+    folded = raw.casefold()
+    if any(folded == item.casefold() for item in allowed):
         return True
-    number = _number(raw)
-    return number is not None and any(_number(a) == number for a in allowed)
+    numbers = {n for item in allowed if (n := _number(item)) is not None}
+    converted = value if isinstance(value, float) else None
+    return any(n is not None and n in numbers for n in (_number(raw), converted))
 
 
 # -- resolving targets ---------------------------------------------------------
@@ -310,6 +317,13 @@ class _Session:
             value = self.graph.stored(cell)
             if value is not None:
                 self.engine.set_value(cell, value)
+
+    def converted(self, cell: CellRef, raw: str) -> float | str | bool | None:
+        """``raw`` as it would be set into ``cell``; None when it does not convert."""
+        try:
+            return coerce_input(raw, self.graph.stored(cell))
+        except CalcInputError:
+            return None
 
     def set_input(self, cell: CellRef, raw: str, what: str) -> None:
         try:
@@ -518,7 +532,7 @@ def _policy_loop(
             raw = policy.values[name]
             options = allowed[name]
             what = f"policy {policy.id!r} field {name!r}"
-            if options is None or _allowed(raw, options):
+            if options is None or _allowed(raw, s.converted(cell, raw), options):
                 s.set_input(cell, raw, what)
                 continue
             detail = f"{name}={raw!r} not in {options!r}"

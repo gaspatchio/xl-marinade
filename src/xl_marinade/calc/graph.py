@@ -545,7 +545,15 @@ class WorkbookGraph:
         return f"write {options}"
 
     def allowed_values(self, cell: CellRef) -> list[str] | None:
-        """List-validation values for the cell, or None when it has no list validation."""
+        """List-validation values for the cell, or None when it has no list validation
+        that can be read.
+
+        The list is the literal items, or the stored values of the source: a range, a
+        whole column or row (the cells it holds), or a defined name over cells, read
+        from the validation's sheet as a formula there would read it. A source that is
+        a formula (``INDIRECT``, ``OFFSET``, a name holding one) is not read: its list
+        can change with the inputs (ruling D8 leaves it unchecked in 0.8.1).
+        """
         for rects, literals, f1, sheet in self._validations:
             if not any(
                 r[0] == cell.sheet and r[1] <= cell.row <= r[3] and r[2] <= cell.col <= r[4]
@@ -554,13 +562,27 @@ class WorkbookGraph:
                 continue
             if literals is not None:
                 return literals
-            source = _parse_rect(str(f1 or ""), sheet)
+            source = self._list_source(str(f1 or ""), sheet)
             if source is None:
                 continue
-            return [
-                _text(self._stored[c]) for c in self._cells_in_rect(source) if c in self._stored
-            ]
+            cells = [c for rect in source for c in self._cells_in_rect(rect)]
+            return [_text(self._stored[c]) for c in cells if c in self._stored]
         return None
+
+    def _list_source(self, formula1: str, sheet: str) -> list[_Rect] | None:
+        """The rectangles a list validation's source covers; None for a formula."""
+        text = formula1.strip().removeprefix("=").strip()
+        if (rect := _parse_rect(text, sheet)) is not None:
+            written, r1, c1, r2, c2 = rect
+            return [(self.sheet(written) or written, r1, c1, r2, c2)]
+        if (whole := _parse_whole(text, sheet)) is not None:
+            written, r1, c1, r2, c2 = whole
+            clipped = self._clip((self.sheet(written) or written, r1, c1, r2, c2))
+            return [clipped] if clipped is not None else []
+        found = self.lookup_name(text, sheet)
+        if found is None or found.kind != "cells":
+            return None
+        return list(found.rects)
 
 
 def open_graph(workbook: Path, ir: Path | None, tmp: Path) -> WorkbookGraph:
