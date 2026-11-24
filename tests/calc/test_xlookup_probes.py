@@ -168,6 +168,30 @@ def test_an_edge_a_family_member_exercised_counts(make_book: Book, tmp_path: Pat
     _edge(rows, "A22", "Calc!B1", "XLOOKUP", "last")
 
 
+def test_binary_search_is_probed_on_sorted_keys_and_refused_on_unsorted(
+    make_book: Book, tmp_path: Path
+) -> None:
+    # search_mode 2 (binary, ascending) finds what a linear search finds only on keys
+    # sorted ascending: 20,21,22 are; 22,20,21 are not, and Excel's answer there is
+    # undefined. Age 20 on the sorted keys is the first row, never exercised.
+    book = make_book(
+        "bin",
+        {
+            "Inputs": {"B1": 21},
+            "Rates": {**_RATES, "D1": 22, "D2": 20, "D3": 21},
+            "Calc": {
+                "B1": F(f"=_xlfn.XLOOKUP(Inputs!B1,{_KEYS},{_VALS},0,0,2)", 0.02),
+                "B2": F(f"=_xlfn.XLOOKUP(Inputs!B1,Rates!$D$1:$D$3,{_VALS},0,0,2)", 0.03),
+            },
+        },
+    )
+    res = _run(tmp_path, book, "id,age\nA20,20\n", {"age": "Inputs!B1"}, ["Calc!B1", "Calc!B2"])
+    rows = _rows(res)
+    _edge(rows, "A20", "Calc!B1", "XLOOKUP", "first")
+    assert rows[("A20", "Calc!B2")]["status"] == "refused"
+    assert "approximate lookup on unsorted column" in rows[("A20", "Calc!B2")]["reasons"]
+
+
 def test_if_not_found_arm_counts_only_when_nothing_was_found(
     make_book: Book, tmp_path: Path
 ) -> None:
