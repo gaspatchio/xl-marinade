@@ -231,6 +231,19 @@ class ProbePlan:
     probes: list[Probe]
     unplaced: dict[CellRef, list[ProbeKind]]
     sheets: dict[str, str] = field(default_factory=dict)
+    join_uses: list[JoinUse] = field(default_factory=list)
+    """Joins that read a shared source probe (one per source cell, planned last)."""
+
+
+@dataclass(slots=True, frozen=True)
+class JoinUse:
+    """A join reading one source cell: the joining cell, the arms that guard the join,
+    the check (``general`` or ``criterion``) and the index of the source's probe."""
+
+    cell: CellRef
+    guards: tuple[Guard, ...]
+    check: str
+    source: int
 
 
 @dataclass(slots=True)
@@ -462,6 +475,13 @@ def _number_text_reason(probe: Probe, values: list[EngineValue]) -> str | None:
     if probe.meta["check"] == "always":
         # A join calc cannot read cell by cell: refused wherever it is evaluated.
         return NUMBER_TEXT_NOT_CHECKED
+    if probe.meta["check"] != "tie" and len(values) > 2:
+        # A joined function result: read like a number only when it is one value.
+        size = values[2]
+        if not isinstance(size, float):
+            return None
+        if size != 1:
+            return NUMBER_TEXT_NOT_CHECKED
     x = values[0]
     if not isinstance(x, float):
         return None
@@ -480,11 +500,16 @@ def _number_text_reason(probe: Probe, values: list[EngineValue]) -> str | None:
         if probe.meta.get("sections") == "1" and text_drops_sign(x, decimals, scale):
             return NUMBER_TEXT_NEGATIVE
         return NUMBER_TEXT_TIE if near_flip("ROUND", y, decimals) else None
-    text = values[1]
-    if not isinstance(text, str):
+    return _general_reason(values, probe.meta["check"])
+
+
+def _general_reason(values: list[EngineValue], check: str) -> str | None:
+    """For ``(x, x&"")`` readings: why Excel's text for ``x`` may differ; None if not."""
+    x, text = values[0], values[1]
+    if not isinstance(x, float) or not isinstance(text, str):
         return None
     differs = excel_general_text(x) != text
-    if probe.meta["check"] == "criterion" and (differs or x != math.floor(x)):
+    if check == "criterion" and (differs or x != math.floor(x)):
         return NUMBER_TEXT_CRITERION
     return NUMBER_TEXT_DIGITS if differs else None
 
@@ -662,6 +687,13 @@ class _Planner:
     guards: tuple[Guard, ...] = ()
     inputs: frozenset[CellRef] = frozenset()
     """Mapped input cells: constants that change per policy."""
+    sources: dict[CellRef, list[tuple[CellRef, tuple[Guard, ...], str]]] = field(
+        default_factory=dict
+    )
+    """Join source cell -> the joins reading it: (joining cell, guards, check)."""
+    ranges: dict[tuple[str, str], list[CellRef] | None] = field(default_factory=dict)
+    """(formula sheet, reference) -> the cells a joined range holds that need a probe."""
+    join_uses: list[JoinUse] = field(default_factory=list)
     criteria: set[int] = field(default_factory=set)
     """``id`` of the nodes a SUMIF-family criterion joins as text, in this cell."""
 
@@ -760,18 +792,63 @@ class _Planner:
         self.add(ProbeKind.number_text, scoped, lambda: self._general(node, check, joins))
 
     def _join_many(self, node: ASTNode, scoped: bool) -> None:
-        """A range or array joined as text. Constants Excel writes as the engine does
-        need nothing; every other cell is read per policy, one probe each. A join that
-        cannot be read cell by cell is refused per policy, under its arm's guards."""
-        cells = self._range_cells(node) if isinstance(node, RefNode) else None
-        todo = [c for c in cells if not self._plain_constant(c)] if cells is not None else None
+        """A range or array joined as text.
+
+        Constants Excel writes as the engine does need nothing. Every other cell of a
+        range is a *source*: probed once per plan, after every cell's own probes, and
+        read per policy for each join under that join's guards (:meth:`place_sources`).
+        A function result is read with its size, so one value is checked like a number
+        and an array refused. A join calc cannot read cell by cell (a reference it
+        cannot resolve, or more than ``JOIN_RANGE_PROBES`` cells to read) is refused
+        per policy, under its arm's guards.
+        """
+        check = "criterion" if id(node) in self.criteria else "general"
+        if isinstance(node, FunctionNode):
+            self.add(ProbeKind.number_text, scoped, lambda: self._sized(node, check))
+            return
+        todo = self._sources_of(node) if isinstance(node, RefNode) else None
         if todo is None or len(todo) > JOIN_RANGE_PROBES:
             self.add(ProbeKind.number_text, scoped, _fixed(("TRUE",), {"check": "always"}))
             return
-        meta = {"check": "criterion" if id(node) in self.criteria else "general"}
-        for cell in todo:
-            ref = f"{quote_sheet(cell.sheet)}!${_number_to_col(cell.col)}${cell.row}"
-            self.add(ProbeKind.number_text, scoped, _fixed((ref, f'({ref})&""'), meta))
+        if not todo:
+            return
+        if scoped:
+            # Inside an array formula or LET: the cells cannot be read for this join.
+            self.add(ProbeKind.number_text, True, _fixed(("TRUE",), {"check": "always"}))
+            return
+        for source in todo:
+            self.sources.setdefault(source, []).append((self.cell, self.guards, check))
+
+    def _sources_of(self, node: RefNode) -> list[CellRef] | None:
+        """The cells of a joined range that need a probe; cached per sheet and text, so
+        a join copied down a column resolves its range once."""
+        key = (self.cell.sheet, node.ref)
+        if key not in self.ranges:
+            cells = self._range_cells(node)
+            self.ranges[key] = (
+                None if cells is None else [c for c in cells if not self._plain_constant(c)]
+            )
+        return self.ranges[key]
+
+    def place_sources(self) -> None:
+        """Plan the join sources, after every cell's own probes so they never displace
+        them. A join with a source past the cap is refused for its own cell only."""
+        lost: set[CellRef] = set()
+        for source in sorted(self.sources):
+            uses = self.sources[source]
+            if len(self.probes) >= self.cap:
+                lost.update(cell for cell, _guards, _check in uses)
+                continue
+            index = len(self.probes)
+            ref = f"{quote_sheet(source.sheet)}!${_number_to_col(source.col)}${source.row}"
+            formulas = (ref, f'({ref})&""')
+            meta = {"check": "source"}
+            self.probes.append(Probe(ProbeKind.number_text, source, "", 0, formulas, meta))
+            self.join_uses.extend(
+                JoinUse(cell, guards, check, index) for cell, guards, check in uses
+            )
+        for cell in sorted(lost):
+            self.unplaced.setdefault(cell, []).append(ProbeKind.number_text)
 
     def _range_cells(self, node: RefNode) -> list[CellRef] | None:
         """Every cell a range or multi-cell name covers (a whole column or row cut to
@@ -823,6 +900,10 @@ class _Planner:
         if len(node.args) < 2:
             return (x,), meta
         return (x, self.lift(node.args[1])), meta
+
+    def _sized(self, node: ASTNode, check: str) -> tuple[tuple[str, ...], dict[str, str]]:
+        x = self.lift(node)
+        return (x, f'({x})&""', f"ROWS({x})*COLUMNS({x})"), {"check": check}
 
     def _general(
         self, node: ASTNode, check: str, joins: bool
@@ -1109,9 +1190,9 @@ def plan_probes(
         planner.counters = {}
         planner.criteria = set()
         planner.visit(root, False, graph.is_array_formula(cell))
-    return ProbePlan(
-        planner.probes, planner.unplaced, {name.lower(): name for name in graph.sheets()}
-    )
+    planner.place_sources()
+    sheets = {name.lower(): name for name in graph.sheets()}
+    return ProbePlan(planner.probes, planner.unplaced, sheets, planner.join_uses)
 
 
 # -- placing and reading -------------------------------------------------------
@@ -1245,9 +1326,16 @@ def _dynamic_cells(
 
 def _live(probe: Probe, outcomes: dict[tuple[CellRef, int], str]) -> bool | None:
     """Whether the cell evaluates the probe's part: True, False, or None (unknown)."""
+    return _live_at(probe.cell, probe.guards, outcomes)
+
+
+def _live_at(
+    cell: CellRef, guards: tuple[Guard, ...], outcomes: dict[tuple[CellRef, int], str]
+) -> bool | None:
+    """Whether ``cell`` evaluates a part under ``guards``: True, False or None."""
     live: bool | None = True
-    for ordinal, taken, maybe in probe.guards:
-        outcome = outcomes.get((probe.cell, ordinal))
+    for ordinal, taken, maybe in guards:
+        outcome = outcomes.get((cell, ordinal))
         if outcome is None or outcome in maybe:
             live = None
         elif outcome not in taken:
@@ -1304,6 +1392,8 @@ def read_probes(engine: Engine, plan: ProbePlan) -> ProbeReadings:
             if _types_differ(probe, values):
                 readings.type_mismatch.add(probe.cell)
         elif probe.kind is ProbeKind.number_text:
+            if probe.meta["check"] == "source":
+                continue  # read below, once for each join that reads it
             detail = _number_text_reason(probe, values)
             if detail is not None:
                 readings.number_text.setdefault(probe.cell, set()).add(detail)
@@ -1312,5 +1402,11 @@ def read_probes(engine: Engine, plan: ProbePlan) -> ProbeReadings:
             dynamic.setdefault(probe.cell, set()).update(landed or ())
             if landed is None:
                 readings.dynamic_unread.add(probe.cell)
+    for use in plan.join_uses:
+        if _live_at(use.cell, use.guards, outcomes) is False:
+            continue
+        detail = _general_reason(values_of[use.source], use.check)
+        if detail is not None:
+            readings.number_text.setdefault(use.cell, set()).add(detail)
     readings.dynamic_refs = {cell: sorted(cells) for cell, cells in dynamic.items()}
     return readings

@@ -360,10 +360,15 @@ Integers, and decimals with up to 15 significant digits that sit on no tie, stay
 only for an exact zero) does not decide the rounding. A range joined by `TEXTJOIN`,
 `CONCAT` or `CONCATENATE` is read cell by cell: constants that are text, booleans,
 blanks or numbers Excel writes as the engine does need nothing; formula cells, mapped
-inputs and other numbers are read per policy. A join calc cannot read cell by cell
-(an array from a function such as `FILTER` or `OFFSET`, or a range with more than
-1,000 cells to read) is refused as `number-to-text not checked` for the policies that
-evaluate it, not for those whose branch skips it.
+inputs and other numbers are read per policy. Each such cell is probed once, however
+many joins read it, and these probes are planned after every other probe, so they
+never take `--probe-cap` room from a branch or lookup check; a join whose cells did not
+fit under the cap is refused as `number-to-text not checked` for its own cell and what
+depends on it, nothing else. A function result joined as text (`XLOOKUP`, `INDEX`,
+`IF`) is read like a number when it is one value; when it is an array, or the join
+names a range with more than 1,000 cells to read, the join is refused as
+`number-to-text not checked` for the policies that evaluate it, not for those whose
+branch skips it.
 
 A conversion calc cannot check at all is refused for every policy as `number-to-text
 not checked`, whatever the policy: a `TEXT` format that is not literal text, or that
