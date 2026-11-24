@@ -528,8 +528,9 @@ class _Planner:
         if _end(m.group("a"))[0] == "name" and m.group("b") is None:
             found = self.graph.lookup_name(node.ref, self.cell.sheet)
             sheets = {r[0] for r in found.rects} if found is not None else set()
-            if found is None or found.kind != "cells" or len(sheets) != 1:
-                raise ValueError(f"name {node.ref!r} is not cells on one sheet")
+            if found is None or found.kind != "cells" or found.whole or len(sheets) != 1:
+                # A whole column or row would land on up to a million cells per reading.
+                raise ValueError(f"name {node.ref!r} is not a bounded range on one sheet")
             return sheets.pop()
         s1 = m.group("s1")
         if s1 is None:

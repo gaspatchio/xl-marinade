@@ -17,6 +17,14 @@ schema is a versioned public contract.
   an `INDIRECT` text. A sheet's own name can be a target, written `'Sheet'!Name`; a
   bare name that a sheet also defines is refused as ambiguous instead of silently
   setting the workbook's cell.
+- **`marinade calc` / `marinade values`: targets that cover no cells are errors.** An
+  output, variable range or map field naming a defined name that holds a formula
+  (`OFFSET` dynamic ranges included), a constant, a broken reference or another
+  workbook's cells used to resolve to nothing and be dropped while the run exited 0;
+  it now stops with an error naming the target and the fix. Whole-column and
+  whole-row targets (`Calc!B:B`, and names over them) are accepted and cover the rows
+  the sheet uses. A single-cell use of a whole-column or whole-row name is refused as
+  implicit intersection, which an `IFERROR` around it used to hide (K9).
 
 ## [0.8.0] - 2026-11-24
 

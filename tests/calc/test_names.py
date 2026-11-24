@@ -278,3 +278,147 @@ def test_indirect_text_names_a_sheet_in_any_case(make_book: Book, tmp_path: Path
     assert (got[("S", "Calc!A1")]["value"], got[("S", "Calc!A1")]["status"]) == ("7.0", "ok")
     assert got[("P", "Calc!A2")]["status"] == "refused"
     assert got[("S", "Calc!A2")]["status"] == "refused"
+
+
+# -- whole columns and rows, and names that hold no cells ----------------------
+
+WHOLE_LINE = "approximate lookup on whole column"
+
+
+def test_whole_line_names_are_multi_cell_in_the_scans(make_book: Book, ir_for: IrFor) -> None:
+    # Excel: a single-cell use of a whole-column name intersects it with the formula's
+    # row (Calc!D3 reads Data!A3); a whole-row name with the formula's column.
+    book = make_book(
+        "wl",
+        {
+            "Data": {**{f"A{r}": 0 for r in range(1, 7)}, "D1": 0},
+            "Calc": {
+                "D3": F("=IFERROR(WholeA*3,-1)", 0),
+                "D4": F("=WholeA*3", 0),
+                "D5": F("=IFERROR(WholeR*3,-1)", 0),
+                "E1": F("=SUM(WholeA)", 0),
+                "E2": F("=MATCH(0,WholeA,1)", 6),
+            },
+        },
+        names={"WholeA": "Data!$A:$A", "WholeR": "Data!$1:$1"},
+    )
+    found = scan_patterns(WorkbookGraph.from_ir(ir_for(book)), as_of=None, data_table_cells=[])
+
+    def details(a1: str) -> list[str]:
+        return [r.detail for r in found.get(CellRef.parse(a1), [])]
+
+    assert details("Calc!D3") == [IMPLICIT]
+    assert details("Calc!D4") == [IMPLICIT]
+    assert details("Calc!D5") == [IMPLICIT]
+    assert details("Calc!E1") == []
+    assert details("Calc!E2") == [WHOLE_LINE]
+
+
+def test_whole_column_name_under_iferror_is_refused(make_book: Book, tmp_path: Path) -> None:
+    # Policy P sets Data!A3 to 5: Excel gives 5*3 = 15 in Calc!D3. The engine reads the
+    # column's first cell (0) and agrees with Excel only on the stored zeros.
+    book = make_book(
+        "k9",
+        {
+            "Data": {f"A{r}": 0 for r in range(1, 7)},
+            "Calc": {"D3": F("=IFERROR(WholeA*3,-1)", 0)},
+        },
+        names={"WholeA": "Data!$A:$A"},
+    )
+    res = _run(tmp_path, book, "id,a3\nP,5\n", {"a3": "Data!A3"}, ["Calc!D3"])
+    row = _results(res)[("P", "Calc!D3")]
+    assert row["status"] == "refused"
+    assert IMPLICIT in row["reasons"]
+
+
+@pytest.fixture
+def lines(make_book: Book) -> Path:
+    # Calc's used extent: rows 1-4, columns A-C.
+    return make_book(
+        "lines",
+        {
+            "In": {"A1": 2},
+            "Calc": {
+                **{f"B{k}": F(f"=In!A1*{k}", 2 * k) for k in range(1, 5)},
+                "C1": F("=SUM(Calc!B1:B4)", 20),
+            },
+            "Empty": {},
+        },
+        names={
+            "WholeB": "Calc!$B:$B",
+            "Row1": "Calc!$1:$1",
+            "Dyn": "OFFSET(Calc!$B$1,0,0,In!$A$1,1)",
+            "Net": "Calc!$C$1-Calc!$B$1",
+            "Const": "0.05",
+            "Broken": "#REF!",
+            "EmptyCol": "Empty!$B:$B",
+        },
+    )
+
+
+def test_whole_line_targets_resolve_to_the_used_extent(lines: Path, ir_for: IrFor) -> None:
+    g = WorkbookGraph.from_ir(ir_for(lines))
+    col_b = [CellRef("Calc", r, 2) for r in range(1, 5)]
+    assert g.resolve_target("WholeB") == col_b
+    assert g.resolve_target("Calc!B:B") == col_b
+    assert g.resolve_target("calc!$B:$B") == col_b
+    assert g.resolve_target("Row1") == [CellRef("Calc", 1, c) for c in range(1, 4)]
+    assert g.resolve_target("Calc!1:1") == [CellRef("Calc", 1, c) for c in range(1, 4)]
+
+
+@pytest.mark.parametrize(
+    ("target", "message"),
+    [
+        ("Dyn", "'Dyn' holds a formula"),
+        ("Net", "'Net' holds a formula"),
+        ("Const", "'Const' holds a formula"),
+        ("Broken", "'Broken' is broken"),
+        ("EmptyCol", "'EmptyCol' holds no cells"),
+        ("Empty!B:B", "holds no cells"),
+    ],
+)
+def test_targets_that_hold_no_cells_are_refused(
+    lines: Path, ir_for: IrFor, target: str, message: str
+) -> None:
+    g = WorkbookGraph.from_ir(ir_for(lines))
+    with pytest.raises(CalcInputError, match=message):
+        g.resolve_target(target)
+
+
+def test_external_name_target_is_refused(make_book: Book, ir_for: IrFor, tmp_path: Path) -> None:
+    from tests.calc.conftest import add_external_link
+
+    base = make_book("xt", {"S": {"A1": 1}}, names={"Ext": "[1]Src!$A$1:$A$3"})
+    book = add_external_link(base, tmp_path / "xt2.xlsx", "Src", {"A1": "1"})
+    g = WorkbookGraph.from_ir(ir_for(book))
+    with pytest.raises(CalcInputError, match="another workbook"):
+        g.resolve_target("Ext")
+
+
+def test_whole_column_name_as_output(lines: Path, tmp_path: Path) -> None:
+    # x = 3: Calc!B1..B4 = 3, 6, 9, 12.
+    res = _run(tmp_path, lines, "id,x\nP,3\n", {"x": "In!A1"}, ["WholeB"])
+    got = _results(res)
+    assert [got[("P", f"Calc!B{k}")]["value"] for k in range(1, 5)] == [
+        "3.0",
+        "6.0",
+        "9.0",
+        "12.0",
+    ]
+
+
+def test_formula_name_as_the_only_output_names_it(lines: Path, tmp_path: Path) -> None:
+    with pytest.raises(CalcInputError, match="'Dyn'"):
+        _run(tmp_path, lines, "id,x\nP,3\n", {"x": "In!A1"}, ["Dyn"])
+
+
+def test_formula_name_as_a_variable_range_is_refused(lines: Path, tmp_path: Path) -> None:
+    from xl_marinade.calc import ValuesRequest, values
+
+    vars_json = _write(
+        tmp_path, "vars.json", json.dumps({"dyn": {"range": "Dyn", "period_start": 1}})
+    )
+    with pytest.raises(CalcInputError, match="'Dyn'"):
+        _run(tmp_path, lines, "id,x\nP,3\n", {"x": "In!A1"}, [], variables=vars_json)
+    with pytest.raises(CalcInputError, match="'Dyn'"):
+        values(ValuesRequest(lines, vars_json, tmp_path / "vout"))

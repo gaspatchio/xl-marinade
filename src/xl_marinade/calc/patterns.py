@@ -149,9 +149,7 @@ class _Scan:
 
     graph: WorkbookGraph
     as_of: date | None
-    names: dict[tuple[str, str], tuple[list[CellRef], frozenset[CellRef]]] = field(
-        default_factory=dict
-    )
+    names: dict[tuple[str, str], NameDef | None] = field(default_factory=dict)
     lookups: dict[tuple[str, str, Axis, frozenset[Order]], str | None] = field(default_factory=dict)
 
 
@@ -164,21 +162,19 @@ def _multi_cell(ref: str, default_sheet: str) -> bool:
 
 
 def _name_def(scan: _Scan, cell: CellRef, ref: str) -> NameDef | None:
-    """The definition ``ref`` reads in ``cell``'s formula; None if it is not a name."""
-    return scan.graph.lookup_name(ref, cell.sheet)
-
-
-def _named_cells(scan: _Scan, cell: CellRef, ref: str) -> tuple[list[CellRef], frozenset[CellRef]]:
-    """Cells of a defined name written as ``name`` or ``Sheet!name``, read from
-    ``cell``'s sheet as Excel does; empty if not a name over cells."""
+    """The definition ``ref`` (``name`` or ``Sheet!name``) reads in ``cell``'s formula,
+    resolved from ``cell``'s sheet as Excel does; None if it is not a name."""
     key = (cell.sheet, ref)
-    hit = scan.names.get(key)
-    if hit is not None:
-        return hit
-    named = scan.graph.name_cells(ref, cell.sheet)
-    result = (named, frozenset(named))
-    scan.names[key] = result
-    return result
+    if key not in scan.names:
+        scan.names[key] = scan.graph.lookup_name(ref, cell.sheet)
+    return scan.names[key]
+
+
+def _multi_cell_name(found: NameDef) -> bool:
+    """True for a name over more than one cell (a whole column or row always is)."""
+    if found.whole or len(found.rects) > 1:
+        return True
+    return any((r1, c1) != (r2, c2) for _s, r1, c1, r2, c2 in found.rects)
 
 
 def _ref_rect(ref: str, default_sheet: str) -> tuple[_Rect, bool] | None:
@@ -217,8 +213,9 @@ def _contains(rect: _Rect, cell: CellRef) -> bool:
 
 def _refers_to_self(scan: _Scan, cell: CellRef, ref: str) -> bool:
     """True when the reference covers the formula's own cell (the IR drops self-edges)."""
-    if cell in _named_cells(scan, cell, ref)[1]:
-        return True
+    found = _name_def(scan, cell, ref)
+    if found is not None:
+        return found.kind == "cells" and any(_contains(r, cell) for r in found.rects)
     parsed = _ref_rect(ref, cell.sheet)
     return parsed is not None and _contains(parsed[0], cell)
 
@@ -226,8 +223,17 @@ def _refers_to_self(scan: _Scan, cell: CellRef, ref: str) -> bool:
 def _table_cells(scan: _Scan, cell: CellRef, ref: str) -> tuple[_Rect, list[CellRef]] | None:
     """The table's bounding rectangle and the cells to read; None if not a plain range."""
     graph = scan.graph
-    named = _named_cells(scan, cell, ref)[0]
-    if named:
+    found = _name_def(scan, cell, ref)
+    if found is not None:
+        if found.kind != "cells" or not found.rects:
+            return None
+        if found.whole:
+            if len(found.rects) != 1:
+                return None
+            # A whole column/row name: the IR's range edges list every stored cell read.
+            inside = [p for p in graph.precedents(cell) if _contains(found.rects[0], p)]
+            return found.rects[0], sorted(inside)
+        named = graph.name_cells(ref, cell.sheet)
         rows = [c.row for c in named]
         cols = [c.col for c in named]
         rect = (named[0].sheet, min(rows), min(cols), max(rows), max(cols))
@@ -305,7 +311,8 @@ def _lookup_problem(
     if key in scan.lookups:
         return scan.lookups[key]
     parsed = _ref_rect(table.ref, cell.sheet)
-    if parsed is not None and parsed[1]:
+    found = _name_def(scan, cell, table.ref)
+    if (parsed is not None and parsed[1]) or (found is not None and found.whole):
         # IronCalc 0.9.1's approximate MATCH over a whole column/row returns the last
         # row (1048576) where Excel returns the last key at or below the value.
         scan.lookups[key] = WHOLE_LINE
@@ -339,10 +346,10 @@ def _formula_reasons(scan: _Scan, cell: CellRef, text: str) -> set[str]:
                 found.add(NAME_FORMULA)
             if exempt or scan.graph.is_array_formula(cell):
                 continue
-            named = _named_cells(scan, cell, node.ref)[0]
-            if len(named) > 1:
-                found.add(IMPLICIT)
-            elif not named and _multi_cell(node.ref, cell.sheet):
+            if definition is not None:
+                if kind == "cells" and _multi_cell_name(definition):
+                    found.add(IMPLICIT)
+            elif _multi_cell(node.ref, cell.sheet):
                 found.add(IMPLICIT_RANGE)
             continue
         if not isinstance(node, FunctionNode):

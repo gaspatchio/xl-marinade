@@ -50,6 +50,13 @@ from another workbook often brings its own). Write a sheet's own name as
 `'Sheet'!Name`. A bare name means the workbook's definition; when a sheet defines the
 same name too, a bare name is refused as ambiguous, and the error says how to write each.
 
+A whole column or row (`Calc!B:B`, `Calc!3:3`, or a name over one) covers the part of it
+the sheet uses: up to the last row (or column) that holds a cell. A target that covers
+no cells is an error that names it: a name that holds a formula (`OFFSET(...)` dynamic
+ranges included), a constant, a broken reference (`#REF!`) or cells in another workbook,
+and a whole column or row outside the range the sheet uses. Give such a target as a
+plain range instead.
+
 Inside formulas, names are read the way Excel reads them: a formula reads its own
 sheet's definition of a name first, and the workbook's only when the sheet has none.
 
@@ -256,7 +263,10 @@ policy finishes, so memory does not grow with the number of policies. Nor does i
 with the number of `--check-against` input sets: each matching set's branch and lookup
 outcomes are folded into the exercised set as it finishes and its readings dropped; a
 mismatching set keeps only its path to the output it missed. Peak memory is set by the
-workbook: the formula graph, the engine's copy of the workbook and the probe plan.
+workbook (the formula graph, the engine's copy of the workbook and the probe plan) and by
+the output cells you request: a range is expanded cell by cell, so `Calc!B1:B1048576`
+costs memory for a million cells. A whole column (`Calc!B:B`) expands only over the rows
+the sheet uses.
 
 The files on disk do grow with the policies. `paths.csv` has one row per policy per
 branch or lookup probe it reached, which for an actuarial projection can be over a
@@ -276,8 +286,8 @@ the next. They are refused even when the trust run reproduces them. The `detail`
 | `approximate lookup on unsorted column` | `VLOOKUP`/`HLOOKUP`/`MATCH`/`LOOKUP` in approximate mode over keys that are not sorted, or that are text outside plain a-z, 0-9 and space (Excel's collation differs from a plain sort). Also `XLOOKUP`/`XMATCH` with a binary-search mode, or a search mode the scan cannot read. |
 | `approximate lookup on mixed text and numbers` | The key column mixes types. |
 | `approximate lookup on a non-range table` | The table is not a plain reference. |
-| `approximate lookup on whole column` | The table is a whole column or row. IronCalc counts empty cells; Excel skips them. |
-| `implicit intersection on multi-cell name` | A single-cell use of a defined name that covers several cells. |
+| `approximate lookup on whole column` | The table is a whole column or row, or a name over one. IronCalc counts empty cells; Excel skips them. |
+| `implicit intersection on multi-cell name` | A single-cell use of a defined name that covers several cells (a name over a whole column or row always does). |
 | `implicit intersection on multi-cell range` | A multi-cell range used outside a function argument. Ranges inside `SUMPRODUCT`, `MMULT` and similar are fine. |
 | `name holds a formula` | A formula reads a defined name whose definition is a formula or a constant rather than cells (the detail text says "formula" for both). IronCalc 0.9.1 rejects such names. |
 | `RAND`, `RANDBETWEEN`, `RANDARRAY` | Always. |
@@ -313,7 +323,7 @@ it, are listed in `ref/calc/upstream/` in the repository.
 | Code | Meaning |
 |---|---|
 | 0 | Success. |
-| 1 | Error: bad input file, unknown sheet, mapping onto a formula, IR from another workbook. |
+| 1 | Error: bad input file, unknown sheet or name, a target that covers no cells, mapping onto a formula, IR from another workbook. |
 | 5 | The `[calc]` extra is not installed. |
 | 6 | The workbook is refused outright (1904 dates, precision as displayed, Strict Open XML). `trust_report.json` and `run.json` are still written. |
 

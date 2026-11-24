@@ -208,7 +208,9 @@ marinade values book.xlsx --variables vars.json [--map map.json] -o stored/
   input `table` or a `selector` cell) so the trust run covers more paths.
   Targets are cells, ranges or defined names, in any case; a sheet's own
   (sheet-scoped) name is written `'Sheet'!Name`, and a bare name that a sheet
-  also defines is refused as ambiguous.
+  also defines is refused as ambiguous. A whole column (`Calc!B:B`) covers the
+  rows the sheet uses; a target covering no cells (a formula or `OFFSET` name, a
+  constant) is an error.
 - **Files out** in `-o`: `results.csv`, `rows.csv`, `paths.csv`,
   `trust_report.json`, `run.json`. Known outputs are cleared at the start of a run.
 - **Read `trust_report.json` first** (`share` reproduced, `failures`,

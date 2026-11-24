@@ -30,9 +30,11 @@ _RANGE_RE = re.compile(
 
 # Whole-column / whole-row references (``S!$A:$B``, ``S!1:3``): references, not formulas.
 _WHOLE_RE = re.compile(
-    r"^(?:(?:'(?:[^']|'')*'|[^'!]+)!)?"
-    r"(?:\$?[A-Za-z]{1,3}:\$?[A-Za-z]{1,3}|\$?[0-9]+:\$?[0-9]+)$"
+    r"^(?:(?P<sheet>'(?:[^']|'')*'|[^'!]+)!)?"
+    r"(?:\$?(?P<c1>[A-Za-z]{1,3}):\$?(?P<c2>[A-Za-z]{1,3})|\$?(?P<r1>[0-9]+):\$?(?P<r2>[0-9]+))$"
 )
+_MAX_ROW = 1_048_576
+_MAX_COL = 16_384
 
 # ``Name`` or ``Sheet!Name``.
 _NAME_REF_RE = re.compile(rf"^(?:(?P<sheet>{SHEET})!)?(?P<name>{NAME})$")
@@ -51,7 +53,8 @@ class NameDef:
     workbook's. ``kind`` is ``cells`` for a reference, ``external`` for cells in
     another workbook, and ``formula`` for a formula, a constant or a broken
     reference. ``areas`` is the IR's destination text, one entry per area;
-    ``rects`` the areas this graph can read as cells.
+    ``rects`` the areas this graph can read as cells, a whole column or row cut to
+    its sheet's used range (``whole`` is then True).
     """
 
     name: str
@@ -59,6 +62,7 @@ class NameDef:
     kind: NameKind
     areas: tuple[str, ...]
     rects: tuple[_Rect, ...]
+    whole: bool = False
 
 
 def _unquote(sheet: str) -> str:
@@ -94,6 +98,21 @@ def _split_name(ref: str) -> tuple[str | None, str] | None:
         return None
     sheet = m.group("sheet")
     return (_unquote(sheet) if sheet is not None else None), m.group("name")
+
+
+def _parse_whole(text: str, default_sheet: str | None = None) -> _Rect | None:
+    """Parse ``Sheet!B:C`` or ``Sheet!3:4`` to its full rectangle; None otherwise."""
+    m = _WHOLE_RE.match(text.strip())
+    if m is None:
+        return None
+    sheet = _unquote(m.group("sheet")) if m.group("sheet") else default_sheet
+    if sheet is None:
+        return None
+    if m.group("c1") is not None:
+        a, b = sorted((_col_to_number(m.group("c1")), _col_to_number(m.group("c2"))))
+        return (sheet, 1, a, _MAX_ROW, b)
+    a, b = sorted((int(m.group("r1")), int(m.group("r2"))))
+    return (sheet, a, 1, b, _MAX_COL)
 
 
 def _convert(raw: str, data_type: str | None) -> StoredValue:
@@ -138,6 +157,7 @@ class WorkbookGraph:
         # compares names without case.
         self._names: dict[tuple[str | None, str], NameDef] = {}
         self._sheet_key: dict[str, str] = {}
+        self._extent: dict[str, tuple[int, int]] = {}
         self._array_cells: set[CellRef] = set()
         self._validations: list[tuple[list[_Rect], list[str] | None, str | None, str]] = []
         self._sheets: set[str] = set()
@@ -185,6 +205,10 @@ class WorkbookGraph:
                     self._stored[ref] = _convert(str(raw), dtype)
                     self._has_stored.add(ref)
         self._cells_by_sheet = {s: sorted(v) for s, v in per_sheet.items()}
+        # The used range: the last row and column holding a cell, per sheet.
+        self._extent = {
+            s: (max(r for r, _c in v), max(c for _r, c in v)) for s, v in per_sheet.items()
+        }
 
         for frm, to in conn.execute("SELECT from_cell_id, to_cell_id FROM cell_edges_internal"):
             if frm in by_id and to in by_id:
@@ -193,7 +217,7 @@ class WorkbookGraph:
 
         # Whole columns/rows are stored to row 1048576 / column 16384; index only the
         # extent a sheet uses, or one entry per bucket would fill memory.
-        max_row = {s: max(r for r, _c in v) for s, v in per_sheet.items()}
+        max_row = {s: extent[0] for s, extent in self._extent.items()}
         range_q = (
             "SELECT from_cell_id, to_sheet_id, to_r1, to_c1, to_r2, to_c2 FROM range_edges "
             "ORDER BY from_cell_id, to_sheet_id, to_r1, to_c1, to_r2, to_c2"
@@ -254,11 +278,24 @@ class WorkbookGraph:
         if not raw or any(_parse_rect(d) is None and not _WHOLE_RE.match(d) for d in raw):
             return NameDef(name, owner, "formula", raw, ())
         rects: list[_Rect] = []
+        whole = False
         for d in raw:
-            if (r := _parse_rect(d)) is not None:
+            if (r := _parse_rect(d)) is None and (r := _parse_whole(d)) is not None:
+                whole = True
+                r = self._clip(r)
+            if r is not None:
                 sheet, r1, c1, r2, c2 = r
                 rects.append((self.sheet(sheet) or sheet, r1, c1, r2, c2))
-        return NameDef(name, owner, "cells", raw, tuple(rects))
+        return NameDef(name, owner, "cells", raw, tuple(rects), whole)
+
+    def _clip(self, rect: _Rect) -> _Rect | None:
+        """A whole column or row cut to its sheet's used range; None when outside it."""
+        sheet, r1, c1, r2, c2 = rect
+        last_row, last_col = self._extent.get(self.sheet(sheet) or sheet, (0, 0))
+        r2, c2 = min(r2, last_row), min(c2, last_col)
+        if r1 > r2 or c1 > c2:
+            return None
+        return (sheet, r1, c1, r2, c2)
 
     # -- basic lookups ---------------------------------------------------
 
@@ -414,12 +451,22 @@ class WorkbookGraph:
         if named is not None:
             return named
         rect = _parse_rect(text)
+        whole = rect is None and (rect := _parse_whole(text)) is not None
         if rect is None:
             raise CalcInputError(f"unknown target {target!r}: not a cell, range or defined name")
         written, r1, c1, r2, c2 = rect
         sheet = self.sheet(written)
         if sheet is None:
             raise CalcInputError(f"unknown sheet {written!r} in target {target!r}")
+        if whole:
+            # A whole column or row is the part of it the sheet uses (ruling D10).
+            clipped = self._clip((sheet, r1, c1, r2, c2))
+            if clipped is None:
+                raise CalcInputError(
+                    f"target {target!r} holds no cells: it is outside the range sheet "
+                    f"{sheet!r} uses"
+                )
+            return self._full_rects([clipped])
         if (r1, c1) == (r2, c2):
             return [CellRef(sheet, r1, c1)]
         return self._full_rects([(sheet, r1, c1, r2, c2)])
@@ -439,7 +486,7 @@ class WorkbookGraph:
                 return None
             own = self._names.get((sheet, key))
             if own is not None:
-                return self._full_rects(own.rects) if own.kind == "cells" else []
+                return self._name_cells_target(own, target)
             if book is None and not owners:
                 return None
             where = f"the workbook's {book.name!r} is written without a sheet" if book else ""
@@ -461,7 +508,36 @@ class WorkbookGraph:
             )
         if book is None:
             return None
-        return self._full_rects(book.rects) if book.kind == "cells" else []
+        return self._name_cells_target(book, target)
+
+    def _name_cells_target(self, found: NameDef, target: str) -> list[CellRef]:
+        """The cells a name target covers.
+
+        Raises:
+            CalcInputError: when the name holds no cells: a formula, a constant, a
+                broken reference, another workbook's cells, or a whole column or row
+                outside the range its sheet uses.
+        """
+        name = found.name
+        if found.kind == "external":
+            raise CalcInputError(
+                f"target {target!r}: name {name!r} points into another workbook; "
+                "give the cells it is copied into instead"
+            )
+        if found.kind == "formula":
+            if any("#REF!" in a for a in found.areas):
+                raise CalcInputError(f"target {target!r}: name {name!r} is broken (#REF!)")
+            raise CalcInputError(
+                f"target {target!r}: name {name!r} holds a formula or a constant, not cells; "
+                "give the cells as a range instead (for example Calc!C1:C40)"
+            )
+        cells = self._full_rects(found.rects)
+        if not cells:
+            raise CalcInputError(
+                f"target {target!r}: name {name!r} holds no cells (a whole column or row "
+                "outside the range its sheet uses)"
+            )
+        return cells
 
     def _sheet_names_hint(self, owners: list[str], name: str) -> str:
         spelled = [self._names[(s, name.casefold())].name for s in owners]
