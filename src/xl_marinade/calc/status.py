@@ -245,15 +245,16 @@ def unplaced_roots(plan: ProbePlan) -> dict[CellRef, list[Reason]]:
 
 class LandingCheck:
     """Roots for the formula cells a dynamic reference reaches that the plan did not
-    probe (ruling D1, for an ``INDIRECT`` whose text names no sheet, or any landing
-    the plan did not foresee).
+    probe (an ``INDIRECT`` whose text names no sheet, or any landing the plan did not
+    foresee).
 
     Each such cell gets ``not_checked_path``, plus what each probe its formula would
     have had gives when it cannot be placed (``not_checked_value`` for rounding and
     comparisons, ``refused_pattern`` for a dynamic reference or a number-to-text
     conversion). So a landing the plan missed is never less conservative than one it
-    probed. The walk goes upstream from each landed cell and stops at cells the plan
-    covers; results are kept per landed cell.
+    probed. One walk per call goes upstream from all the landed cells together, each
+    cell once, and stops at cells the plan covers; a cell's reasons (and so its
+    probe kinds) are worked out once per run. ``visits`` counts the cells walked.
     """
 
     def __init__(
@@ -265,38 +266,38 @@ class LandingCheck:
         self._graph = graph
         self._covered = covered
         self._kinds = kinds
-        self._found: dict[CellRef, list[Reason]] = {}
+        self._reasons: dict[CellRef, list[Reason]] = {}
+        self.visits = 0
 
     def roots(self, dynamic_refs: dict[CellRef, list[CellRef]]) -> dict[CellRef, list[Reason]]:
         """Roots for every cell reached through ``dynamic_refs`` (cell -> landed cells)."""
         out: dict[CellRef, list[Reason]] = {}
-        for targets in dynamic_refs.values():
-            for target in targets:
-                for reason in self._uncovered(target):
-                    if reason.root is not None:
-                        _add(out, reason.root, reason)
-        return _sorted_roots(out)
-
-    def _uncovered(self, target: CellRef) -> list[Reason]:
-        cached = self._found.get(target)
-        if cached is not None:
-            return cached
-        found: list[Reason] = []
         seen: set[CellRef] = set()
-        stack = [target]
+        stack = [target for targets in dynamic_refs.values() for target in targets]
         while stack:
             cur = stack.pop()
             if cur in seen or cur in self._covered:
                 continue
             seen.add(cur)
-            if self._graph.formula(cur) is not None:
-                found.append(Reason(ReasonKind.not_checked_path, cur, DYNAMIC_LANDING))
-                for kind in sorted(set(self._kinds(cur))):
-                    reason_kind, detail = _UNPLACED[kind]
-                    if reason_kind is not ReasonKind.not_checked_path:
-                        found.append(Reason(reason_kind, cur, detail))
+            self.visits += 1
+            reasons = self._cell_reasons(cur)
+            if reasons:
+                out[cur] = list(reasons)
             stack.extend(self._graph.precedents(cur))
-        self._found[target] = found
+        return _sorted_roots(out)
+
+    def _cell_reasons(self, cell: CellRef) -> list[Reason]:
+        cached = self._reasons.get(cell)
+        if cached is not None:
+            return cached
+        found: list[Reason] = []
+        if self._graph.formula(cell) is not None:
+            found.append(Reason(ReasonKind.not_checked_path, cell, DYNAMIC_LANDING))
+            for kind in sorted(set(self._kinds(cell))):
+                reason_kind, detail = _UNPLACED[kind]
+                if reason_kind is not ReasonKind.not_checked_path:
+                    found.append(Reason(reason_kind, cell, detail))
+        self._reasons[cell] = found
         return found
 
 
