@@ -372,3 +372,56 @@ def test_a_check_set_exercises_the_cells_it_landed_on(make_book: Book, tmp_path:
     row = checked[("P", "Out!B1")]
     assert row["value"] == "77.0"
     assert row["status"] == "ok", row
+
+
+def _base_credit_book(make_book: Book, stored_k: int) -> Path:
+    # Calc!A1 = IF(x>100, DATE(1900,1,1), 40); A2 = 50. Out!B1 = OFFSET(Calc!A1, k-1, 0).
+    # Stored x = 5. Results hold Out!B1 for input set C (k = 2, x = 500): A2 = 50, which
+    # the engine reproduces; A1 takes its TRUE arm in that set but does not feed Out!B1.
+    stored = {1: 40, 2: 50}[stored_k]
+    return make_book(
+        f"credit{stored_k}",
+        {
+            "Inputs": {"B1": stored_k, "B2": 5},
+            "Calc": {"A1": F("=IF(Inputs!$B$2>100,DATE(1900,1,1),40)", 40), "A2": 50},
+            "Out": {"B1": F("=OFFSET(Calc!$A$1,Inputs!$B$1-1,0)", stored)},
+            "Sets": {"A2": "C", "B2": 2, "C2": 500},
+            "Results": {"A2": "C", "B2": 50},
+        },
+    )
+
+
+_SET_C = {
+    "results": {"sheet": "Results", "id_column": "A", "first_row": 2, "outputs": {"Out!B1": "B"}},
+    "inputs": {
+        "table": {"sheet": "Sets", "id_column": "A", "first_row": 2, "fields": {"k": "B", "x": "C"}}
+    },
+}
+
+
+@pytest.mark.parametrize("stored_k", [1, 2], ids=["stored-landing", "base-only"])
+def test_a_check_set_vouches_only_for_where_it_landed(
+    make_book: Book, tmp_path: Path, stored_k: int
+) -> None:
+    # Policy P (k = 1, x = 500) lands on A1 and takes its TRUE arm: Excel 1 (IronCalc 2).
+    # Neither the trust run (x = 5, FALSE) nor set C (which landed on A2) checked that
+    # arm feeding Out!B1, whether A1 is the stored landing cell (k = 1) or only the cell
+    # the OFFSET starts from (k = 2).
+    book = _base_credit_book(make_book, stored_k)
+    fields = {"k": "Inputs!B1", "x": "Inputs!B2"}
+    res = _run(tmp_path, book, "id,k,x\nP,1,500\n", fields, ["Out!B1"], check=_SET_C)
+    row = _rows(res)[("P", "Out!B1")]
+    assert row["value"] == "2.0"
+    assert row["status"] == "unverified_path", row
+    assert "unexercised_branch@Calc!A1:IF #0 took 'TRUE'" in row["reasons"]
+
+
+def test_paths_list_only_where_the_policy_landed(make_book: Book, tmp_path: Path) -> None:
+    # Stored k = 1 (the IR's landing is A1). Policy Q lands on A2, a constant: no branch
+    # fed its output, so paths.csv has no row for A1.
+    book = _base_credit_book(make_book, 1)
+    fields = {"k": "Inputs!B1", "x": "Inputs!B2"}
+    res = _run(tmp_path, book, "id,k,x\nQ,2,5\n", fields, ["Out!B1"])
+    with res.paths_csv.open(encoding="utf-8", newline="") as fh:
+        cells = {r["cell"] for r in csv.DictReader(fh)}
+    assert "Calc!A1" not in cells

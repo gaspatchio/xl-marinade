@@ -34,6 +34,7 @@ from loguru import logger
 from xl_marinade.calc.engine import Engine, EngineValue
 from xl_marinade.calc.formula_ast import (
     ALWAYS_ARRAY,
+    DYNAMIC_HINT,
     END,
     ERROR_CODES,
     EXTERNAL,
@@ -97,8 +98,6 @@ _NOT_FOUND = "not_found"
 _DYNAMIC = frozenset({"OFFSET", "INDIRECT"})
 # A dynamic-ref probe of a range built by a call (``B1:OFFSET(...)``).
 _RANGE = "range"
-# Text that may hold a dynamic reference: OFFSET, INDIRECT, or a ``:`` before a call.
-_REACHES = re.compile(r"OFFSET|INDIRECT|:[^:(),]*\(", re.IGNORECASE)
 
 _REF = re.compile(rf"^(?:(?P<s1>{SHEET})!)?(?P<a>{END})(?::(?:(?P<s2>{SHEET})!)?(?P<b>{END}))?$")
 _CELL_END = re.compile(r"^\$?(?P<col>[A-Za-z]{1,3})\$?(?P<row>[0-9]+)$")
@@ -1148,7 +1147,7 @@ def reach_sheets(graph: WorkbookGraph, cell: CellRef) -> set[str]:
     an ``INDIRECT`` text names literally, a built range's sheet. Other ``INDIRECT``
     texts can land anywhere; they are not listed."""
     text = graph.formula(cell)
-    if text is None or _REACHES.search(text) is None:
+    if text is None or DYNAMIC_HINT.search(text) is None:
         return set()
     root = parse_formula(text)
     if root is None:

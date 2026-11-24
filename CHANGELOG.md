@@ -105,11 +105,16 @@ schema is a versioned public contract.
   for fewer outputs give a less conservative status. Now argument cells are precedents
   (including for the input-dependent-keys scan), built ranges are probed at both ends,
   and every formula cell on the sheet an `OFFSET` starts from or an `INDIRECT` names
-  literally is probed, so the trust run and `--check-against` input sets exercise it.
+  literally is probed, so the trust run and `--check-against` input sets exercise it. A
+  check set vouches only for the cells its own references landed on: before, it also
+  credited the cell an `OFFSET` starts from and the stored inputs' landing cell, even
+  when it landed elsewhere, so a policy landing there could come back `ok` on an arm
+  nothing had checked.
   An `INDIRECT` whose text names no sheet is not probed where it lands: a landing on
   formula cells gives `not_checked_path` (`not_checked_value` for their roundings and
   comparisons), never `ok`. Books with `OFFSET` or `INDIRECT` get more probes, and
-  `paths.csv` lists the cells each policy's references reached.
+  `paths.csv` lists the cells each policy's references reached, not the stored inputs'
+  landing cell.
 
 ## [0.8.0] - 2026-11-24
 

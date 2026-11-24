@@ -14,7 +14,7 @@ import hashlib
 import math
 import re
 import tempfile
-from collections.abc import Container
+from collections.abc import Container, Iterable
 from dataclasses import asdict, dataclass, field
 from datetime import date
 from pathlib import Path
@@ -447,7 +447,8 @@ def _check_against(
             table_cols[s.inputs[name]] = _column(letters, f"table column for {name}")
     selector = _input_cell(graph, check.selector, "selector") if check.selector else None
 
-    # A set vouches only for the paths that fed the outputs it was compared on.
+    # A set vouches only for the paths that fed the outputs it was compared on: through
+    # the cells its own dynamic references landed on, not where the stored inputs did.
     compared = graph.upstream(outputs)
     scoped: dict[CellRef, _Mismatches] = {}
     mismatches: list[dict[str, Any]] = []
@@ -494,7 +495,7 @@ def _check_against(
         if matched:
             # Only an input set the engine reproduced vouches for the paths it took,
             # through the cells its dynamic references landed on too.
-            evidence.add(reading, only=_reached(graph, compared, reading.dynamic_refs))
+            evidence.add(reading, only=_fed(graph, outputs, compared, reading.dynamic_refs))
     return scoped, {"input_sets": len(results), "mismatches": mismatches}
 
 
@@ -515,25 +516,30 @@ def _mismatch_roots(
             bucket.extend(r for r in reasons if r not in seen)
 
 
-def _reached(
+def _fed(
     graph: WorkbookGraph,
-    cells: set[CellRef] | frozenset[CellRef],
+    roots: Iterable[CellRef],
+    static: frozenset[CellRef] | set[CellRef],
     dynamic: dict[CellRef, list[CellRef]],
-) -> set[CellRef] | frozenset[CellRef]:
-    """``cells`` (an upstream-closed set) plus everything upstream of where their
-    dynamic references landed this recalculation."""
-    stack = [t for cell, targets in dynamic.items() if cell in cells for t in targets]
-    if not stack:
-        return cells
-    extra: set[CellRef] = set()
+) -> frozenset[CellRef] | set[CellRef]:
+    """The cells that fed ``roots`` in one recalculation: their upstream, where a cell
+    with a dynamic reference contributes what it read apart from where its references
+    land, plus the cells they landed on this time (``dynamic``). Not the reference an
+    ``OFFSET`` starts from, nor where it landed with the stored inputs, unless this
+    recalculation landed there. ``static`` is the roots' static upstream, returned as
+    it is when nothing in it is dynamic."""
+    if not any(graph.is_dynamic(c) for c in static) and not any(c in static for c in dynamic):
+        return static
+    seen: set[CellRef] = set()
+    stack = list(roots)
     while stack:
         cur = stack.pop()
-        if cur in cells or cur in extra:
+        if cur in seen:
             continue
-        extra.add(cur)
-        stack.extend(graph.precedents(cur))
+        seen.add(cur)
+        stack.extend(graph.read_precedents(cur))
         stack.extend(dynamic.get(cur, ()))
-    return cells | extra
+    return seen
 
 
 def _paths(
@@ -658,7 +664,9 @@ def _policy_loop(
             results.append(OutputValue(policy.id, cell, value, status, reasons))
         writer.write_policy(
             results,
-            _paths(policy.id, s.plan, readings, exercised, _reached(s.graph, s.static_up, dynamic)),
+            _paths(
+                policy.id, s.plan, readings, exercised, _fed(s.graph, outputs, s.static_up, dynamic)
+            ),
             rows_for(policy.id, variables, computed.__getitem__),
         )
 
