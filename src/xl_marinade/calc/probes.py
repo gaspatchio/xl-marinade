@@ -55,6 +55,8 @@ from xl_marinade.core.ref_converter import quote_sheet_name
 
 PROBE_SHEET = "_marinade_probes"
 NEAR_TOLERANCE = 1e-12
+_MAX_ROW = 1_048_576
+_MAX_COL = 16_384
 
 _COMPARISONS = frozenset({"<", "<=", ">", ">=", "=", "<>"})
 _NEAR_COMPARE = _COMPARISONS | {"lookup"}
@@ -724,7 +726,12 @@ def _types_differ(probe: Probe, values: list[EngineValue]) -> bool:
 
 
 def _text_cells(text: EngineValue, sheet: str, sheets: dict[str, str]) -> list[CellRef] | None:
-    """Cells of an ``INDIRECT`` text address (A1 style); None when not a plain range."""
+    """Cells of an ``INDIRECT`` text address (A1 style); None when not a plain range.
+
+    An address off the grid (row 0, past row 1,048,576 or column XFD) is None too:
+    Excel's ``INDIRECT`` gives ``#REF!`` there, while IronCalc 0.9.1 reads a
+    sheet-qualified row 0 as 0 (or a range from it as starting on row 1).
+    """
     if not isinstance(text, str) or _is_error(text):
         return None
     m = _TEXT_REF.match(text.strip())
@@ -735,6 +742,8 @@ def _text_cells(text: EngineValue, sheet: str, sheets: dict[str, str]) -> list[C
     r1, c1 = int(m.group("r1")), _col_to_number(m.group("c1"))
     r2 = int(m.group("r2")) if m.group("r2") else r1
     c2 = _col_to_number(m.group("c2")) if m.group("c2") else c1
+    if not (1 <= min(r1, r2) and max(r1, r2) <= _MAX_ROW and max(c1, c2) <= _MAX_COL):
+        return None
     return _rect(target, min(r1, r2), min(c1, c2), abs(r2 - r1) + 1, abs(c2 - c1) + 1)
 
 

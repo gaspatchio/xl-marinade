@@ -68,6 +68,7 @@ from xl_marinade.calc.rows import VariableCells, expand_variables, rows_for, var
 from xl_marinade.calc.settings import read_settings, refusal_reasons
 from xl_marinade.calc.status import (
     MAX_REASONS_PER_KIND,
+    NAME_OFF_PATH,
     Exercised,
     ExercisedBuilder,
     PathKey,
@@ -90,6 +91,7 @@ _ISO_DATE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
 _COLUMN = re.compile(r"^[A-Za-z]{1,3}$")
 _EXCEL_EPOCH = date(1899, 12, 30)
 _TRUE, _FALSE = "TRUE", "FALSE"
+_NAME_ERROR = "#NAME?"
 
 
 @dataclass(slots=True)
@@ -374,6 +376,8 @@ class _Session:
     plan: ProbePlan
     inputs: dict[str, CellRef]
     resets: list[CellRef]
+    stored_name_errors: frozenset[CellRef] = frozenset()
+    """Outputs that are ``#NAME?`` in the trust run (on the stored inputs)."""
 
     def reset(self) -> None:
         """Put every mapped input (and the selector) back to its stored value."""
@@ -615,9 +619,12 @@ def _policy_loop(
         values = {cell: s.engine.value(cell) for cell in outputs}
         for cell, value in values.items():
             code = engine_error_code(s.engine, cell, value)
-            if code is None:
+            if code is not None:
+                reason = Reason(ReasonKind.engine_error, cell, engine_error_detail(code))
+            elif _new_name_error(s, cell, value):
+                reason = Reason(ReasonKind.engine_error, cell, NAME_OFF_PATH)
+            else:
                 continue
-            reason = Reason(ReasonKind.engine_error, cell, engine_error_detail(code))
             bucket = roots.setdefault(cell, [])
             if reason not in bucket:
                 bucket.append(reason)
@@ -636,6 +643,18 @@ def _policy_loop(
             _paths(policy.id, s.plan, readings, exercised),
             rows_for(policy.id, variables, computed.__getitem__),
         )
+
+
+def _new_name_error(s: _Session, cell: CellRef, value: EngineValue) -> bool:
+    """True when ``cell`` is ``#NAME?`` for this policy but was not in the trust run.
+
+    Excel's ``#NAME?`` comes from the formula's text, not its inputs, so one that only
+    a new policy reaches is a function the engine lacks on an arm the trust run never
+    took: the engine has nothing to offer for it.
+    """
+    if value != _NAME_ERROR or cell in s.stored_name_errors:
+        return False
+    return s.engine.is_error(cell)
 
 
 def _refuse(req: CalcRequest, settings: WorkbookSettings, reasons: list[str], sha: str) -> NoReturn:
@@ -733,7 +752,10 @@ def calc(req: CalcRequest) -> CalcResult:
         resets = list(dict.fromkeys(inputs.values()))
         if check is not None and check.selector is not None:
             resets.append(_input_cell(graph, check.selector, "selector"))
-        session = _Session(req, graph, engine, plan, inputs, list(dict.fromkeys(resets)))
+        stored_names = frozenset(c for c in outputs if engine.value(c) == _NAME_ERROR)
+        session = _Session(
+            req, graph, engine, plan, inputs, list(dict.fromkeys(resets)), stored_names
+        )
         mismatches: dict[CellRef, _Mismatches] = {}
         check_record: dict[str, Any] | None = None
         if check is not None:

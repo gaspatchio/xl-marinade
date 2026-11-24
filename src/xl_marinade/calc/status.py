@@ -28,6 +28,7 @@ from xl_marinade.calc.probes import ProbeKind, ProbePlan, ProbeReadings
 MAX_REASONS_PER_KIND = 5
 DYNAMIC_NOT_CHECKED = "dynamic reference not checked"
 LOOKUP_TYPE = "lookup value type differs from keys"
+NAME_OFF_PATH = "engine #NAME? the trust run did not give: a function the engine lacks"
 
 _NO_ROOT = CellRef("", 0, 0)
 _RANK: dict[Status, int] = {

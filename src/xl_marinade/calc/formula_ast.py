@@ -65,6 +65,44 @@ ERROR_CODES = frozenset(
     }
 )
 
+# Excel worksheet functions IronCalc 0.9.1 does not know: it answers #NAME?, an Excel
+# error code, so an IFERROR / ISERROR / ISNUMBER around the call would turn the gap into
+# a plausible value. Built by calling every Excel function bare in the engine (a known
+# one gives an argument error); tests/calc/test_engine_gaps.py pins it to the installed
+# IronCalc. Functions the engine knows but has not implemented answer #N/IMPL!, which
+# calc already treats as an engine error.
+ENGINE_LACKS = frozenset(
+    {
+        "AGGREGATE",
+        "BAHTTEXT",
+        "CALL",
+        "CUBEKPIMEMBER",
+        "CUBEMEMBER",
+        "CUBEMEMBERPROPERTY",
+        "CUBERANKEDMEMBER",
+        "CUBESET",
+        "CUBESETCOUNT",
+        "CUBEVALUE",
+        "DBCS",
+        "DETECTLANGUAGE",
+        "EUROCONVERT",
+        "FIELDVALUE",
+        "FILTERXML",
+        "GETPIVOTDATA",
+        "GROUPBY",
+        "IMAGE",
+        "JIS",
+        "PHONETIC",
+        "PIVOTBY",
+        "REGISTER.ID",
+        "RTD",
+        "SQL.REQUEST",
+        "STOCKHISTORY",
+        "TRANSLATE",
+        "WEBSERVICE",
+    }
+)
+
 # Error literals the core parser splits at ``/`` (``#N/A`` -> ``"#N" / A``).
 _SPLIT_ERROR = re.compile(r"#(?:N/A|DIV/0!)", re.IGNORECASE)
 # Text where ``#`` is not an error literal: strings, quoted sheets, structured refs.
