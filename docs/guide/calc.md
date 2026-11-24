@@ -94,10 +94,11 @@ it through a defined name in any form Excel resolves (`Name`, a sheet's own name
 `'Sheet'!Name`), through a name holding a formula, or inside `CELL`, `INFO` or
 `GETPIVOTDATA`. A field is refused only when no read can reach it: where a read cannot be
 placed (an `OFFSET` or `INDIRECT` landing beyond the cell it lands on with the stored
-inputs, a name holding `OFFSET` or `INDIRECT`, a name with a relative reference, a
-`Sheet!Name` calc cannot resolve, a 3-D reference such as `S1:S3!B1`), every cell it may
-reach is accepted. The id field is never refused, since it may be written into a display cell. A
-field read only by outputs you did not request is accepted. `run.json` records, under
+inputs, a name holding `OFFSET` or `INDIRECT`, a name with a relative reference, a 3-D
+reference such as `S1:S3!B1`), every cell it may reach is accepted. A `Sheet!Name` that
+no definition answers is `#NAME?` in Excel, so it reads nothing. The id field is never
+refused, since it may be written into a display cell. A field read only by outputs you
+did not request is accepted. `run.json` records, under
 `inputs`, the cell each field sets and whether a requested output reads it.
 
 Before each input set, every mapped input is reset to its stored value. A value outside
