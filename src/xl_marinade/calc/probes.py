@@ -131,7 +131,7 @@ class Probe:
 class ProbePlan:
     """The probes to place, in order, and per cell the kinds that could not be placed.
 
-    ``sheets`` maps each casefolded sheet name to the workbook's spelling, so the
+    ``sheets`` maps each lower-cased sheet name to the workbook's spelling, so the
     sheet in an ``INDIRECT`` text is read as Excel reads it, in any case.
     """
 
@@ -629,7 +629,7 @@ def plan_probes(graph: WorkbookGraph, cells: Iterable[CellRef], *, cap: int) -> 
         planner.counters = {}
         planner.visit(root, False, graph.is_array_formula(cell))
     return ProbePlan(
-        planner.probes, planner.unplaced, {name.casefold(): name for name in graph.sheets()}
+        planner.probes, planner.unplaced, {name.lower(): name for name in graph.sheets()}
     )
 
 
@@ -731,7 +731,7 @@ def _text_cells(text: EngineValue, sheet: str, sheets: dict[str, str]) -> list[C
     if m is None:
         return None
     written = _unquote(m.group("sheet")) if m.group("sheet") else sheet
-    target = sheets.get(written.casefold(), written)
+    target = sheets.get(written.lower(), written)
     r1, c1 = int(m.group("r1")), _col_to_number(m.group("c1"))
     r2 = int(m.group("r2")) if m.group("r2") else r1
     c2 = _col_to_number(m.group("c2")) if m.group("c2") else c1

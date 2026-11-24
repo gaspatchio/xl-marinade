@@ -530,3 +530,70 @@ def test_a_relative_name_as_a_list_source_is_refused(make_book: Book, tmp_path: 
     row = _results(res)[("P", "Calc!B1")]
     assert row["status"] == "refused"
     assert "refused_pattern@In!B1:name with a relative reference: Opts" in row["reasons"]
+
+
+# -- name spelling: any script, Excel's per-character case ---------------------
+
+
+def test_names_in_any_script_resolve(make_book: Book, ir_for: IrFor) -> None:
+    # Excel names start with a letter of any script, "_" or "\"; then letters, digits,
+    # "_", "." or "\". Case is ignored letter by letter.
+    book = make_book(
+        "script",
+        {"Calc": {**{f"A{r}": r for r in range(1, 6)}, "B1": 1, "C1": 2, "C2": 3, "C3": 4}},
+        names={
+            "Ärger": "Calc!$A$1:$A$5",
+            "税率": "Calc!$B$1",
+            "_x": "Calc!$C$1",
+            "\\back": "Calc!$C$2",
+            "a.b_1": "Calc!$C$3",
+        },
+        local_names={("Calc", "Größe"): "Calc!$B$1"},
+    )
+    g = WorkbookGraph.from_ir(ir_for(book))
+    col_a = [CellRef("Calc", r, 1) for r in range(1, 6)]
+    assert g.resolve_target("Ärger") == col_a
+    assert g.resolve_target("ärger") == col_a
+    assert g.resolve_target("ÄRGER") == col_a
+    assert g.resolve_target("税率") == [CellRef("Calc", 1, 2)]
+    assert g.resolve_target("_X") == [CellRef("Calc", 1, 3)]
+    assert g.resolve_target("\\BACK") == [CellRef("Calc", 2, 3)]
+    assert g.resolve_target("A.B_1") == [CellRef("Calc", 3, 3)]
+    assert g.resolve_target("Calc!größe") == [CellRef("Calc", 1, 2)]
+    assert g.name_cells("Ärger") == col_a
+
+
+def test_sharp_s_is_not_ss(make_book: Book, ir_for: IrFor) -> None:
+    # Excel ignores case letter by letter: Straße and Strasse are two names.
+    book = make_book(
+        "ss",
+        {
+            "Calc": {
+                **{f"A{r}": r for r in range(1, 6)},
+                "C3": F("=Straße*2", 6),
+                "C4": F("=Strasse*2", 2),
+            }
+        },
+        names={"Strasse": "Calc!$A$1", "Straße": "Calc!$A$1:$A$5"},
+    )
+    g = WorkbookGraph.from_ir(ir_for(book))
+    found = scan_patterns(g, as_of=None, data_table_cells=[])
+    assert [r.detail for r in found.get(CellRef.parse("Calc!C3"), [])] == [IMPLICIT]
+    assert CellRef.parse("Calc!C4") not in found
+    col_a = [CellRef("Calc", r, 1) for r in range(1, 6)]
+    assert g.resolve_target("Straße") == col_a
+    assert g.resolve_target("STRASSE") == [CellRef("Calc", 1, 1)]
+
+
+def test_names_that_differ_only_in_case_are_ambiguous(make_book: Book, ir_for: IrFor) -> None:
+    # Excel cannot hold both; a file that does was written by something that treats
+    # them as two names, so a target that matches both is refused, naming each.
+    book = make_book(
+        "twins",
+        {"Calc": {"A1": 1, "A2": 2}},
+        names={"Rate": "Calc!$A$1", "RATE": "Calc!$A$2"},
+    )
+    g = WorkbookGraph.from_ir(ir_for(book))
+    for target in ("Rate", "rate", "RATE"):
+        with pytest.raises(CalcInputError, match="'RATE'.*'Rate'"):
+            g.resolve_target(target)

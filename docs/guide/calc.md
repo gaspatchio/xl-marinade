@@ -42,8 +42,10 @@ You must give at least one of `--outputs` and `--variables`.
 
 Every place that names cells (`map.json` fields, `--outputs`, `vars.json`, and the
 output, sheet and selector entries of `check.json`) takes a cell (`Inputs!C3`), a range
-(`Proj!C11:C130`) or a defined name. Sheet names and defined names ignore case, as in
-Excel.
+(`Proj!C11:C130`) or a defined name. Sheet names and defined names ignore case letter by
+letter, as in Excel (`Straße` and `Strasse` stay two names), and names may use letters
+of any script (`Ärger`, `税率`). A file that defines two names differing only in case,
+which Excel itself does not allow, has a target naming them refused as ambiguous.
 
 A name can be defined for the whole workbook or for one sheet only (a sheet copied in
 from another workbook often brings its own). Write a sheet's own name as

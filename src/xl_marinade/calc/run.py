@@ -180,8 +180,8 @@ def _allowed(raw: str, value: float | str | bool | None, allowed: list[str]) -> 
     ``value`` is the entry converted for its cell (None if it does not convert), so an
     ISO date typed into a date cell matches a list of date serials.
     """
-    folded = raw.casefold()
-    if any(folded == item.casefold() for item in allowed):
+    folded = raw.lower()
+    if any(folded == item.lower() for item in allowed):
         return True
     numbers = {n for item in allowed if (n := _number(item)) is not None}
     converted = value if isinstance(value, float) else None

@@ -13,7 +13,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 
-from xl_marinade.calc.formula_ast import NAME, SHEET
+from xl_marinade.calc.formula_ast import SHEET
 from xl_marinade.calc.models import CellRef, _col_to_number
 from xl_marinade.calc.prepare import relative_names
 from xl_marinade.core.db_uri import connect_read_only
@@ -37,8 +37,9 @@ _WHOLE_RE = re.compile(
 _MAX_ROW = 1_048_576
 _MAX_COL = 16_384
 
-# ``Name`` or ``Sheet!Name``.
-_NAME_REF_RE = re.compile(rf"^(?:(?P<sheet>{SHEET})!)?(?P<name>{NAME})$")
+# ``Name`` or ``Sheet!Name``. Excel names start with a letter of any script, ``_`` or
+# ``\``, then letters, digits, ``_``, ``.`` or ``\`` (``?`` is kept as the parser does).
+_NAME_REF_RE = re.compile(rf"^(?:(?P<sheet>{SHEET})!)?(?P<name>(?:[^\W\d]|\\)[\w.\\?]*)$")
 
 # (sheet, r1, c1, r2, c2) rectangle
 _Rect = tuple[str, int, int, int, int]
@@ -88,6 +89,12 @@ def _parse_rect(text: str, default_sheet: str | None = None) -> _Rect | None:
     return (sheet, min(r1, r2), min(c1, c2), max(r1, r2), max(c1, c2))
 
 
+def _fold(text: str) -> str:
+    """Excel's case-insensitive key: letter by letter (``Straße`` stays apart from
+    ``Strasse``, which ``str.casefold`` would merge)."""
+    return text.lower()
+
+
 def _quoted(sheet: str) -> str:
     """A sheet name always quoted, as a reference may write it."""
     escaped = sheet.replace("'", "''")
@@ -116,6 +123,12 @@ def _parse_whole(text: str, default_sheet: str | None = None) -> _Rect | None:
         return (sheet, 1, a, _MAX_ROW, b)
     a, b = sorted((int(m.group("r1")), int(m.group("r2"))))
     return (sheet, a, 1, b, _MAX_COL)
+
+
+def _spelled(defs: list[NameDef], name: str) -> NameDef:
+    """The definition spelled exactly ``name`` (as formula text writes it), else the
+    first: a file normally holds one spelling per name."""
+    return next((d for d in defs if d.name == name), defs[0])
 
 
 def _convert(raw: str, data_type: str | None) -> StoredValue:
@@ -156,9 +169,9 @@ class WorkbookGraph:
         self._direct_rev: dict[CellRef, set[CellRef]] = defaultdict(set)
         self._ranges: dict[CellRef, list[_Rect]] = defaultdict(list)
         self._range_grid: dict[tuple[str, int], list[tuple[_Rect, CellRef]]] = defaultdict(list)
-        # Keyed (owning sheet or None for the workbook, casefolded name): Excel
-        # compares names without case.
-        self._names: dict[tuple[str | None, str], NameDef] = {}
+        # Keyed (owning sheet or None for the workbook, folded name): Excel compares
+        # names without case. A key holds every spelling the file has (normally one).
+        self._names: dict[tuple[str | None, str], list[NameDef]] = {}
         self._sheet_key: dict[str, str] = {}
         self._extent: dict[str, tuple[int, int]] = {}
         self._array_cells: set[CellRef] = set()
@@ -183,7 +196,7 @@ class WorkbookGraph:
         self.workbook_sha256 = str(row[0]) if row else ""
         sheet_names = dict(conn.execute("SELECT sheet_id, sheet_name FROM sheets"))
         self._sheets = set(sheet_names.values())
-        self._sheet_key = {name.casefold(): name for name in self._sheets}
+        self._sheet_key = {_fold(name): name for name in self._sheets}
 
         by_id: dict[int, CellRef] = {}
         per_sheet: dict[str, list[tuple[int, int]]] = defaultdict(list)
@@ -253,8 +266,8 @@ class WorkbookGraph:
         ):
             raw = tuple(str(d) for d in json.loads(dests or "[]"))
             owner = None if scope == "workbook" else self.sheet(str(scope)) or str(scope)
-            self._names.setdefault(
-                (owner, str(name).casefold()), self._name_def(str(name), owner, raw, bool(ext))
+            self._names.setdefault((owner, _fold(str(name))), []).append(
+                self._name_def(str(name), owner, raw, bool(ext))
             )
 
         for sid, sqref, vtype, f1, lit in conn.execute(
@@ -306,10 +319,10 @@ class WorkbookGraph:
         them from the workbook."""
         for owner, name in names:
             sheet = (self.sheet(owner) or owner) if owner is not None else None
-            key = (sheet, name.casefold())
-            found = self._names.get(key)
-            if found is not None:
-                self._names[key] = replace(found, relative=True)
+            defs = self._names.get((sheet, _fold(name)), [])
+            for i, found in enumerate(defs):
+                if found.name == name:
+                    defs[i] = replace(found, relative=True)
 
     # -- basic lookups ---------------------------------------------------
 
@@ -319,7 +332,7 @@ class WorkbookGraph:
 
     def sheet(self, text: str) -> str | None:
         """The workbook's spelling of a sheet name given in any case; None if unknown."""
-        return self._sheet_key.get(text.casefold())
+        return self._sheet_key.get(_fold(text))
 
     def formula(self, cell: CellRef) -> str | None:
         """A1 formula text without ``=``, or None for a constant or unknown cell."""
@@ -357,10 +370,11 @@ class WorkbookGraph:
             sheet = self.sheet(qualifier)
             if sheet is None:
                 return None
-        key = name.casefold()
-        if sheet is not None and (own := self._names.get((sheet, key))) is not None:
-            return own
-        return self._names.get((None, key))
+        key = _fold(name)
+        if sheet is not None and (own := self._names.get((sheet, key))):
+            return _spelled(own, name)
+        book = self._names.get((None, key))
+        return _spelled(book, name) if book else None
 
     def is_array_formula(self, cell: CellRef) -> bool:
         """True when the cell holds an array (CSE or dynamic-array) formula."""
@@ -491,14 +505,14 @@ class WorkbookGraph:
         if parts is None:
             return None
         qualifier, name = parts
-        key = name.casefold()
+        key = _fold(name)
         owners = sorted(s for (s, k) in self._names if s is not None and k == key)
-        book = self._names.get((None, key))
+        book = self._one_name(self._names.get((None, key)), target)
         if qualifier is not None:
             sheet = self.sheet(qualifier)
             if sheet is None:
                 return None
-            own = self._names.get((sheet, key))
+            own = self._one_name(self._names.get((sheet, key)), target)
             if own is not None:
                 return self._name_cells_target(own, target)
             if book is None and not owners:
@@ -558,8 +572,22 @@ class WorkbookGraph:
             )
         return cells
 
+    @staticmethod
+    def _one_name(defs: list[NameDef] | None, target: str) -> NameDef | None:
+        """The one definition a target names; refuses spellings Excel would not tell
+        apart (``Rate`` and ``RATE`` in one file)."""
+        if not defs:
+            return None
+        if len(defs) > 1:
+            spellings = ", ".join(repr(d.name) for d in sorted(defs, key=lambda d: d.name))
+            raise CalcInputError(
+                f"target {target!r} is ambiguous: the file defines {spellings}, which "
+                "Excel does not tell apart; give the cells instead"
+            )
+        return defs[0]
+
     def _sheet_names_hint(self, owners: list[str], name: str) -> str:
-        spelled = [self._names[(s, name.casefold())].name for s in owners]
+        spelled = [self._names[(s, _fold(name))][0].name for s in owners]
         options = " or ".join(f"{_quoted(s)}!{n}" for s, n in zip(owners, spelled, strict=True))
         return f"write {options}"
 
