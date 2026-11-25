@@ -72,6 +72,8 @@ def make_book(tmp_path: Path) -> Callable[..., Path]:
         iterate: bool = False,
         manual: bool = False,
         validations: list[tuple[str, list[str]]] | None = None,
+        local_names: dict[tuple[str, str], str] | None = None,
+        list_sources: list[tuple[str, str]] | None = None,
     ) -> Path:
         wb = openpyxl.Workbook()
         wb.remove(wb.active)
@@ -88,6 +90,9 @@ def make_book(tmp_path: Path) -> Callable[..., Path]:
             cached_by_sheet[sheet_name] = cached
         for key, ref in (names or {}).items():
             wb.defined_names[key] = DefinedName(key, attr_text=ref)
+        # Sheet-scoped names, keyed (sheet, name): Excel's ``localSheetId`` names.
+        for (sheet_name, key), ref in (local_names or {}).items():
+            wb[sheet_name].defined_names[key] = DefinedName(key, attr_text=ref)
         if date1904:
             wb.epoch = openpyxl.utils.datetime.CALENDAR_MAC_1904
         wb.calculation.fullPrecision = full_precision
@@ -96,6 +101,13 @@ def make_book(tmp_path: Path) -> Callable[..., Path]:
         for target, allowed in validations or []:
             sheet_name, _, cell = target.rpartition("!")
             dv = DataValidation(type="list", formula1='"' + ",".join(allowed) + '"')
+            wb[sheet_name.strip("'").replace("''", "'")].add_data_validation(dv)
+            dv.add(cell)
+        # List validations whose source is a reference, a name or a formula (formula1
+        # as Excel writes it, without ``=``).
+        for target, source in list_sources or []:
+            sheet_name, _, cell = target.rpartition("!")
+            dv = DataValidation(type="list", formula1=source)
             wb[sheet_name.strip("'").replace("''", "'")].add_data_validation(dv)
             dv.add(cell)
 

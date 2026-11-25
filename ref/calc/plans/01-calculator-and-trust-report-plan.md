@@ -197,6 +197,7 @@ def test_quoted_sheet_targets_survive(tmp_path):
   - `precedents(cell: CellRef) -> frozenset[CellRef]` — direct cell edges plus every cell present in the IR inside each range edge
   - `downstream(roots: Iterable[CellRef]) -> dict[CellRef, CellRef]` — every cell reachable forward from the roots (roots included), mapped to the smallest root that reaches it (deterministic)
   - `resolve_target(target: str) -> list[CellRef]` — an A1 cell/range or a workbook-scoped defined name; raises `CalcInputError` if unknown
+    - *Amended for 0.8.1 (ruling D7):* names resolve by Excel's scope and case, `'Sheet'!Name` targets a sheet-scoped name, and the `is_*_name` helpers below became `lookup_name(ref, sheet)`; see `src/xl_marinade/calc/graph.py`.
   - `upstream(cells: Iterable[CellRef]) -> set[CellRef]` — backward closure through `precedents` (cells included)
   - `udf_cells: frozenset[CellRef]`, `external_cells: dict[CellRef, list[str]]`
   - `allowed_values(cell: CellRef) -> list[str] | None` — list validations: literal values, or the stored values of a range source; `None` when the cell has no list validation

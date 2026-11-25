@@ -125,7 +125,7 @@ marinade calc [OPTIONS] WORKBOOK
 |---|---|---|
 | `--policies FILE` | Policies CSV, one row per input set. Required. | |
 | `--map FILE` | `map.json`: field to cell or name, plus `id_field`. Required. | |
-| `--outputs TEXT` | Output cell, range or name; repeat for several. | |
+| `--outputs TEXT` | Output cell, range or name (`'Sheet'!Name` for a sheet's own name); repeat for several. | |
 | `--variables FILE` | `vars.json`: named variables for `rows.csv`; `period_start` required on every range. | |
 | `--check-against FILE` | `check.json`: stored results for other input sets, to widen the trust run. | |
 | `--ir FILE` | Reuse this IR database (must match the workbook). | extract afresh |

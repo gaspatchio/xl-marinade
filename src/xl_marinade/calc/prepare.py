@@ -55,6 +55,17 @@ _ANY_EXT_RE = re.compile(
     r"|(?P<ext>'\[[0-9]+\](?:[^']|'')*'!|\[[0-9]+\][^!\s'\"(),;{}]*!)"
 )
 
+# References in a defined name's text, outside string literals and quoted sheet names:
+# a cell, a whole column, a whole row (not a table name before ``[``, as in
+# ``Tbl1[Amount]``). A part written without ``$`` is relative.
+_NAME_REF_RE = re.compile(
+    r'(?P<str>"(?:[^"]|"")*")'
+    r"|(?P<qname>'(?:[^']|'')*')"
+    r"|(?<![\w.$\\])(?P<cd>\$?)[A-Za-z]{1,3}(?P<rd>\$?)[0-9]+(?![\w(.!\[])"
+    r"|(?<![\w.$\\:])(?P<c1>\$?)[A-Za-z]{1,3}:(?P<c2>\$?)[A-Za-z]{1,3}(?![\w(.!\[])"
+    r"|(?<![\w.$\\:])(?P<r1>\$?)[0-9]+:(?P<r2>\$?)[0-9]+(?![\w(.!\[])"
+)
+
 _ExtCache = dict[int, dict[str, dict[tuple[int, int], str]]]
 
 
@@ -315,6 +326,46 @@ def _prepare_workbook_xml(xml: str, rewriter: _Rewriter) -> str:
         return m.group(1) + _xml_escape(new) + m.group(3)
 
     return _DEFINED_NAME_RE.sub(fix, xml)
+
+
+def has_relative_reference(text: str) -> bool:
+    """True when a defined name's text holds a reference with a part written without
+    ``$`` (``Calc!B5``, ``Calc!$B5``, ``Calc!B:B``): Excel reads it relative to the
+    cell that uses the name, so it names different cells from each cell."""
+    for m in _NAME_REF_RE.finditer(text):
+        if m.group("str") is not None or m.group("qname") is not None:
+            continue
+        marks = [g for g in ("cd", "rd", "c1", "c2", "r1", "r2") if m.group(g) is not None]
+        if any(m.group(g) != "$" for g in marks):
+            return True
+    return False
+
+
+def relative_names(src: Path) -> set[tuple[str | None, str]]:
+    """Defined names whose reference is relative, as (owning sheet or None, name).
+
+    The extraction IR stores name destinations without ``$``, so this reads
+    ``xl/workbook.xml``.
+
+    Raises:
+        CalcInputError: if ``src`` is not a readable xlsx package.
+    """
+    try:
+        with zipfile.ZipFile(src) as z:
+            root = ET.fromstring(z.read("xl/workbook.xml"))
+    except (OSError, zipfile.BadZipFile, KeyError, ET.ParseError) as exc:
+        raise CalcInputError(f"cannot read defined names of {src}: {exc}") from exc
+    sheets = [el.get("name", "") for el in root.findall("m:sheets/m:sheet", _NS)]
+    found: set[tuple[str | None, str]] = set()
+    for el in root.findall("m:definedNames/m:definedName", _NS):
+        if not has_relative_reference(el.text or ""):
+            continue
+        local = el.get("localSheetId")
+        owner = sheets[int(local)] if local is not None and local.isdigit() else None
+        if local is not None and (owner is None or int(local) >= len(sheets)):
+            continue
+        found.add((owner, el.get("name", "")))
+    return found
 
 
 def prepare_engine_copy(src: Path, dst: Path, *, as_of: date | None) -> PreparedCopy:

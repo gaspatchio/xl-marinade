@@ -27,7 +27,7 @@ from xl_marinade.calc.config import (
     parse_outputs,
 )
 from xl_marinade.calc.engine import Engine, EngineValue, engine_version, quiet_native_output
-from xl_marinade.calc.graph import StoredValue, WorkbookGraph, open_graph
+from xl_marinade.calc.graph import ListItems, StoredValue, WorkbookGraph, open_graph
 from xl_marinade.calc.models import (
     CellRef,
     CheckAgainst,
@@ -48,7 +48,12 @@ from xl_marinade.calc.output import (
     write_run,
     write_trust_report,
 )
-from xl_marinade.calc.patterns import NOT_HELD, input_dependent_lookups, scan_patterns
+from xl_marinade.calc.patterns import (
+    NOT_HELD,
+    RELATIVE_NAME,
+    input_dependent_lookups,
+    scan_patterns,
+)
 from xl_marinade.calc.prepare import PreparedCopy, count_external_refs, prepare_engine_copy
 from xl_marinade.calc.probes import (
     ProbeKind,
@@ -169,11 +174,33 @@ def _as_text(value: StoredValue) -> str:
     return str(value)
 
 
-def _allowed(raw: str, allowed: list[str]) -> bool:
-    if raw in allowed:
-        return True
-    number = _number(raw)
-    return number is not None and any(_number(a) == number for a in allowed)
+_NUMBER_TEXT = re.compile(r"^[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$")
+
+
+def _allowed(raw: str, value: float | str | bool | None, allowed: ListItems) -> bool:
+    """Excel's list check on the value entered (``value`` is ``raw`` converted for its
+    cell, None when it does not convert).
+
+    A literal item is the list's text: it matches the entry as text ignoring case, or,
+    when the entry is a number (an ISO date typed into a date cell is its serial), an
+    item that reads as that number. An item read from a cell keeps the cell's type: a
+    number matches number items only, text or a boolean non-number items ignoring case.
+    """
+    if allowed.literal:
+        folded = raw.lower()
+        for item in allowed.items:
+            text = _as_text(item)
+            if text.lower() == folded:
+                return True
+            if isinstance(value, float) and _NUMBER_TEXT.match(text) and _number(text) == value:
+                return True
+        return False
+    if isinstance(value, float):
+        return any(isinstance(item, float) and item == value for item in allowed.items)
+    text = (_as_text(value) if value is not None else raw).lower()
+    return any(
+        not isinstance(item, float) and _as_text(item).lower() == text for item in allowed.items
+    )
 
 
 # -- resolving targets ---------------------------------------------------------
@@ -193,6 +220,14 @@ def _input_cell(graph: WorkbookGraph, target: str, what: str) -> CellRef:
     return cell
 
 
+def _sheet(graph: WorkbookGraph, name: str, what: str) -> str:
+    """The workbook's spelling of a sheet named in any case (Excel ignores case)."""
+    sheet = graph.sheet(name)
+    if sheet is None:
+        raise CalcInputError(f"unknown sheet {name!r} in {what}")
+    return sheet
+
+
 def _column(letters: str, what: str) -> int:
     if not _COLUMN.match(letters):
         raise CalcInputError(f"{what} {letters!r} is not a column letter")
@@ -202,14 +237,61 @@ def _column(letters: str, what: str) -> int:
 def _output_cells(
     graph: WorkbookGraph, outputs: list[str], variables: list[VariableCells]
 ) -> list[CellRef]:
+    """The cells to report.
+
+    Raises:
+        CalcInputError: naming every output target that does not resolve, or when
+            nothing is asked for.
+    """
     cells: dict[CellRef, None] = {}
+    problems: list[str] = []
     for target in outputs:
-        cells.update(dict.fromkeys(graph.resolve_target(target)))
+        try:
+            cells.update(dict.fromkeys(graph.resolve_target(target)))
+        except CalcInputError as exc:
+            problems.append(str(exc))
+    if problems:
+        raise CalcInputError("; ".join(problems))
     for var in variables:
         cells.update(dict.fromkeys(var.cells))
     if not cells:
         raise CalcInputError("nothing to calculate: give --outputs or --variables")
     return list(cells)
+
+
+def _resolve_targets(
+    graph: WorkbookGraph,
+    specs: list[VariableSpec],
+    outputs: list[str],
+    fields: dict[str, str],
+) -> tuple[list[VariableCells], list[CellRef], dict[str, CellRef]]:
+    """Variables, output cells and mapped inputs, resolved together.
+
+    Raises:
+        CalcInputError: naming every bad target at once.
+    """
+    problems: list[str] = []
+    variables: list[VariableCells] = []
+    cells: list[CellRef] = []
+    inputs: dict[str, CellRef] = {}
+    try:
+        variables = expand_variables(specs, graph)
+    except CalcInputError as exc:
+        problems.append(str(exc))
+    try:
+        cells = _output_cells(graph, outputs, variables)
+    except CalcInputError as exc:
+        # With no --outputs, "nothing to calculate" only echoes the variables' errors.
+        if outputs or not problems:
+            problems.append(str(exc))
+    for name, target in fields.items():
+        try:
+            inputs[name] = _input_cell(graph, target, f"map field {name!r}")
+        except CalcInputError as exc:
+            problems.append(str(exc))
+    if problems:
+        raise CalcInputError("; ".join(problems))
+    return variables, cells, inputs
 
 
 # -- reports -------------------------------------------------------------------
@@ -303,6 +385,13 @@ class _Session:
             if value is not None:
                 self.engine.set_value(cell, value)
 
+    def converted(self, cell: CellRef, raw: str) -> float | str | bool | None:
+        """``raw`` as it would be set into ``cell``; None when it does not convert."""
+        try:
+            return coerce_input(raw, self.graph.stored(cell))
+        except CalcInputError:
+            return None
+
     def set_input(self, cell: CellRef, raw: str, what: str) -> None:
         try:
             value = coerce_input(raw, self.graph.stored(cell))
@@ -382,8 +471,9 @@ def _check_against(
     Each set's readings are dropped once folded in, so memory does not grow with the
     number of sets (a mismatching set keeps only its path signature)."""
     graph = s.graph
+    results_sheet = _sheet(graph, check.results_sheet, "results.sheet")
     results = _id_rows(
-        graph, check.results_sheet, _column(check.id_column, "results.id_column"), check.first_row
+        graph, results_sheet, _column(check.id_column, "results.id_column"), check.first_row
     )
     outputs = {
         _single(graph, target, "check output"): _column(col, f"results column for {target}")
@@ -391,10 +481,13 @@ def _check_against(
     }
     table_rows: dict[str, int] = {}
     table_cols: dict[CellRef, int] = {}
-    table_sheet = check.table.sheet if check.table is not None else ""
+    table_sheet = ""
     if check.table is not None:
         t = check.table
-        table_rows = _id_rows(graph, t.sheet, _column(t.id_column, "table.id_column"), t.first_row)
+        table_sheet = _sheet(graph, t.sheet, "inputs.table.sheet")
+        table_rows = _id_rows(
+            graph, table_sheet, _column(t.id_column, "table.id_column"), t.first_row
+        )
         for name, letters in t.fields.items():
             if name not in s.inputs:
                 raise CalcInputError(f"check table field {name!r} is not in the input map")
@@ -421,7 +514,7 @@ def _check_against(
         reading = s.recalc()
         matched = True
         for cell, col in outputs.items():
-            stored = graph.stored(CellRef(check.results_sheet, row, col))
+            stored = graph.stored(CellRef(results_sheet, row, col))
             got = s.engine.value(cell)
             if same(stored, got, s.req.tolerance):
                 continue
@@ -510,10 +603,10 @@ def _policy_loop(
             raw = policy.values[name]
             options = allowed[name]
             what = f"policy {policy.id!r} field {name!r}"
-            if options is None or _allowed(raw, options):
+            if options is None or _allowed(raw, s.converted(cell, raw), options):
                 s.set_input(cell, raw, what)
                 continue
-            detail = f"{name}={raw!r} not in {options!r}"
+            detail = f"{name}={raw!r} not in {[_as_text(o) for o in options.items]!r}"
             outside.append(Reason(ReasonKind.input_outside_allowed_values, cell, detail))
             try:
                 s.set_input(cell, raw, what)
@@ -609,12 +702,7 @@ def calc(req: CalcRequest) -> CalcResult:
     with tempfile.TemporaryDirectory(prefix="marinade-calc-") as tmp:
         work = Path(tmp)
         graph = open_graph(req.workbook, req.ir, work / "ir")
-        variables = expand_variables(specs, graph)
-        outputs = _output_cells(graph, targets, variables)
-        inputs = {
-            name: _input_cell(graph, target, f"map field {name!r}")
-            for name, target in input_map.fields.items()
-        }
+        variables, outputs, inputs = _resolve_targets(graph, specs, targets, input_map.fields)
         prepared = prepare_engine_copy(req.workbook, work / "engine.xlsx", as_of=req.as_of)
         patterns = _merge_patterns(
             _with_unheld_externals(
@@ -623,6 +711,7 @@ def calc(req: CalcRequest) -> CalcResult:
                 scan_patterns(graph, as_of=req.as_of, data_table_cells=prepared.data_table_cells),
             ),
             input_dependent_lookups(graph, set(inputs.values())),
+            _relative_lists(graph, inputs),
         )
         with quiet_native_output():
             engine = Engine.load(prepared.path)
@@ -689,6 +778,20 @@ def calc(req: CalcRequest) -> CalcResult:
         out / "paths.csv",
         out / "run.json",
     )
+
+
+def _relative_lists(
+    graph: WorkbookGraph, inputs: dict[str, CellRef]
+) -> dict[CellRef, list[Reason]]:
+    """A ``refused_pattern`` on each mapped input whose dropdown list is a name with a
+    relative reference: Excel's list depends on the cell validated, so it is unknown."""
+    out: dict[CellRef, list[Reason]] = {}
+    for cell in sorted(set(inputs.values())):
+        found = graph.list_source_name(cell)
+        if found is not None and found.relative:
+            detail = f"{RELATIVE_NAME}: {found.name}"
+            out[cell] = [Reason(ReasonKind.refused_pattern, cell, detail)]
+    return out
 
 
 def _merge_patterns(

@@ -38,6 +38,35 @@ pip install 'xl-marinade[calc]'
 
 You must give at least one of `--outputs` and `--variables`.
 
+### Targets
+
+Every cell entry (`map.json` fields, `--outputs`, `vars.json`, and the output and
+selector entries of `check.json`) takes a cell (`Inputs!C3`), a range
+(`Proj!C11:C130`) or a defined name. The `sheet` entries of `check.json` take a sheet
+name, in any case. Sheet names and defined names ignore case letter by
+letter, as in Excel (`Straße` and `Strasse` stay two names), and names may use letters
+of any script (`Ärger`, `税率`). A file that defines two names differing only in case,
+which Excel itself does not allow, has a target naming them refused as ambiguous.
+
+A name can be defined for the whole workbook or for one sheet only (a sheet copied in
+from another workbook often brings its own). Write a sheet's own name as
+`'Sheet'!Name`. A bare name means the workbook's definition; when a sheet defines the
+same name too, a bare name is refused as ambiguous, and the error says how to write each.
+
+A whole column or row (`Calc!B:B`, `Calc!3:3`, or a name over one) covers the part of it
+the sheet uses: up to the last row (or column) that holds a cell. A target that covers
+no cells is an error that names it: a name that holds a formula (`OFFSET(...)` dynamic
+ranges included), a constant, a broken reference (`#REF!`) or cells in another workbook,
+and a whole column or row outside the range the sheet uses. Give such a target as a
+plain range instead. When several targets are wrong, the error names each of them.
+
+A name whose reference is relative (written without `$` on its row or column, such as
+`Calc!B5` or `Calc!$B5`) names different cells from each cell that uses it, so it is
+refused as a target too.
+
+Inside formulas, names are read the way Excel reads them: a formula reads its own
+sheet's definition of a name first, and the workbook's only when the sheet has none.
+
 ### `map.json`
 
 ```json
@@ -54,6 +83,24 @@ input set, every mapped input is reset to its stored value. Values are converted
 target cell's stored type, and ISO dates become Excel serials. A value outside the cell's
 data-validation list refuses that input set's outputs.
 
+The list is the validation's literal items, or the stored values of its source: a range,
+a whole column (the cells it holds) or a defined name over cells (the validation sheet's
+own name first, as in a formula). As in Excel, the check compares the value as it is
+entered in its cell. Items typed into the validation itself (`"01,02"`) are text as
+written: they match ignoring case, or by value when the entry is a number. Items read
+from cells keep the cells' types: text ignores case, and a number matches number items
+only, so `2025-01-01` typed into a date cell matches a list of cells holding that date,
+while `1` typed into a number cell does not match a cell holding the text `001`. What is
+not checked:
+
+- A list fed by a formula (`INDIRECT`, `OFFSET`, a name holding one, as in cascading
+  dropdowns) or by a table column (`Table1[Code]`, or a name over one) is not checked
+  in this version: any value is accepted there.
+- A list held in formula cells is read from the values the workbook stored, not
+  recomputed for the input set.
+- Only list validations are checked. Whole-number, decimal, date, length and custom
+  validations are not.
+
 ### `vars.json`
 
 ```json
@@ -64,7 +111,9 @@ data-validation list refuses that input set's outputs.
 }
 ```
 
-A range runs down one column or across one row; a 2-D range is an error.
+A range runs down one column or across one row of one sheet; a 2-D range, or a name
+whose areas lie on more than one sheet, is an error. A name with several areas on one
+sheet runs in row order, whatever order its areas were written in.
 **`period_start` is required on every range and has no default**, because workbooks differ
 on whether periods count from 0 or 1. Periods count from it: the first cell of the range is
 period `period_start`, the next one `period_start + 1`. A single `cell` has no period (the
@@ -200,6 +249,9 @@ Details worth knowing:
   comparison probe `uncertain`, and a dynamic-reference probe `refused`.
 - `OFFSET` and `INDIRECT` are followed to where they point for each input set; if that
   cannot be read, the outputs behind it are refused (`dynamic reference not checked`).
+  An `OFFSET` whose base is a sheet's own (sheet-scoped) name is always refused this
+  way, and a branch, lookup, rounding or comparison on such a name is never `ok`: the
+  probe sheet cannot read the name as the formula's sheet does.
 - An error code Excel does not have (IronCalc's `#N/IMPL!`, `#ERROR!`, `#CIRC!` and the
   like) in an output or in a probe is an `engine_error` for that policy, so the output is
   `refused`, even when an `IFERROR` around it would have turned it into a plausible
@@ -242,7 +294,10 @@ policy finishes, so memory does not grow with the number of policies. Nor does i
 with the number of `--check-against` input sets: each matching set's branch and lookup
 outcomes are folded into the exercised set as it finishes and its readings dropped; a
 mismatching set keeps only its path to the output it missed. Peak memory is set by the
-workbook: the formula graph, the engine's copy of the workbook and the probe plan.
+workbook (the formula graph, the engine's copy of the workbook and the probe plan) and by
+the output cells you request: a range is expanded cell by cell, so `Calc!B1:B1048576`
+costs memory for a million cells. A whole column (`Calc!B:B`) expands only over the rows
+the sheet uses.
 
 The files on disk do grow with the policies. `paths.csv` has one row per policy per
 branch or lookup probe it reached, which for an actuarial projection can be over a
@@ -262,10 +317,11 @@ the next. They are refused even when the trust run reproduces them. The `detail`
 | `approximate lookup on unsorted column` | `VLOOKUP`/`HLOOKUP`/`MATCH`/`LOOKUP` in approximate mode over keys that are not sorted, or that are text outside plain a-z, 0-9 and space (Excel's collation differs from a plain sort). Also `XLOOKUP`/`XMATCH` with a binary-search mode, or a search mode the scan cannot read. |
 | `approximate lookup on mixed text and numbers` | The key column mixes types. |
 | `approximate lookup on a non-range table` | The table is not a plain reference. |
-| `approximate lookup on whole column` | The table is a whole column or row. IronCalc counts empty cells; Excel skips them. |
-| `implicit intersection on multi-cell name` | A single-cell use of a defined name that covers several cells. |
+| `approximate lookup on whole column` | The table is a whole column or row, or a name over one. IronCalc counts empty cells; Excel skips them. |
+| `implicit intersection on multi-cell name` | A single-cell use of a defined name that covers several cells (a name over a whole column or row always does). |
 | `implicit intersection on multi-cell range` | A multi-cell range used outside a function argument. Ranges inside `SUMPRODUCT`, `MMULT` and similar are fine. |
 | `name holds a formula` | A formula reads a defined name whose definition is a formula or a constant rather than cells (the detail text says "formula" for both). IronCalc 0.9.1 rejects such names. |
+| `name with a relative reference: <Name>` | A formula reads a defined name whose reference is relative (no `$` on its row or column). Excel reads it relative to the cell using it; IronCalc 0.9.1 reads the stored reference as it is. Also put on a mapped input whose dropdown list is such a name, which refuses everything that input feeds. |
 | `RAND`, `RANDBETWEEN`, `RANDARRAY` | Always. |
 | `TODAY`, `NOW` | Unless `--as-of YYYY-MM-DD` is given; then they are replaced by that date. |
 | `circular reference` | Always (iterative calculation is noted in the report, not honoured). |
@@ -299,7 +355,7 @@ it, are listed in `ref/calc/upstream/` in the repository.
 | Code | Meaning |
 |---|---|
 | 0 | Success. |
-| 1 | Error: bad input file, unknown sheet, mapping onto a formula, IR from another workbook. |
+| 1 | Error: bad input file, unknown sheet or name, a target that covers no cells, mapping onto a formula, IR from another workbook. |
 | 5 | The `[calc]` extra is not installed. |
 | 6 | The workbook is refused outright (1904 dates, precision as displayed, Strict Open XML). `trust_report.json` and `run.json` are still written. |
 

@@ -32,27 +32,43 @@ class Row:
 
 
 def expand_variables(specs: list[VariableSpec], graph: WorkbookGraph) -> list[VariableCells]:
-    """Resolve each spec to its cells; a range must be one row or one column.
+    """Resolve each spec to its cells; a range must be one row or one column of one sheet.
 
     Raises:
-        CalcInputError: for a 2-D range, or a ``cell`` entry that spans several cells.
+        CalcInputError: naming every bad variable: a target that does not resolve, a 2-D
+            range, a range over more than one sheet (a name with areas on several
+            sheets), or a ``cell`` entry that spans several cells.
     """
     out: list[VariableCells] = []
+    problems: list[str] = []
     for spec in specs:
-        cells = graph.resolve_target(spec.target)
-        if spec.period_start is None:
-            if len(cells) != 1:
-                raise CalcInputError(f"variable {spec.name!r}: 'cell' must be a single cell")
-            out.append(VariableCells(spec.name, cells, None))
-            continue
-        if len({c.col for c in cells}) > 1 and len({c.row for c in cells}) > 1:
-            raise CalcInputError(
-                f"variable {spec.name!r}: 2-D range {spec.target!r}; use one row or one column"
-            )
-        out.append(
-            VariableCells(spec.name, sorted(cells, key=lambda c: (c.row, c.col)), spec.period_start)
-        )
+        try:
+            out.append(_variable_cells(spec, graph))
+        except CalcInputError as exc:
+            problems.append(str(exc))
+    if problems:
+        raise CalcInputError("; ".join(problems))
     return out
+
+
+def _variable_cells(spec: VariableSpec, graph: WorkbookGraph) -> VariableCells:
+    cells = graph.resolve_target(spec.target)
+    if spec.period_start is None:
+        if len(cells) != 1:
+            raise CalcInputError(f"variable {spec.name!r}: 'cell' must be a single cell")
+        return VariableCells(spec.name, cells, None)
+    sheets = sorted({c.sheet for c in cells})
+    if len(sheets) > 1:
+        # Periods follow rows, so cells from two sheets would interleave.
+        raise CalcInputError(
+            f"variable {spec.name!r}: range {spec.target!r} spans more than one sheet "
+            f"({', '.join(sheets)}); give one row or one column of one sheet"
+        )
+    if len({c.col for c in cells}) > 1 and len({c.row for c in cells}) > 1:
+        raise CalcInputError(
+            f"variable {spec.name!r}: 2-D range {spec.target!r}; use one row or one column"
+        )
+    return VariableCells(spec.name, sorted(cells, key=lambda c: (c.row, c.col)), spec.period_start)
 
 
 def period_0_cell(var: VariableCells) -> CellRef | None:

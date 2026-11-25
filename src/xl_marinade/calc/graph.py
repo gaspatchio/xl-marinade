@@ -9,9 +9,13 @@ import sqlite3
 from bisect import bisect_left
 from collections import defaultdict, deque
 from collections.abc import Iterable
+from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Literal
 
+from xl_marinade.calc.formula_ast import SHEET
 from xl_marinade.calc.models import CellRef, _col_to_number
+from xl_marinade.calc.prepare import relative_names
 from xl_marinade.core.db_uri import connect_read_only
 from xl_marinade.errors import CalcInputError
 
@@ -27,12 +31,51 @@ _RANGE_RE = re.compile(
 
 # Whole-column / whole-row references (``S!$A:$B``, ``S!1:3``): references, not formulas.
 _WHOLE_RE = re.compile(
-    r"^(?:(?:'(?:[^']|'')*'|[^'!]+)!)?"
-    r"(?:\$?[A-Za-z]{1,3}:\$?[A-Za-z]{1,3}|\$?[0-9]+:\$?[0-9]+)$"
+    r"^(?:(?P<sheet>'(?:[^']|'')*'|[^'!]+)!)?"
+    r"(?:\$?(?P<c1>[A-Za-z]{1,3}):\$?(?P<c2>[A-Za-z]{1,3})|\$?(?P<r1>[0-9]+):\$?(?P<r2>[0-9]+))$"
 )
+_MAX_ROW = 1_048_576
+_MAX_COL = 16_384
+
+# ``Name`` or ``Sheet!Name``. Excel names start with a letter of any script, ``_`` or
+# ``\``, then letters, digits, ``_``, ``.`` or ``\`` (``?`` is kept as the parser does).
+_NAME_REF_RE = re.compile(rf"^(?:(?P<sheet>{SHEET})!)?(?P<name>(?:[^\W\d]|\\)[\w.\\?]*)$")
 
 # (sheet, r1, c1, r2, c2) rectangle
 _Rect = tuple[str, int, int, int, int]
+
+NameKind = Literal["cells", "formula", "external"]
+
+
+@dataclass(slots=True, frozen=True)
+class ListItems:
+    """A list validation's items. ``literal`` items are the list's own text, exactly as
+    written; otherwise they are the source cells' stored values, with their types."""
+
+    items: list[float | str | bool]
+    literal: bool
+
+
+@dataclass(slots=True, frozen=True)
+class NameDef:
+    """One definition of a defined name.
+
+    ``scope`` is the sheet that owns a sheet-scoped definition, None for the
+    workbook's. ``kind`` is ``cells`` for a reference, ``external`` for cells in
+    another workbook, and ``formula`` for a formula, a constant or a broken
+    reference. ``areas`` is the IR's destination text, one entry per area;
+    ``rects`` the areas this graph can read as cells, a whole column or row cut to
+    its sheet's used range (``whole`` is then True). ``relative`` marks a reference
+    written without ``$``: Excel reads it relative to the cell that uses the name.
+    """
+
+    name: str
+    scope: str | None
+    kind: NameKind
+    areas: tuple[str, ...]
+    rects: tuple[_Rect, ...]
+    whole: bool = False
+    relative: bool = False
 
 
 def _unquote(sheet: str) -> str:
@@ -55,6 +98,57 @@ def _parse_rect(text: str, default_sheet: str | None = None) -> _Rect | None:
     return (sheet, min(r1, r2), min(c1, c2), max(r1, r2), max(c1, c2))
 
 
+def _fold(text: str) -> str:
+    """Excel's case-insensitive key: letter by letter (``Straße`` stays apart from
+    ``Strasse``, which ``str.casefold`` would merge)."""
+    return text.lower()
+
+
+def _quoted(sheet: str) -> str:
+    """A sheet name always quoted, as a reference may write it."""
+    escaped = sheet.replace("'", "''")
+    return f"'{escaped}'"
+
+
+def _split_name(ref: str) -> tuple[str | None, str] | None:
+    """``(sheet or None, name)`` for ``Name`` / ``Sheet!Name``; None for anything else."""
+    m = _NAME_REF_RE.match(ref.strip())
+    if m is None:
+        return None
+    sheet = m.group("sheet")
+    return (_unquote(sheet) if sheet is not None else None), m.group("name")
+
+
+def _parse_whole(text: str, default_sheet: str | None = None) -> _Rect | None:
+    """Parse ``Sheet!B:C`` or ``Sheet!3:4`` to its full rectangle; None otherwise."""
+    m = _WHOLE_RE.match(text.strip())
+    if m is None:
+        return None
+    sheet = _unquote(m.group("sheet")) if m.group("sheet") else default_sheet
+    if sheet is None:
+        return None
+    if m.group("c1") is not None:
+        a, b = sorted((_col_to_number(m.group("c1")), _col_to_number(m.group("c2"))))
+        return (sheet, 1, a, _MAX_ROW, b)
+    a, b = sorted((int(m.group("r1")), int(m.group("r2"))))
+    return (sheet, a, 1, b, _MAX_COL)
+
+
+def _address_hint(found: NameDef) -> str:
+    """How to write a name's cells as targets: its address, or each of its areas."""
+    if not found.areas:
+        return "its cells"
+    if len(found.areas) == 1:
+        return found.areas[0]
+    return f"each of its areas ({', '.join(found.areas)}) as its own target"
+
+
+def _spelled(defs: list[NameDef], name: str) -> NameDef:
+    """The definition spelled exactly ``name`` (as formula text writes it), else the
+    first: a file normally holds one spelling per name."""
+    return next((d for d in defs if d.name == name), defs[0])
+
+
 def _convert(raw: str, data_type: str | None) -> StoredValue:
     """Turn the IR's raw stored text into a typed value."""
     if data_type in _TEXT_TYPES:
@@ -67,14 +161,6 @@ def _convert(raw: str, data_type: str | None) -> StoredValue:
         return float(raw)
     except ValueError:
         return raw
-
-
-def _text(value: StoredValue) -> str:
-    if isinstance(value, bool):
-        return "TRUE" if value else "FALSE"
-    if isinstance(value, float) and value.is_integer():
-        return str(int(value))
-    return str(value)
 
 
 class WorkbookGraph:
@@ -93,9 +179,11 @@ class WorkbookGraph:
         self._direct_rev: dict[CellRef, set[CellRef]] = defaultdict(set)
         self._ranges: dict[CellRef, list[_Rect]] = defaultdict(list)
         self._range_grid: dict[tuple[str, int], list[tuple[_Rect, CellRef]]] = defaultdict(list)
-        self._names: dict[str, tuple[str, list[_Rect]]] = {}
-        self._formula_names: set[str] = set()
-        self._external_names: set[str] = set()
+        # Keyed (owning sheet or None for the workbook, folded name): Excel compares
+        # names without case. A key holds every spelling the file has (normally one).
+        self._names: dict[tuple[str | None, str], list[NameDef]] = {}
+        self._sheet_key: dict[str, str] = {}
+        self._extent: dict[str, tuple[int, int]] = {}
         self._array_cells: set[CellRef] = set()
         self._validations: list[tuple[list[_Rect], list[str] | None, str | None, str]] = []
         self._sheets: set[str] = set()
@@ -118,6 +206,7 @@ class WorkbookGraph:
         self.workbook_sha256 = str(row[0]) if row else ""
         sheet_names = dict(conn.execute("SELECT sheet_id, sheet_name FROM sheets"))
         self._sheets = set(sheet_names.values())
+        self._sheet_key = {_fold(name): name for name in self._sheets}
 
         by_id: dict[int, CellRef] = {}
         per_sheet: dict[str, list[tuple[int, int]]] = defaultdict(list)
@@ -142,6 +231,10 @@ class WorkbookGraph:
                     self._stored[ref] = _convert(str(raw), dtype)
                     self._has_stored.add(ref)
         self._cells_by_sheet = {s: sorted(v) for s, v in per_sheet.items()}
+        # The used range: the last row and column holding a cell, per sheet.
+        self._extent = {
+            s: (max(r for r, _c in v), max(c for _r, c in v)) for s, v in per_sheet.items()
+        }
 
         for frm, to in conn.execute("SELECT from_cell_id, to_cell_id FROM cell_edges_internal"):
             if frm in by_id and to in by_id:
@@ -150,7 +243,7 @@ class WorkbookGraph:
 
         # Whole columns/rows are stored to row 1048576 / column 16384; index only the
         # extent a sheet uses, or one entry per bucket would fill memory.
-        max_row = {s: max(r for r, _c in v) for s, v in per_sheet.items()}
+        max_row = {s: extent[0] for s, extent in self._extent.items()}
         range_q = (
             "SELECT from_cell_id, to_sheet_id, to_r1, to_c1, to_r2, to_c2 FROM range_edges "
             "ORDER BY from_cell_id, to_sheet_id, to_r1, to_c1, to_r2, to_c2"
@@ -181,22 +274,11 @@ class WorkbookGraph:
         for name, scope, dests, ext in conn.execute(
             "SELECT name, scope, destinations, is_external FROM defined_names ORDER BY 1, 2"
         ):
-            raw = [str(d) for d in json.loads(dests or "[]")]
-            if ext or any(d.lstrip("'").startswith("[") for d in raw):
-                # Cells in another workbook: not cells of this graph (``[1]Src`` would
-                # otherwise parse as a sheet of its own).
-                self._external_names.add(str(name))
-                self._formula_names.add(str(name))
-                if name not in self._names or scope == "workbook":
-                    self._names[name] = (str(scope), [])
-                continue
-            rects = [r for d in raw if (r := _parse_rect(d)) is not None]
-            # The IR keeps only reference destinations: a formula name has none, a
-            # constant name keeps its literal text. Either way it is not cells.
-            if not raw or any(_parse_rect(d) is None and not _WHOLE_RE.match(d) for d in raw):
-                self._formula_names.add(str(name))
-            if name not in self._names or scope == "workbook":
-                self._names[name] = (str(scope), rects)
+            raw = tuple(str(d) for d in json.loads(dests or "[]"))
+            owner = None if scope == "workbook" else self.sheet(str(scope)) or str(scope)
+            self._names.setdefault((owner, _fold(str(name))), []).append(
+                self._name_def(str(name), owner, raw, bool(ext))
+            )
 
         for sid, sqref, vtype, f1, lit in conn.execute(
             "SELECT sheet_id, sqref, val_type, formula1, literal_values_json FROM data_validations"
@@ -210,7 +292,57 @@ class WorkbookGraph:
             literals = [str(v) for v in json.loads(lit)] if lit else None
             self._validations.append((rects, literals, f1, sheet))
 
+    def _name_def(
+        self, name: str, owner: str | None, raw: tuple[str, ...], external: bool
+    ) -> NameDef:
+        if external or any(d.lstrip("'").startswith("[") for d in raw):
+            # Cells in another workbook: not cells of this graph (``[1]Src`` would
+            # otherwise parse as a sheet of its own).
+            return NameDef(name, owner, "external", raw, ())
+        # The IR keeps only reference destinations: a formula name has none, a
+        # constant name keeps its literal text. Either way it is not cells.
+        if not raw or any(_parse_rect(d) is None and not _WHOLE_RE.match(d) for d in raw):
+            return NameDef(name, owner, "formula", raw, ())
+        rects: list[_Rect] = []
+        whole = False
+        for d in raw:
+            if (r := _parse_rect(d)) is None and (r := _parse_whole(d)) is not None:
+                whole = True
+                r = self._clip(r)
+            if r is not None:
+                sheet, r1, c1, r2, c2 = r
+                rects.append((self.sheet(sheet) or sheet, r1, c1, r2, c2))
+        return NameDef(name, owner, "cells", raw, tuple(rects), whole)
+
+    def _clip(self, rect: _Rect) -> _Rect | None:
+        """A whole column or row cut to its sheet's used range; None when outside it."""
+        sheet, r1, c1, r2, c2 = rect
+        last_row, last_col = self._extent.get(self.sheet(sheet) or sheet, (0, 0))
+        r2, c2 = min(r2, last_row), min(c2, last_col)
+        if r1 > r2 or c1 > c2:
+            return None
+        return (sheet, r1, c1, r2, c2)
+
+    def mark_relative(self, names: Iterable[tuple[str | None, str]]) -> None:
+        """Flag the definitions whose reference is relative, given as (owning sheet or
+        None, name); the IR stores destinations without ``$``, so the caller reads
+        them from the workbook."""
+        for owner, name in names:
+            sheet = (self.sheet(owner) or owner) if owner is not None else None
+            defs = self._names.get((sheet, _fold(name)), [])
+            for i, found in enumerate(defs):
+                if found.name == name:
+                    defs[i] = replace(found, relative=True)
+
     # -- basic lookups ---------------------------------------------------
+
+    def sheets(self) -> list[str]:
+        """Every sheet name, sorted."""
+        return sorted(self._sheets)
+
+    def sheet(self, text: str) -> str | None:
+        """The workbook's spelling of a sheet name given in any case; None if unknown."""
+        return self._sheet_key.get(_fold(text))
 
     def formula(self, cell: CellRef) -> str | None:
         """A1 formula text without ``=``, or None for a constant or unknown cell."""
@@ -232,29 +364,39 @@ class WorkbookGraph:
         """Sheet plus relative (R1C1) formula: copied formulas share a family."""
         return self._family.get(cell, f"{cell.sheet}|")
 
-    def is_sheet_scoped_name(self, name: str) -> bool:
-        """True when the only definition of ``name`` is sheet-scoped."""
-        entry = self._names.get(name)
-        return entry is not None and entry[0] != "workbook"
+    def lookup_name(self, ref: str, sheet: str | None) -> NameDef | None:
+        """The definition ``Name`` or ``Sheet!Name`` reads in a formula on ``sheet``.
 
-    def is_formula_name(self, name: str) -> bool:
-        """True when a definition of ``name`` holds a formula or constant, not cells."""
-        return name in self._formula_names
-
-    def is_external_name(self, name: str) -> bool:
-        """True when a definition of ``name`` points into another workbook."""
-        return name in self._external_names
+        As Excel resolves it: the sheet's own (sheet-scoped) definition first, then the
+        workbook's; ``Sheet!Name`` looks on Sheet. Names and sheets ignore case. With
+        ``sheet`` None an unqualified name reads the workbook's definition only. None
+        when ``ref`` is not a defined name.
+        """
+        parts = _split_name(ref)
+        if parts is None:
+            return None
+        qualifier, name = parts
+        if qualifier is not None:
+            sheet = self.sheet(qualifier)
+            if sheet is None:
+                return None
+        key = _fold(name)
+        if sheet is not None and (own := self._names.get((sheet, key))):
+            return _spelled(own, name)
+        book = self._names.get((None, key))
+        return _spelled(book, name) if book else None
 
     def is_array_formula(self, cell: CellRef) -> bool:
         """True when the cell holds an array (CSE or dynamic-array) formula."""
         return cell in self._array_cells
 
-    def name_cells(self, name: str) -> list[CellRef]:
-        """Cells present in the IR that a defined name points at (sorted)."""
-        entry = self._names.get(name)
-        if entry is None:
+    def name_cells(self, ref: str, sheet: str | None = None) -> list[CellRef]:
+        """Cells a defined name points at, as read from ``sheet`` (sorted; empty cells
+        included); empty when it is not a name over cells."""
+        found = self.lookup_name(ref, sheet)
+        if found is None or found.kind != "cells":
             return []
-        return self._full_rects(entry[1])
+        return self._full_rects(found.rects)
 
     # -- graph traversal -------------------------------------------------
 
@@ -333,26 +475,146 @@ class WorkbookGraph:
     # -- targets and validations ----------------------------------------
 
     def resolve_target(self, target: str) -> list[CellRef]:
-        """Resolve an A1 cell/range or a workbook-scoped defined name to cells.
+        """Resolve an A1 cell or range, or a defined name, to cells.
+
+        Sheets and names ignore case. A bare name is the workbook's definition;
+        ``'Sheet'!Name`` is Sheet's own (sheet-scoped) definition. A bare name that a
+        sheet defines too is ambiguous outside any sheet, so it is refused.
 
         Raises:
-            CalcInputError: if the sheet or name is unknown.
+            CalcInputError: if the sheet or name is unknown, or the name is ambiguous.
         """
         text = target.strip()
-        entry = self._names.get(text)
-        if entry is not None and entry[0] == "workbook":
-            return self._full_rects(entry[1])
+        named = self._name_target(text, target)
+        if named is not None:
+            return named
         rect = _parse_rect(text)
+        whole = rect is None and (rect := _parse_whole(text)) is not None
         if rect is None:
             raise CalcInputError(f"unknown target {target!r}: not a cell, range or defined name")
-        if rect[0] not in self._sheets:
-            raise CalcInputError(f"unknown sheet {rect[0]!r} in target {target!r}")
-        if rect[1:3] == rect[3:5]:
-            return [CellRef(rect[0], rect[1], rect[2])]
-        return self._full_rects([rect])
+        written, r1, c1, r2, c2 = rect
+        sheet = self.sheet(written)
+        if sheet is None:
+            raise CalcInputError(f"unknown sheet {written!r} in target {target!r}")
+        if whole:
+            # A whole column or row is the part of it the sheet uses (ruling D10).
+            clipped = self._clip((sheet, r1, c1, r2, c2))
+            if clipped is None:
+                raise CalcInputError(
+                    f"target {target!r} holds no cells: it is outside the range sheet "
+                    f"{sheet!r} uses"
+                )
+            return self._full_rects([clipped])
+        if (r1, c1) == (r2, c2):
+            return [CellRef(sheet, r1, c1)]
+        return self._full_rects([(sheet, r1, c1, r2, c2)])
 
-    def allowed_values(self, cell: CellRef) -> list[str] | None:
-        """List-validation values for the cell, or None when it has no list validation."""
+    def _name_target(self, text: str, target: str) -> list[CellRef] | None:
+        """The cells of a name target; None when ``text`` is not a defined name."""
+        parts = _split_name(text)
+        if parts is None:
+            return None
+        qualifier, name = parts
+        key = _fold(name)
+        owners = sorted(s for (s, k) in self._names if s is not None and k == key)
+        book = self._one_name(self._names.get((None, key)), target)
+        if qualifier is not None:
+            sheet = self.sheet(qualifier)
+            if sheet is None:
+                return None
+            own = self._one_name(self._names.get((sheet, key)), target)
+            if own is not None:
+                return self._name_cells_target(own, target)
+            if book is None and not owners:
+                return None
+            if book is None:
+                where = self._sheet_names_hint(owners, name)
+            elif owners:
+                # A bare name is ambiguous here, so point at the workbook's cells.
+                where = f"for the workbook's {book.name!r} give {_address_hint(book)}"
+            else:
+                where = f"the workbook's {book.name!r} is written without a sheet"
+            raise CalcInputError(
+                f"target {target!r}: sheet {sheet!r} has no name {name!r} of its own ({where})"
+            )
+        if owners:
+            hint = self._sheet_names_hint(owners, name)
+            if book is None:
+                raise CalcInputError(
+                    f"target {target!r}: {name!r} is defined only for a sheet; {hint}"
+                )
+            raise CalcInputError(
+                f"target {target!r} is ambiguous: the workbook and a sheet each define "
+                f"{name!r}; {hint}, or for the workbook's give {_address_hint(book)}"
+            )
+        if book is None:
+            return None
+        return self._name_cells_target(book, target)
+
+    def _name_cells_target(self, found: NameDef, target: str) -> list[CellRef]:
+        """The cells a name target covers.
+
+        Raises:
+            CalcInputError: when the name holds no cells: a formula, a constant, a
+                broken reference, another workbook's cells, or a whole column or row
+                outside the range its sheet uses.
+        """
+        name = found.name
+        if found.relative:
+            raise CalcInputError(
+                f"target {target!r}: name {name!r} has a relative reference (it names "
+                "different cells from each cell that uses it); give the cells instead"
+            )
+        if found.kind == "external":
+            raise CalcInputError(
+                f"target {target!r}: name {name!r} points into another workbook; "
+                "give the cells it is copied into instead"
+            )
+        if found.kind == "formula":
+            if any("#REF!" in a for a in found.areas):
+                raise CalcInputError(f"target {target!r}: name {name!r} is broken (#REF!)")
+            raise CalcInputError(
+                f"target {target!r}: name {name!r} holds a formula or a constant, not cells; "
+                "give the cells as a range instead (for example Calc!C1:C40)"
+            )
+        cells = self._full_rects(found.rects)
+        if not cells:
+            raise CalcInputError(
+                f"target {target!r}: name {name!r} holds no cells (a whole column or row "
+                "outside the range its sheet uses)"
+            )
+        return cells
+
+    @staticmethod
+    def _one_name(defs: list[NameDef] | None, target: str) -> NameDef | None:
+        """The one definition a target names; refuses spellings Excel would not tell
+        apart (``Rate`` and ``RATE`` in one file)."""
+        if not defs:
+            return None
+        if len(defs) > 1:
+            spellings = ", ".join(repr(d.name) for d in sorted(defs, key=lambda d: d.name))
+            raise CalcInputError(
+                f"target {target!r} is ambiguous: the file defines {spellings}, which "
+                "Excel does not tell apart; give the cells instead"
+            )
+        return defs[0]
+
+    def _sheet_names_hint(self, owners: list[str], name: str) -> str:
+        spelled = [self._names[(s, _fold(name))][0].name for s in owners]
+        options = " or ".join(f"{_quoted(s)}!{n}" for s, n in zip(owners, spelled, strict=True))
+        return f"write {options}"
+
+    def allowed_values(self, cell: CellRef) -> ListItems | None:
+        """List-validation values for the cell, or None when it has no list validation
+        that can be read.
+
+        The list is the literal items as written, or the typed stored values of the
+        source: a range, a whole column or row (the cells it
+        holds), or a defined name over cells, read from the validation's sheet as a
+        formula there would read it. A source that is
+        a formula (``INDIRECT``, ``OFFSET``, a name holding one) is not read: its list
+        can change with the inputs (ruling D8 leaves it unchecked in 0.8.1).
+        """
         for rects, literals, f1, sheet in self._validations:
             if not any(
                 r[0] == cell.sheet and r[1] <= cell.row <= r[3] and r[2] <= cell.col <= r[4]
@@ -360,13 +622,43 @@ class WorkbookGraph:
             ):
                 continue
             if literals is not None:
-                return literals
-            source = _parse_rect(str(f1 or ""), sheet)
+                return ListItems(list(literals), literal=True)
+            source = self._list_source(str(f1 or ""), sheet)
             if source is None:
                 continue
-            return [
-                _text(self._stored[c]) for c in self._cells_in_rect(source) if c in self._stored
-            ]
+            cells = [c for rect in source for c in self._cells_in_rect(rect)]
+            return ListItems(
+                [v for c in cells if (v := self._stored.get(c)) is not None], literal=False
+            )
+        return None
+
+    def _list_source(self, formula1: str, sheet: str) -> list[_Rect] | None:
+        """The rectangles a list validation's source covers; None for a formula."""
+        text = formula1.strip().removeprefix("=").strip()
+        if (rect := _parse_rect(text, sheet)) is not None:
+            written, r1, c1, r2, c2 = rect
+            return [(self.sheet(written) or written, r1, c1, r2, c2)]
+        if (whole := _parse_whole(text, sheet)) is not None:
+            written, r1, c1, r2, c2 = whole
+            clipped = self._clip((self.sheet(written) or written, r1, c1, r2, c2))
+            return [clipped] if clipped is not None else []
+        found = self.lookup_name(text, sheet)
+        if found is None or found.kind != "cells" or found.relative:
+            return None
+        return list(found.rects)
+
+    def list_source_name(self, cell: CellRef) -> NameDef | None:
+        """The defined name a cell's list validation takes its items from, if any."""
+        for rects, literals, f1, sheet in self._validations:
+            if literals is not None or not any(
+                r[0] == cell.sheet and r[1] <= cell.row <= r[3] and r[2] <= cell.col <= r[4]
+                for r in rects
+            ):
+                continue
+            text = str(f1 or "").strip().removeprefix("=").strip()
+            found = self.lookup_name(text, sheet)
+            if found is not None:
+                return found
         return None
 
 
@@ -388,8 +680,10 @@ def open_graph(workbook: Path, ir: Path | None, tmp: Path) -> WorkbookGraph:
             raise CalcInputError(f"cannot read {workbook}: {exc}") from exc
         if digest != graph.workbook_sha256:
             raise CalcInputError(f"IR {ir} does not match workbook {workbook} (sha256 differs)")
-        return graph
-    from xl_marinade.core.api import extract
+    else:
+        from xl_marinade.core.api import extract
 
-    tmp.mkdir(parents=True, exist_ok=True)
-    return WorkbookGraph.from_ir(extract(workbook, tmp / "ir.db"))
+        tmp.mkdir(parents=True, exist_ok=True)
+        graph = WorkbookGraph.from_ir(extract(workbook, tmp / "ir.db"))
+    graph.mark_relative(relative_names(workbook))
+    return graph
