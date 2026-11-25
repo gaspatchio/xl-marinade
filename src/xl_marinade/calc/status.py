@@ -18,16 +18,23 @@ order. Roots that do not change between policies can be propagated once per run
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Container, Iterable
+from collections.abc import Callable, Container, Iterable
 from dataclasses import dataclass
 
 from xl_marinade.calc.graph import WorkbookGraph
 from xl_marinade.calc.models import SEVERITY, CellRef, Reason, ReasonKind, Status
-from xl_marinade.calc.probes import ProbeKind, ProbePlan, ProbeReadings
+from xl_marinade.calc.probes import (
+    NUMBER_TEXT_NOT_CHECKED,
+    ProbeKind,
+    ProbePlan,
+    ProbeReadings,
+)
 
 MAX_REASONS_PER_KIND = 5
 DYNAMIC_NOT_CHECKED = "dynamic reference not checked"
 LOOKUP_TYPE = "lookup value type differs from keys"
+NAME_OFF_PATH = "engine #NAME? the trust run did not give: a function the engine lacks"
+DYNAMIC_LANDING = "reached through a dynamic reference, not probed"
 
 _NO_ROOT = CellRef("", 0, 0)
 _RANK: dict[Status, int] = {
@@ -42,6 +49,7 @@ _UNPLACED: dict[ProbeKind, tuple[ReasonKind, str]] = {
     ProbeKind.rounding: (ReasonKind.not_checked_value, "rounding not checked"),
     ProbeKind.comparison: (ReasonKind.not_checked_value, "comparison not checked"),
     ProbeKind.dynamic_ref: (ReasonKind.refused_pattern, DYNAMIC_NOT_CHECKED),
+    ProbeKind.number_text: (ReasonKind.refused_pattern, NUMBER_TEXT_NOT_CHECKED),
 }
 
 Label = dict[ReasonKind, tuple[Reason, ...]]
@@ -235,6 +243,64 @@ def unplaced_roots(plan: ProbePlan) -> dict[CellRef, list[Reason]]:
     return _sorted_roots(roots)
 
 
+class LandingCheck:
+    """Roots for the formula cells a dynamic reference reaches that the plan did not
+    probe (an ``INDIRECT`` whose text names no sheet, or any landing the plan did not
+    foresee).
+
+    Each such cell gets ``not_checked_path``, plus what each probe its formula would
+    have had gives when it cannot be placed (``not_checked_value`` for rounding and
+    comparisons, ``refused_pattern`` for a dynamic reference or a number-to-text
+    conversion). So a landing the plan missed is never less conservative than one it
+    probed. One walk per call goes upstream from all the landed cells together, each
+    cell once, and stops at cells the plan covers; a cell's reasons (and so its
+    probe kinds) are worked out once per run. ``visits`` counts the cells walked.
+    """
+
+    def __init__(
+        self,
+        graph: WorkbookGraph,
+        covered: Container[CellRef],
+        kinds: Callable[[CellRef], list[ProbeKind]],
+    ) -> None:
+        self._graph = graph
+        self._covered = covered
+        self._kinds = kinds
+        self._reasons: dict[CellRef, list[Reason]] = {}
+        self.visits = 0
+
+    def roots(self, dynamic_refs: dict[CellRef, list[CellRef]]) -> dict[CellRef, list[Reason]]:
+        """Roots for every cell reached through ``dynamic_refs`` (cell -> landed cells)."""
+        out: dict[CellRef, list[Reason]] = {}
+        seen: set[CellRef] = set()
+        stack = [target for targets in dynamic_refs.values() for target in targets]
+        while stack:
+            cur = stack.pop()
+            if cur in seen or cur in self._covered:
+                continue
+            seen.add(cur)
+            self.visits += 1
+            reasons = self._cell_reasons(cur)
+            if reasons:
+                out[cur] = list(reasons)
+            stack.extend(self._graph.precedents(cur))
+        return _sorted_roots(out)
+
+    def _cell_reasons(self, cell: CellRef) -> list[Reason]:
+        cached = self._reasons.get(cell)
+        if cached is not None:
+            return cached
+        found: list[Reason] = []
+        if self._graph.formula(cell) is not None:
+            found.append(Reason(ReasonKind.not_checked_path, cell, DYNAMIC_LANDING))
+            for kind in sorted(set(self._kinds(cell))):
+                reason_kind, detail = _UNPLACED[kind]
+                if reason_kind is not ReasonKind.not_checked_path:
+                    found.append(Reason(reason_kind, cell, detail))
+        self._reasons[cell] = found
+        return found
+
+
 def policy_roots(
     plan: ProbePlan,
     readings: ProbeReadings,
@@ -274,6 +340,9 @@ def policy_roots(
         _add(roots, cell, Reason(ReasonKind.engine_error, cell, engine_error_detail(code)))
     for cell in readings.type_mismatch:
         _add(roots, cell, Reason(ReasonKind.refused_pattern, cell, LOOKUP_TYPE))
+    for cell, details in readings.number_text.items():
+        for detail in sorted(details):
+            _add(roots, cell, Reason(ReasonKind.refused_pattern, cell, detail))
     if include_unplaced:
         for cell, reasons in unplaced_roots(plan).items():
             for reason in reasons:

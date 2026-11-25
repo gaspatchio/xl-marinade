@@ -6,17 +6,25 @@ import hashlib
 import json
 import re
 import sqlite3
-from bisect import bisect_left
+from bisect import bisect_left, insort
 from collections import defaultdict, deque
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 
-from xl_marinade.calc.formula_ast import SHEET
-from xl_marinade.calc.models import CellRef, _col_to_number
+from xl_marinade.calc.formula_ast import (
+    DYNAMIC_HINT,
+    SHEET,
+    built_range,
+    call_name,
+    parse_formula,
+)
+from xl_marinade.calc.models import ArrayRange, CellRef, _col_to_number
 from xl_marinade.calc.prepare import relative_names
 from xl_marinade.core.db_uri import connect_read_only
+from xl_marinade.core.new_arch.cell_identity import unpack as unpack_cell_id
+from xl_marinade.core.parser import ASTNode, BinaryNode, FunctionNode, RefNode, UnaryNode
 from xl_marinade.errors import CalcInputError
 
 StoredValue = float | str | bool | None
@@ -36,6 +44,10 @@ _WHOLE_RE = re.compile(
 )
 _MAX_ROW = 1_048_576
 _MAX_COL = 16_384
+# Functions whose arguments say where a reference lands.
+_DYNAMIC = frozenset({"OFFSET", "INDIRECT"})
+# Functions whose first argument is a reference they move within or from.
+_REFERENCE_FIRST = frozenset({"OFFSET", "INDEX"})
 
 # ``Name`` or ``Sheet!Name``. Excel names start with a letter of any script, ``_`` or
 # ``\``, then letters, digits, ``_``, ``.`` or ``\`` (``?`` is kept as the parser does).
@@ -185,6 +197,14 @@ class WorkbookGraph:
         self._sheet_key: dict[str, str] = {}
         self._extent: dict[str, tuple[int, int]] = {}
         self._array_cells: set[CellRef] = set()
+        # Array formulas: anchor -> its range, and each other cell of a range -> anchor.
+        self._arrays: dict[CellRef, ArrayRange] = {}
+        self._member_anchor: dict[CellRef, CellRef] = {}
+        # Dynamic arrays per sheet: their spill can grow past the stored range.
+        self._spills: dict[str, list[ArrayRange]] = defaultdict(list)
+        # Cells holding a dynamic reference -> what they read besides where it lands:
+        # references outside the dynamic calls, and the calls' arguments.
+        self._reads: dict[CellRef, list[_Rect]] = {}
         self._validations: list[tuple[list[_Rect], list[str] | None, str | None, str]] = []
         self._sheets: set[str] = set()
 
@@ -237,9 +257,14 @@ class WorkbookGraph:
         }
 
         for frm, to in conn.execute("SELECT from_cell_id, to_cell_id FROM cell_edges_internal"):
-            if frm in by_id and to in by_id:
-                self._direct[by_id[frm]].add(by_id[to])
-                self._direct_rev[by_id[to]].add(by_id[frm])
+            if frm not in by_id:
+                continue
+            # A reference to an empty cell has no row in ``cells``: its id still encodes
+            # the position, and a value can land there (an input, a spill).
+            target = by_id.get(to) or self._decode(to, sheet_names)
+            if target is not None:
+                self._direct[by_id[frm]].add(target)
+                self._direct_rev[target].add(by_id[frm])
 
         # Whole columns/rows are stored to row 1048576 / column 16384; index only the
         # extent a sheet uses, or one entry per bucket would fill memory.
@@ -291,6 +316,109 @@ class WorkbookGraph:
             ]
             literals = [str(v) for v in json.loads(lit)] if lit else None
             self._validations.append((rects, literals, f1, sheet))
+
+    def add_argument_edges(self) -> None:
+        """Make every cell an ``OFFSET`` or ``INDIRECT`` argument reads a precedent.
+
+        The extraction records only where the reference lands on the stored inputs, not
+        the cells deciding where it lands (rows, columns, height, width, the address
+        text), so a failure or an unexercised branch there would not reach the cell.
+        The reference an ``OFFSET`` starts from is not one of them: where it lands is
+        followed per policy by a probe. Each such cell also keeps what it reads apart
+        from where its references land (:meth:`read_precedents`). Called once, after
+        :meth:`mark_relative`: a name with a relative reference names different cells
+        from each cell using it, so it gives no fixed cells here.
+        """
+        max_row = {s: extent[0] for s, extent in self._extent.items()}
+        for cell, text in self._formula.items():
+            if DYNAMIC_HINT.search(text) is None:
+                continue
+            root = parse_formula(text)
+            if root is None:
+                continue
+            arguments, outside = _dynamic_reads(root)
+            if arguments is None:
+                continue
+            reads: list[_Rect] = []
+            for ref in arguments:
+                rects = self._ref_rects(cell, ref)
+                reads.extend(rects)
+                self._add_rect_edges(cell, rects, max_row)
+            for ref in outside:
+                reads.extend(self._ref_rects(cell, ref))
+            self._reads[cell] = reads
+
+    def _ref_rects(self, cell: CellRef, ref: str) -> list[_Rect]:
+        """The rectangles a reference in ``cell``'s formula covers (sheets as the
+        workbook spells them); empty when it is not one calc can read."""
+        rects: list[_Rect] = []
+        if (rect := _parse_rect(ref, cell.sheet)) is not None:
+            rects.append(rect)
+        elif (whole := _parse_whole(ref, cell.sheet)) is not None:
+            if (clipped := self._clip(whole)) is not None:
+                rects.append(clipped)
+        elif (
+            (found := self.lookup_name(ref, cell.sheet)) is not None
+            and found.kind == "cells"
+            and not found.relative
+        ):
+            rects.extend(found.rects)
+        out: list[_Rect] = []
+        for written, r1, c1, r2, c2 in rects:
+            sheet = self.sheet(written)
+            if sheet is not None:
+                out.append((sheet, r1, c1, r2, c2))
+        return out
+
+    def _add_rect_edges(self, cell: CellRef, rects: list[_Rect], max_row: dict[str, int]) -> None:
+        for sheet, r1, c1, r2, c2 in rects:
+            if (r1, c1) == (r2, c2):
+                target = CellRef(sheet, r1, c1)
+                if target != cell:
+                    self._direct[cell].add(target)
+                    self._direct_rev[target].add(cell)
+                continue
+            rect = (sheet, r1, c1, r2, c2)
+            self._ranges[cell].append(rect)
+            last = min(r2, max_row.get(sheet, 0))
+            for bucket in range(r1 // _BUCKET, last // _BUCKET + 1):
+                self._range_grid[(sheet, bucket)].append((rect, cell))
+
+    @staticmethod
+    def _decode(cell_id: int, sheet_names: dict[int, str]) -> CellRef | None:
+        sheet_id, row, col = unpack_cell_id(int(cell_id))
+        sheet = sheet_names.get(sheet_id)
+        if sheet is None or not (1 <= row <= _MAX_ROW and 1 <= col <= _MAX_COL):
+            return None
+        return CellRef(sheet, row, col)
+
+    def add_arrays(self, arrays: Iterable[ArrayRange]) -> None:
+        """Make every cell of each array formula's range a formula cell.
+
+        The extraction records only the anchor (the top-left cell, which holds the
+        formula); Excel computes the other cells with it, so each gets an edge from its
+        anchor and the anchor's family. A cell that holds a formula of its own is left
+        alone.
+        """
+        for array in arrays:
+            anchor = array.anchor
+            if anchor not in self._formula:
+                continue
+            self._arrays[anchor] = array
+            if array.dynamic:
+                self._spills[anchor.sheet].append(array)
+            for cell in array.cells()[1:]:
+                if cell in self._formula or cell in self._member_anchor:
+                    continue
+                self._member_anchor[cell] = anchor
+                self._family[cell] = self._family[anchor]
+                self._direct[cell].add(anchor)
+                self._direct_rev[anchor].add(cell)
+                cells = self._cells_by_sheet.setdefault(cell.sheet, [])
+                pos = (cell.row, cell.col)
+                i = bisect_left(cells, pos)
+                if i == len(cells) or cells[i] != pos:
+                    insort(cells, pos)
 
     def _name_def(
         self, name: str, owner: str | None, raw: tuple[str, ...], external: bool
@@ -349,8 +477,47 @@ class WorkbookGraph:
         return self._formula.get(cell)
 
     def formula_cells(self) -> list[CellRef]:
-        """Every formula cell, sorted."""
-        return sorted(self._formula)
+        """Every formula cell, sorted: cells holding a formula, and every other cell of
+        an array formula's range (see :meth:`add_arrays`)."""
+        return sorted([*self._formula, *self._member_anchor])
+
+    def formula_cells_on(self, sheet: str) -> list[CellRef]:
+        """Every cell on ``sheet`` that holds a formula, sorted."""
+        return [
+            ref
+            for r, c in self._cells_by_sheet.get(sheet, [])
+            if (ref := CellRef(sheet, r, c)) in self._formula
+        ]
+
+    def array_anchor(self, cell: CellRef) -> CellRef | None:
+        """The anchor of the array formula whose range holds ``cell`` (not itself the
+        anchor); None for any other cell."""
+        return self._member_anchor.get(cell)
+
+    def array_members(self, anchor: CellRef) -> list[CellRef]:
+        """The cells of an array formula's range other than its anchor, sorted."""
+        array = self._arrays.get(anchor)
+        if array is None:
+            return []
+        return [c for c in array.cells()[1:] if self._member_anchor.get(c) == anchor]
+
+    def may_spill_into(self, cell: CellRef) -> bool:
+        """True when a dynamic array could spill into ``cell`` for some policy: the cell
+        lies below or right of an anchor, outside the range the workbook stored, and
+        the workbook keeps nothing in it."""
+        if self.holds(cell):
+            return False
+        for array in self._spills.get(cell.sheet, ()):
+            anchor = array.anchor
+            if cell.row < anchor.row or cell.col < anchor.col:
+                continue
+            if cell.row > array.last_row or cell.col > array.last_col:
+                return True
+        return False
+
+    def arrays(self) -> list[ArrayRange]:
+        """Every array formula's range, by anchor."""
+        return [self._arrays[a] for a in sorted(self._arrays)]
 
     def stored(self, cell: CellRef) -> StoredValue:
         """The cached value Excel stored (errors as ``#CODE`` text); None when absent."""
@@ -359,6 +526,11 @@ class WorkbookGraph:
     def has_stored(self, cell: CellRef) -> bool:
         """True when the IR holds a stored value for the cell."""
         return cell in self._has_stored
+
+    def holds(self, cell: CellRef) -> bool:
+        """True when the workbook keeps something in the cell: a stored value, a
+        formula, or a place in an array formula's range."""
+        return cell in self._has_stored or cell in self._formula or cell in self._member_anchor
 
     def family(self, cell: CellRef) -> str:
         """Sheet plus relative (R1C1) formula: copied formulas share a family."""
@@ -425,6 +597,30 @@ class WorkbookGraph:
                         seen.add(ref)
                         out.append(ref)
         return sorted(out)
+
+    def is_dynamic(self, cell: CellRef) -> bool:
+        """True when the cell's formula holds a dynamic reference: ``OFFSET``,
+        ``INDIRECT``, or a range built by a call."""
+        return cell in self._reads
+
+    def read_precedents(self, cell: CellRef) -> frozenset[CellRef]:
+        """What a cell with a dynamic reference reads apart from where its references
+        land: the references outside the dynamic calls and the calls' arguments. Unlike
+        :meth:`precedents` this leaves out the reference an ``OFFSET`` starts from and
+        the cells the references landed on with the stored inputs, which the
+        extraction records as edges. For any other cell, its precedents."""
+        reads = self._reads.get(cell)
+        if reads is None:
+            return self.precedents(cell)
+        out: set[CellRef] = set()
+        for rect in reads:
+            sheet, r1, c1, r2, c2 = rect
+            if (r1, c1) == (r2, c2):
+                out.add(CellRef(sheet, r1, c1))
+            else:
+                out.update(self._cells_in_rect(rect))
+        out.discard(cell)
+        return frozenset(out)
 
     def precedents(self, cell: CellRef) -> frozenset[CellRef]:
         """Direct cell edges plus every IR cell inside each range the formula reads."""
@@ -662,6 +858,53 @@ class WorkbookGraph:
         return None
 
 
+def _dynamic_reads(root: ASTNode) -> tuple[list[str] | None, list[str]]:
+    """``(arguments, outside)`` for a formula with a dynamic reference: the references
+    inside the arguments of each ``OFFSET``, ``INDIRECT`` and range built by a call
+    (except where an ``OFFSET`` or a built range starts from, written plainly or as an
+    ``INDEX``'s range there: its probe follows where it lands), and the references
+    outside those calls. ``arguments`` is None when the formula holds no dynamic
+    reference."""
+    arguments: list[str] = []
+    outside: list[str] = []
+    dynamic = False
+
+    def collect(node: ASTNode, reference: bool) -> None:
+        # ``reference``: the node is where a reference starts from.
+        if isinstance(node, RefNode):
+            if not reference:
+                arguments.append(node.ref)
+        elif isinstance(node, FunctionNode):
+            name = call_name(node.name)
+            for i, arg in enumerate(node.args):
+                starts = name == "OFFSET" or (reference and name in _REFERENCE_FIRST)
+                collect(arg, i == 0 and starts)
+        elif isinstance(node, BinaryNode):
+            collect(node.left, False)
+            collect(node.right, False)
+        elif isinstance(node, UnaryNode):
+            collect(node.operand, False)
+
+    stack: list[ASTNode] = [root]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, RefNode):
+            outside.append(node.ref)
+        elif isinstance(node, FunctionNode):
+            name = call_name(node.name)
+            if built_range(node.name) is not None or name in _DYNAMIC:
+                dynamic = True
+                for i, arg in enumerate(node.args):
+                    collect(arg, i == 0 and name in _REFERENCE_FIRST)
+            else:
+                stack.extend(node.args)
+        elif isinstance(node, BinaryNode):
+            stack.extend([node.left, node.right])
+        elif isinstance(node, UnaryNode):
+            stack.append(node.operand)
+    return (arguments if dynamic else None), outside
+
+
 def open_graph(workbook: Path, ir: Path | None, tmp: Path) -> WorkbookGraph:
     """Load the graph for ``workbook``, reusing ``ir`` when given.
 
@@ -686,4 +929,5 @@ def open_graph(workbook: Path, ir: Path | None, tmp: Path) -> WorkbookGraph:
         tmp.mkdir(parents=True, exist_ok=True)
         graph = WorkbookGraph.from_ir(extract(workbook, tmp / "ir.db"))
     graph.mark_relative(relative_names(workbook))
+    graph.add_argument_edges()
     return graph

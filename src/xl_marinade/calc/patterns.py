@@ -19,6 +19,7 @@ from loguru import logger
 
 from xl_marinade.calc.formula_ast import (
     ALWAYS_ARRAY,
+    ENGINE_LACKS,
     ERROR_CODES,
     SHEET,
     UNKNOWN,
@@ -52,6 +53,7 @@ UNPARSEABLE = "unparseable formula"
 NOT_HELD = "external reference not held"
 INPUT_KEYS = "approximate lookup on input-dependent keys"
 RELATIVE_NAME = "name with a relative reference"
+ENGINE_LACKS_PREFIX = "function IronCalc does not implement: "
 
 _MAX_ROW = 1_048_576
 _MAX_COL = 16_384
@@ -359,6 +361,10 @@ def _formula_reasons(scan: _Scan, cell: CellRef, text: str) -> set[str]:
         if not isinstance(node, FunctionNode):
             continue
         name = function_name(node.name)
+        if name in ENGINE_LACKS:
+            # The engine's #NAME? is an Excel error code: an error handler around the
+            # call turns it into a plausible value no trust run can tell from Excel's.
+            found.add(f"{ENGINE_LACKS_PREFIX}{name}")
         if name in _RANDOM:
             found.add(name)
         if name in _CLOCK and scan.as_of is None:

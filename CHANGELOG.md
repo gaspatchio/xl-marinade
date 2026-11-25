@@ -94,6 +94,89 @@ schema is a versioned public contract.
   type, so `1` no longer matches a cell holding the text `001`. Lists fed by a formula
   (`INDIRECT`, `OFFSET`, cascading dropdowns) or by a table column are still not
   checked; the guide now says so.
+- **`marinade calc`: a function IronCalc lacks is refused by name.** IronCalc 0.9.1
+  answers `#NAME?` for `AGGREGATE`, `BAHTTEXT` and 25 other Excel functions, and
+  `#NAME?` is an Excel error code too, so an `IFERROR`, `IF(ISERROR(…))` or
+  `IF(ISNUMBER(…))` around the call (the `AGGREGATE(14,6,…)` "largest ignoring errors"
+  idiom) came back `ok` with the error arm's value where Excel computes a number. Such a
+  call is now a refused pattern, `function IronCalc does not implement: AGGREGATE`; the
+  list is pinned to the installed IronCalc by a test. A `#NAME?` that appears in an output
+  for a policy, where the trust run had none, is an `engine_error`.
+- **`marinade calc`: an `INDIRECT` address off the grid is refused.** IronCalc reads
+  `INDIRECT("Rates!B0")` as 0 (and a range from row 0 as starting on row 1) where Excel
+  gives `#REF!`, so a policy just below a table's first row came back `ok` with 0. An
+  address on row 0, below row 1,048,576 or right of column `XFD` now counts as an unread
+  dynamic reference (`dynamic reference not checked`).
+- **`marinade calc`: probes compute what their cells compute.** Under `--as-of`, a
+  probe lifted from a formula holding `TODAY()` or `NOW()` read the machine clock while
+  the cell read the as-of date, so branch readings, `paths.csv` and statuses followed
+  the day the run happened (an arm the stored inputs never took could count as
+  exercised); probes now read the as-of date too. calc read `&` looser than the
+  comparisons, the reverse of Excel, so a probe of `IF(Sex&Smoker="MN",…)` computed
+  `Sex&(Smoker="MN")`, read "error" for every input set and let the untaken arm count as
+  exercised; calc now parses with Excel's precedence (the extractor's parser is
+  unchanged). A sheet whose name starts with a digit (`2024`, `1Q`) was not quoted in
+  probes, so every probe on it gave `#ERROR!` and its outputs were refused; probe
+  references now quote such names, and names that read as a cell, an R1C1 reference or
+  a boolean.
+- **`marinade calc`: `XLOOKUP` and `XMATCH` are path-checked like `MATCH`.** They had no
+  lookup-edge probe, so a policy landing on the table's first or last row, or beyond it,
+  came back `ok` where the same `VLOOKUP` or `MATCH` came back `unverified_path`; and
+  `XLOOKUP`'s `if_not_found` arm counted as checked although the trust run never used
+  it. Both now get the edge probe (exact, next smaller, next larger and wildcard
+  matches; first-to-last and last-to-first search), and `XLOOKUP` with `if_not_found`
+  gets a `found`/`not_found` branch that guards the probes inside that argument.
+- **`marinade calc`: number-to-text conversions are refused where Excel's text can
+  differ.** IronCalc 0.9.1 rounds `TEXT`, `FIXED` and `DOLLAR` ties the other way
+  (`TEXT(1234.5,"#,##0")` gives `1,234`, Excel `1,235`; `FIXED(1.005,2)` gives `1.00`,
+  Excel `1.01`) and writes numbers turned into text with up to 17 significant digits
+  where Excel writes 15 (`"t="&(7/12)`, `VALUETOTEXT`, `REGEXTEST`), and it drops the
+  minus sign of `TEXT(-1,"0")` or `TEXT(-0.01,"0%")`; these came back `ok`. Per policy,
+  a value is now refused (`number-to-text at a decimal tie`, `number-to-text of a
+  negative value that rounds to zero or one unit`, `number-to-text where Excel's
+  15-digit text differs`, and `criterion built with & from a non-integer number` for
+  `SUMIF`-family criteria). A range joined by `TEXTJOIN` or `CONCAT` is read cell by
+  cell, each cell probed once and after every other probe, so a range of text or
+  integer constants stays `ok` and joins never crowd branch checks out of the cap. A `TEXT` format calc cannot
+  read is `number-to-text not checked`. Integers and short decimals off a tie stay
+  `ok`. Correcting the value
+  instead of refusing it is planned for 0.9.
+- **`marinade calc`: every cell of an array formula is a formula cell.** Excel stores an
+  array formula (a legacy Ctrl+Shift+Enter block or a dynamic-array spill) only on its
+  top-left cell; calc treated the other cells as constants. They were never compared in
+  the trust run, a refusal, failure or unplaced probe of the formula did not reach them
+  or the cells reading them, and a map field or selector on one was accepted and
+  silently ignored. So a cell of a refused array came back `ok`, and a wrong value in a
+  non-anchor cell on the stored inputs came back `ok` too. Each such cell now reads its
+  array's formula in the graph, is compared in the trust run (so `formula_cells`,
+  `checked` and `share` in `trust_report.json` count them), is read per policy when a
+  `TEXTJOIN` or `CONCAT` joins it (as are the empty cells a dynamic array can spill
+  into), and is an error as an input target. A dynamic array that spills past the range the workbook stored, for a policy,
+  carries its formula's status to the cells it spills into.
+- **`marinade calc`: dynamic references are followed through their arguments, built
+  range ends and landing cells.** Three gaps let a value come back `ok` where Excel
+  computes another. The cells deciding where an `OFFSET` or `INDIRECT` points (rows,
+  columns, height, width, the address text) were not precedents, so a failure or an
+  untried branch there never reached the output. A range ending in an `OFFSET` or
+  `INDIRECT` call (`SUM(C5:OFFSET(C5,Term-1,0))`, `B1:INDIRECT(…)`) was read as a
+  function named `C5:OFFSET` and never followed. And the cells a policy landed on away
+  from the stored inputs' landing cell were never probed, so their branches, lookups
+  and roundings went unchecked unless those cells were requested too, which made asking
+  for fewer outputs give a less conservative status. Now argument cells are precedents
+  (including for the input-dependent-keys scan), built ranges are probed at both ends,
+  and every formula cell on the sheet an `OFFSET` starts from or an `INDIRECT` names
+  literally is probed, so the trust run and `--check-against` input sets exercise it. A
+  check set vouches only for the cells its own references landed on: before, it also
+  credited the cell an `OFFSET` starts from and the stored inputs' landing cell, even
+  when it landed elsewhere, so a policy landing there could come back `ok` on an arm
+  nothing had checked.
+  An `INDIRECT` whose text names no sheet is not probed where it lands: a landing on
+  formula cells gives `not_checked_path` (`not_checked_value` for their roundings and
+  comparisons), never `ok`. Books with `OFFSET` or `INDIRECT` get more probes (a large
+  `OFFSET` projection can need a higher `--probe-cap`: `trust_report.json` now reports
+  `probes_unplaced` and `probes_over_cap`, and the command prints the cap needed), and
+  `paths.csv` lists the cells each policy's references reached, not the stored inputs'
+  landing cell.
 
 ## [0.8.0] - 2026-11-24
 

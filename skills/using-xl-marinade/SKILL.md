@@ -212,7 +212,9 @@ marinade values book.xlsx --variables vars.json [--map map.json] -o stored/
   (sheet-scoped) name is written `'Sheet'!Name`, and a bare name that a sheet
   also defines is refused as ambiguous. A whole column (`Calc!B:B`) covers the
   rows the sheet uses; a target covering no cells (a formula or `OFFSET` name, a
-  constant) is an error.
+  constant) is an error. Every cell of an array formula's range (legacy or
+  dynamic/spill) is a formula cell: compared in the trust run, carrying the
+  formula's status, and an error as a map or selector target.
 - **Files out** in `-o`: `results.csv`, `rows.csv`, `paths.csv`,
   `trust_report.json`, `run.json`. Known outputs are cleared at the start of a run.
 - **Read `trust_report.json` first** (`share` reproduced, `failures`,
@@ -224,8 +226,17 @@ marinade values book.xlsx --variables vars.json [--map map.json] -o stored/
   branch/lookup probe), `ok`. Only `ok` can be used as is; the `reasons` column
   names the root cell. `values` rows are `stored`.
 - Only reproduced cells vouch for their formula family's branches; branches inside
-  an arm not evaluated count for nothing. Probes go upstream of the requested
-  outputs only, so fewer outputs can mean a more conservative status.
+  an arm not evaluated count for nothing. Lookups (`XLOOKUP`/`XMATCH` included)
+  must have hit the first row, last row and not-found in the trust run to be `ok`
+  there. Probes go upstream of the requested outputs only, so fewer outputs can
+  mean a more conservative status.
+- `OFFSET`/`INDIRECT` (and ranges ending in a call, `C5:OFFSET(...)`) are followed per
+  policy; their argument cells are precedents; every formula cell on the sheet an
+  `OFFSET` starts from or an `INDIRECT` text names literally is probed. An `INDIRECT`
+  naming no sheet that lands on unprobed formulas gives `not_checked_path` (and
+  `not_checked_value` for their roundings/comparisons) — never `ok`. Large `OFFSET`
+  projections can exceed `--probe-cap` (default 50,000): check `probes_over_cap` in
+  `trust_report.json`; stderr names the cap that places every probe.
 - **Refused even when they reproduce:** approximate lookups on unsorted, mixed,
   whole-column or non-plain-text keys (and `XLOOKUP`/`XMATCH` binary search);
   implicit intersection on a multi-cell name or on a range outside a function
@@ -235,7 +246,17 @@ marinade values book.xlsx --variables vars.json [--map map.json] -o stored/
   formulas (an error literal such as `#N/A` typed into a formula is a known
   cause); external references that cannot be held (ranges, no cached value,
   names pointing into another workbook); approximate lookups on input-dependent
-  keys. Per policy: `lookup value type differs from keys` (text against numbers).
+  keys; a call to a function IronCalc lacks (`AGGREGATE`, `BAHTTEXT`, the `CUBE…`
+  functions and a few more; the detail names it). Per policy: `lookup value type
+  differs from keys` (text against numbers); an `INDIRECT` address off the grid
+  (row 0) is `dynamic reference not checked`; number-to-text where the engine's
+  text can differ from Excel's (`number-to-text at a decimal tie` for
+  `TEXT`/`FIXED`/`DOLLAR`; `… of a negative value that rounds to zero or one unit`
+  for `TEXT`; `… where Excel's 15-digit text differs` for `&`, `CONCAT`/`TEXTJOIN`
+  (ranges read cell by cell) and text functions; `criterion built with & from a
+  non-integer number` for `SUMIF`-family criteria). Static, for every policy:
+  `number-to-text not checked` (unreadable or non-literal `TEXT` format, a range
+  given to a text function, array formulas, `LET`, `--probe-cap`).
 - **Exit codes:** 0 ok, 1 error, 5 `[calc]` missing, 6 workbook refused outright
   (1904 dates, precision as displayed, Strict Open XML).
 - A pass on the stored inputs proves only the paths those inputs take; never

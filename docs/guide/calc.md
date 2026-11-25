@@ -78,7 +78,9 @@ sheet's definition of a name first, and the workbook's only when the sheet has n
 
 `id_field` names the policies column that holds the id (default `id`). It may also appear
 in `fields`, so the id is written into a workbook cell as well. Each target must be a cell
-or defined name that holds a constant; mapping onto a formula is an error. Before each
+or defined name that holds a constant; mapping onto a formula is an error, and so is
+mapping onto any cell of an array formula's range (Excel cannot hold a constant there).
+The same holds for a `check.json` selector. Before each
 input set, every mapped input is reset to its stored value. Values are converted to the
 target cell's stored type, and ISO dates become Excel serials. A value outside the cell's
 data-validation list refuses that input set's outputs.
@@ -182,7 +184,12 @@ checked points, 100% came back `ok`, and all of them were correct.
    `--check-against` input set.
 5. Add probe cells on a hidden sheet that report which branch, lookup row, rounding
    input and dynamic reference each input set reaches. Probes go only into cells upstream
-   of the requested outputs, and never into a cell that is already refused.
+   of the requested outputs and into the cells a dynamic reference among them can land
+   on (see [Statuses](#statuses)), and never into a cell that is already refused. A probe is
+   the part of the cell's formula it reports on, lifted onto that sheet so it computes
+   what the cell computes: references keep their sheet (quoted where Excel needs it,
+   as for `'2024'`), operators keep Excel's precedence (`A&B="x"` is `(A&B)="x"`), and
+   under `--as-of` `TODAY()` and `NOW()` read the as-of date, as the cells do.
 6. For each policy: reset, set the inputs, recalculate, read outputs and probes.
 7. Walk the graph from each output back to its roots and assign a status.
 
@@ -199,8 +206,8 @@ All in the `-o` directory, UTF-8, `\n` line endings, no timestamps.
 |---|---|
 | `results.csv` | `policy_id`, `output` (`Sheet!A1`), `value`, `status`, `reasons`. One row per policy and output cell. |
 | `rows.csv` | With `--variables`: `policy`, `variable`, `period`, `value`, `status`, `reasons`. |
-| `paths.csv` | `policy_id`, `cell`, `family`, `kind`, `ordinal`, `outcome`, `exercised`. The branch or lookup edge each policy took; `ordinal` tells apart several probes of one kind in one cell; `exercised` is `true` when the trust run took it too. |
-| `trust_report.json` | `formula_cells`, `checked`, `reproduced`, `share`, `failures`, `refused_patterns`, `settings` (with `settings.refused`), `held_external_links`, `check_against` (`input_sets`, and `mismatches` with `input_set`, `cell`, `detail`, `stored`, `computed`, `relative_difference`). |
+| `paths.csv` | `policy_id`, `cell`, `family`, `kind`, `ordinal`, `outcome`, `exercised`. The branch or lookup edge each policy took, in the cells that fed its outputs: through the cells its dynamic references landed on for that policy, not the cell an `OFFSET` starts from or where it landed with the stored inputs; `ordinal` tells apart several probes of one kind in one cell; `exercised` is `true` when the trust run took it too. |
+| `trust_report.json` | `formula_cells`, `checked`, `reproduced`, `share`, `failures`, `refused_patterns`, `settings` (with `settings.refused`), `held_external_links`, `check_against` (`input_sets`, and `mismatches` with `input_set`, `cell`, `detail`, `stored`, `computed`, `relative_difference`), `probes_unplaced` (probes that could not be placed, for any reason) and `probes_over_cap` (those left out only because `--probe-cap` was reached). |
 | `run.json` | `ironcalc_version`, `marinade_version`, `workbook_sha256`, `tolerance`, `as_of`, `probe_cap`, `probes_unplaced`, and per variable its range, `period_start` and the cell period 0 falls on. |
 
 `marinade values` writes `rows.csv` and `run.json` (variables only). Its rows carry status
@@ -232,31 +239,79 @@ Details worth knowing:
   with `t` exactly `0` stays `ok`. Only sides that differ by more than nothing and at
   most about 1e-12 relative are `near_comparison`. The same holds for an approximate
   lookup whose value equals its matched key.
-- Branches are `IF`, `IFS`, `SWITCH`, `CHOOSE`, `IFERROR` and `IFNA`. A branch counts as
-  exercised if any cell in the same canonical formula family took it in the trust run.
-  Lookups count per family too, but the table's first row, last row and "beyond the end"
-  must each have been hit.
+- Branches are `IF`, `IFS`, `SWITCH`, `CHOOSE`, `IFERROR` and `IFNA`, and an `XLOOKUP`
+  with an `if_not_found` argument (outcomes `found` and `not_found`; the argument counts
+  only when nothing was found). A branch counts as exercised if any cell in the same
+  canonical formula family took it in the trust run. Lookups (`VLOOKUP`, `HLOOKUP`,
+  `MATCH`, `LOOKUP`, `XLOOKUP` and `XMATCH`, in every match and search mode calc accepts)
+  count per family too, but the table's first row, last row and "beyond the end" must
+  each have been hit. For `XLOOKUP` and `XMATCH` first and last are positions in the
+  lookup array, whichever way the search runs.
 - Only evidence that was checked counts. A cell that failed the trust run, or is a
   refused pattern, exercises nothing for its family. A branch or lookup inside an arm
   the formula did not evaluate (the `FALSE` arm of an `IF` that went `TRUE`) is not
   exercised by the trust run and is not a path a policy took. A `--check-against` input
-  set exercises only the branches and lookups upstream of the outputs it was compared on.
+  set exercises only the branches and lookups upstream of the outputs it was compared on,
+  following its own dynamic references: the cells an `OFFSET` or `INDIRECT` landed on
+  for that set count, the cell an `OFFSET` starts from and the cell it lands on with the
+  stored inputs do not (unless the set landed there).
 - Because probes are placed only upstream of the requested outputs, asking for fewer
   outputs can make a status more conservative: a family member that is not upstream of
-  any requested output is not probed, so it cannot vouch for the branches it took.
+  any requested output is not probed, so it cannot vouch for the branches it took. This
+  holds while every probe fits under `--probe-cap`; past it, more outputs means more
+  probes competing for the cap, and a status can become more conservative with more
+  outputs too.
 - A probe that cannot be placed (cap hit, or inside `LET`/`LAMBDA`/an array context)
   never yields `ok`: a branch or lookup probe gives `unverified_path`, a rounding or
-  comparison probe `uncertain`, and a dynamic-reference probe `refused`.
+  comparison probe `uncertain`, and a dynamic-reference or number-to-text probe
+  `refused`.
 - `OFFSET` and `INDIRECT` are followed to where they point for each input set; if that
   cannot be read, the outputs behind it are refused (`dynamic reference not checked`).
+  So is a range whose end is a call, such as `SUM(C5:OFFSET(C5,Term-1,0))` or
+  `B1:INDIRECT(...)`: it covers the smallest rectangle holding both ends, read per input
+  set; one whose ends lie on two sheets is refused (Excel gives `#VALUE!` there).
+  IronCalc 0.9.1 answers `#VALUE!` for a range ending in `INDEX` (`A1:INDEX(...)`) and
+  `#ERROR!` for one whose start names its sheet (`Proj!C5:OFFSET(...)`), so the trust
+  run refuses those. The cells that decide where a reference points (`OFFSET`'s
+  rows, columns, height and width, the cells `INDIRECT`'s text is built from) are
+  precedents of the cell, so a failure or an untried branch there reaches it.
   An `OFFSET` whose base is a sheet's own (sheet-scoped) name is always refused this
   way, and a branch, lookup, rounding or comparison on such a name is never `ok`: the
-  probe sheet cannot read the name as the formula's sheet does.
+  probe sheet cannot read the name as the formula's sheet does. Such an `OFFSET` brings
+  no sheet into the landing region below, and a name with a relative reference counts
+  as no fixed cells among the cells that decide where a reference points.
+- The cells a dynamic reference lands on are checked like cells upstream of an output.
+  Every formula cell on the sheet an `OFFSET` starts from (or a built range lies on),
+  or that an `INDIRECT` text names literally (`"Rates!B"&row`), is probed, with
+  everything upstream of it, so the trust run and `--check-against` input sets exercise
+  their branches and lookups and a policy landing on an untried arm is
+  `unverified_path`. These probes count toward `--probe-cap` after those of the
+  requested outputs. An `INDIRECT` whose text names no sheet (`"A"&row`, or a sheet
+  name read from a cell) can land anywhere, so its landing cells are not probed: each
+  formula cell it lands on that no probe covers, and each such cell upstream of it,
+  gives `not_checked_path` (`reached through a dynamic reference, not probed`), plus
+  what its own probes give when they cannot be placed (`not_checked_value` for a
+  rounding or comparison, `refused` for a dynamic reference or number-to-text). A
+  landing on a constant needs no check.
+  An `INDIRECT` text that addresses a cell off the grid (row 0, below row 1,048,576 or
+  right of column `XFD`) counts as unread: Excel gives `#REF!` there, while IronCalc
+  0.9.1 reads `Rates!B0` as 0.
 - An error code Excel does not have (IronCalc's `#N/IMPL!`, `#ERROR!`, `#CIRC!` and the
   like) in an output or in a probe is an `engine_error` for that policy, so the output is
   `refused`, even when an `IFERROR` around it would have turned it into a plausible
   value. Excel's own error codes (`#N/A`, `#DIV/0!`, `#VALUE!` and the rest) are values
-  like any other.
+  like any other, with one exception: a `#NAME?` in an output for a policy, where the
+  trust run had none in that cell, is an `engine_error`. Excel's `#NAME?` comes from
+  the formula's text, not its inputs, so one only a new policy reaches is a function
+  the engine lacks on an arm the trust run never took.
+- Every cell of an array formula's range is a formula cell, whether a legacy
+  (Ctrl+Shift+Enter) array or a dynamic array that spills. Excel stores the formula on
+  the range's top-left cell only; calc reads the other cells as computed by it. Each is
+  compared in the trust run (and counted in `formula_cells`), and each carries the
+  formula's status: a refusal, failure or probe that could not be placed (every probe
+  inside an array formula) reaches it and every cell reading it. When a policy makes a
+  dynamic array spill past the range the workbook stored (`SEQUENCE(n)` with a larger
+  `n`), the cells it spills into carry the formula's status too.
 - A passing trust run proves only the paths the stored inputs take. That is what
   `unverified_path` and `--check-against` are for.
 
@@ -301,8 +356,31 @@ the sheet uses.
 
 The files on disk do grow with the policies. `paths.csv` has one row per policy per
 branch or lookup probe it reached, which for an actuarial projection can be over a
-thousand rows per policy (about 1.2 million rows and 126 MB for 1,000 lifelib BasicTerm_S
-policies). Leave room in `-o` for it.
+thousand rows per policy: about 1.2 million rows and 126 MB for 1,000 lifelib
+BasicTerm_S policies. An `OFFSET` that sums over a projection adds more, since every row
+it covers fed the output. Leave room in `-o` for it.
+
+### `--probe-cap`
+
+`--probe-cap` (default 50,000) bounds the probe cells a run places. A probe left out
+because the cap was reached never yields `ok` (see [Statuses](#statuses)), so a run
+that hits the cap is more conservative, not wrong. When it happens, `probes_over_cap`
+in `trust_report.json` counts the probes left out, and `marinade calc` prints one line
+on stderr with the cap that would place them all:
+
+```
+warning: 73006 probes did not fit under --probe-cap 50000, so the values behind them
+are not ok; rerun with --probe-cap 123006 to place them all
+```
+
+`OFFSET` projections use the cap fastest. Every formula cell on the sheet an `OFFSET`
+starts from is probed, with everything upstream of it, so a projection of 3,000 rows by
+40 columns needs well over 50,000 probes. Those landing-region probes are planned after
+the probes of the requested outputs' own cells, in sheet, row and column order, so the
+end of the projection is the first to go past the cap: policies landing late in the
+term come back `uncertain` or `unverified_path` with `not checked` reasons. Raise the
+cap to the number the warning gives; a larger cap costs memory and run time roughly in
+proportion, and `paths.csv` grows with the probes each policy reaches.
 
 A run that stops part-way (a bad value in `policies.csv`, for instance) deletes
 `results.csv`, `paths.csv` and `rows.csv`, so partial results never look complete.
@@ -329,10 +407,41 @@ the next. They are refused even when the trust run reproduces them. The `detail`
 | `unparseable formula` | The formula could not be parsed. Error literals typed into a formula, such as `#N/A`, are a known source of these. |
 | `external reference not held` | The formula reads an external reference the engine copy cannot hold: a range, one with no cached value (IronCalc returns `#ERROR!` or `#REF!` for those), or a defined name that points into another workbook. |
 | `approximate lookup on input-dependent keys` | An approximate lookup whose key cells change with a mapped input (an input cell, or a formula that depends on one). The keys may be sorted for the stored inputs and not for the next policy. |
+| `function IronCalc does not implement: NAME` | The formula calls an Excel function IronCalc 0.9.1 does not have: `AGGREGATE`, `BAHTTEXT`, `CALL`, the `CUBE…` functions, `DBCS`, `DETECTLANGUAGE`, `EUROCONVERT`, `FIELDVALUE`, `FILTERXML`, `GETPIVOTDATA`, `GROUPBY`, `IMAGE`, `JIS`, `PHONETIC`, `PIVOTBY`, `REGISTER.ID`, `RTD`, `SQL.REQUEST`, `STOCKHISTORY`, `TRANSLATE`, `WEBSERVICE`. The engine answers `#NAME?`, an Excel error code, so an `IFERROR`, `ISERROR` or `ISNUMBER` around the call would turn it into a plausible value. |
 
-One more refusal is per policy, read from the probes: `lookup value type differs from
-keys`, when an approximate lookup matches a key of a different type than its lookup value
-(text against numbers). Excel finds nothing there (`#N/A`); IronCalc 0.9.1 returns a row.
+Some refusals are per policy, read from the probes:
+
+| Detail | What triggers it |
+|---|---|
+| `lookup value type differs from keys` | An approximate lookup matches a key of a different type than its lookup value (text against numbers). Excel finds nothing there (`#N/A`); IronCalc 0.9.1 returns a row. |
+| `number-to-text at a decimal tie` | `TEXT`, `FIXED` or `DOLLAR` rounds a number that sits within about 1e-12 of a tie at the format's decimals: `TEXT(1234.5,"#,##0")`, `TEXT(0.0125,"0.0%")`, `FIXED(1.005,2)`. Excel rounds the tie away from zero on the 15-digit value (`1,235`); IronCalc 0.9.1 rounds the binary value and can land on the other side (`1,234`). At an exact binary tie `FIXED` and `DOLLAR` happen to agree with Excel; they are refused all the same. |
+| `number-to-text of a negative value that rounds to zero or one unit` | `TEXT` with a one-section format shows a negative number that rounds to zero or to one unit of its last place: `TEXT(-0.01,"0%")`, `TEXT(-1,"0")`, `TEXT(-0.4,"0")`. Excel keeps the minus sign (`-1%`, `-1`, `-0`); IronCalc 0.9.1 drops it. A format with a negative section (`0;(0)`), `FIXED` and `DOLLAR` are not affected. |
+| `number-to-text where Excel's 15-digit text differs` | A number becomes text through `&`, `CONCAT`, `CONCATENATE`, `TEXTJOIN` or a text function (`LEN`, `LEFT`, `MID`, `SUBSTITUTE`, `EXACT`, `FIND`, `VALUETOTEXT`, the `REGEX` functions, `TEXTSPLIT` and the like), and its text needs more than 15 significant digits (`7/12`, `0.1+0.2`) or the number lies outside 0.0001 to 1e15, where Excel may write scientific notation. Excel writes at most 15 significant digits; IronCalc up to 17. Also `TEXT`, `FIXED` or `DOLLAR` showing more than 15 digits. |
+| `criterion built with & from a non-integer number` | A `SUMIF`, `SUMIFS`, `COUNTIF`, `COUNTIFS`, `AVERAGEIF`, `AVERAGEIFS`, `MAXIFS` or `MINIFS` criterion such as `"<="&x` where `x` is not a whole number. Excel compares against the 15-digit text it wrote. |
+
+Integers, and decimals with up to 15 significant digits that sit on no tie, stay `ok`.
+`TEXT` with a date or time format needs no check, and a format's third section (shown
+only for an exact zero) does not decide the rounding. A range joined by `TEXTJOIN`,
+`CONCAT` or `CONCATENATE` is read cell by cell: constants that are text, booleans,
+blanks or numbers Excel writes as the engine does need nothing; formula cells (every
+cell of an array formula's range among them, and the empty cells below or right of a
+dynamic array that its spill can grow into), mapped inputs and other numbers are read
+per policy. Each such cell is probed once, however
+many joins read it, and these probes are planned after every other probe, so they
+never take `--probe-cap` room from a branch or lookup check; a join whose cells did not
+fit under the cap is refused as `number-to-text not checked` for its own cell and what
+depends on it, nothing else. A function result joined as text (`XLOOKUP`, `INDEX`,
+`IF`) is read like a number when it is one value; when it is an array, or the join
+names a range with more than 1,000 cells to read, or a sheet's own name or a name with
+a relative reference, the join is refused as
+`number-to-text not checked` for the policies that evaluate it, not for those whose
+branch skips it.
+
+A conversion calc cannot check at all is refused for every policy as `number-to-text
+not checked`, whatever the policy: a `TEXT` format that is not literal text, or that
+calc cannot read (`General`, `@`, scientific, fractions, conditions, first two sections
+that round differently); a range given to a text function such as `LEN`; or a
+conversion inside an array formula, `LET`/`LAMBDA`, or beyond `--probe-cap`.
 
 ## Fixed points
 

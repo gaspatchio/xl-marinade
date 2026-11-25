@@ -268,6 +268,22 @@ def calc(
         _err.print(f"[red]error:[/] {escape(str(exc))}")
         raise typer.Exit(code=1)
     _err.print(f"[green]wrote[/] {result.results_csv.parent}")
+    _warn_probe_cap(result.trust_report, probe_cap)
+
+
+def _warn_probe_cap(trust_report: Path, cap: int) -> None:
+    """One line on stderr when probes did not fit under ``--probe-cap``."""
+    try:
+        over = int(json.loads(trust_report.read_text(encoding="utf-8")).get("probes_over_cap", 0))
+    except (OSError, ValueError, TypeError):
+        return
+    if over <= 0:
+        return
+    _err.print(
+        f"[yellow]warning:[/] {over} probes did not fit under --probe-cap {cap}, so the "
+        f"values behind them are not ok; rerun with --probe-cap {cap + over} to place them all",
+        soft_wrap=True,
+    )
 
 
 def main() -> None:

@@ -24,6 +24,8 @@ import math
 import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
+from datetime import date
+from decimal import Decimal
 from enum import StrEnum
 from typing import Protocol
 
@@ -32,17 +34,23 @@ from loguru import logger
 from xl_marinade.calc.engine import Engine, EngineValue
 from xl_marinade.calc.formula_ast import (
     ALWAYS_ARRAY,
+    DYNAMIC_HINT,
     END,
     ERROR_CODES,
     EXTERNAL,
     SHEET,
+    UNKNOWN,
+    built_range,
     function_name,
+    iter_nodes,
     literal,
     parse_formula,
+    quote_sheet,
     sign,
 )
 from xl_marinade.calc.graph import NameDef, WorkbookGraph
-from xl_marinade.calc.models import CellRef, _col_to_number
+from xl_marinade.calc.models import CellRef, _col_to_number, _number_to_col
+from xl_marinade.calc.prepare import rewrite_clock
 from xl_marinade.core.parser import (
     ASTNode,
     BinaryNode,
@@ -51,10 +59,12 @@ from xl_marinade.core.parser import (
     RefNode,
     UnaryNode,
 )
-from xl_marinade.core.ref_converter import quote_sheet_name
+from xl_marinade.errors import CalcInputError
 
 PROBE_SHEET = "_marinade_probes"
 NEAR_TOLERANCE = 1e-12
+_MAX_ROW = 1_048_576
+_MAX_COL = 16_384
 
 _COMPARISONS = frozenset({"<", "<=", ">", ">=", "=", "<>"})
 _NEAR_COMPARE = _COMPARISONS | {"lookup"}
@@ -80,13 +90,100 @@ _ROUNDING: dict[str, str] = {
 _BRANCHES = frozenset({"IF", "IFS", "SWITCH", "CHOOSE", "IFERROR", "IFNA"})
 _ERROR = "error"
 _NONE = frozenset[str]()
-_LOOKUPS = frozenset({"VLOOKUP", "HLOOKUP", "MATCH", "LOOKUP"})
+_LOOKUPS = frozenset({"VLOOKUP", "HLOOKUP", "MATCH", "LOOKUP", "XLOOKUP", "XMATCH"})
+# XLOOKUP / XMATCH: positions of match_mode and search_mode.
+_X_MODES: dict[str, tuple[int, int]] = {"XLOOKUP": (4, 5), "XMATCH": (2, 3)}
+# XLOOKUP's if_not_found arm, guarded like IFERROR's error arm.
+_NOT_FOUND = "not_found"
 _DYNAMIC = frozenset({"OFFSET", "INDIRECT"})
+# A dynamic-ref probe of a range built by a call (``B1:OFFSET(...)``).
+_RANGE = "range"
 
 _REF = re.compile(rf"^(?:(?P<s1>{SHEET})!)?(?P<a>{END})(?::(?:(?P<s2>{SHEET})!)?(?P<b>{END}))?$")
 _CELL_END = re.compile(r"^\$?(?P<col>[A-Za-z]{1,3})\$?(?P<row>[0-9]+)$")
 _COL_END = re.compile(r"^\$?(?P<col>[A-Za-z]{1,3})$")
 _ROW_END = re.compile(r"^\$?(?P<row>[0-9]+)$")
+
+# -- number to text (ruling D6) --
+NUMBER_TEXT_TIE = "number-to-text at a decimal tie"
+NUMBER_TEXT_DIGITS = "number-to-text where Excel's 15-digit text differs"
+NUMBER_TEXT_CRITERION = "criterion built with & from a non-integer number"
+NUMBER_TEXT_NOT_CHECKED = "number-to-text not checked"
+NUMBER_TEXT_NEGATIVE = "number-to-text of a negative value that rounds to zero or one unit"
+# Functions that round a number to a format's decimals: TEXT(x, format),
+# FIXED(x, [decimals=2], ...), DOLLAR(x, [decimals=2]).
+_FORMATTERS = frozenset({"TEXT", "FIXED", "DOLLAR"})
+# Joins, and the first argument each joins as text (TEXTJOIN's delimiter and
+# ignore_empty come first).
+_JOINS: dict[str, int] = {"CONCAT": 0, "CONCATENATE": 0, "TEXTJOIN": 2}
+# Text functions, and the arguments at which a number given to them becomes text (the
+# engine's text, with up to 17 significant digits). The one list of these sites;
+# tests/calc/test_number_text_sites.py pins it against the installed IronCalc.
+TEXT_ARGUMENTS: dict[str, tuple[int, ...]] = {
+    "LEN": (0,),
+    "LENB": (0,),
+    "LEFT": (0,),
+    "LEFTB": (0,),
+    "RIGHT": (0,),
+    "RIGHTB": (0,),
+    "MID": (0,),
+    "MIDB": (0,),
+    "UPPER": (0,),
+    "LOWER": (0,),
+    "PROPER": (0,),
+    "TRIM": (0,),
+    "CLEAN": (0,),
+    "CODE": (0,),
+    "UNICODE": (0,),
+    "REPT": (0,),
+    "SUBSTITUTE": (0, 1, 2),
+    "REPLACE": (0, 3),
+    "EXACT": (0, 1),
+    "FIND": (0, 1),
+    "FINDB": (0, 1),
+    "SEARCH": (0, 1),
+    "SEARCHB": (0, 1),
+    "TEXTBEFORE": (0, 1),
+    "TEXTAFTER": (0, 1),
+    "VALUETOTEXT": (0,),
+    "ARRAYTOTEXT": (0,),
+    "REGEXTEST": (0,),
+    "REGEXEXTRACT": (0,),
+    "REGEXREPLACE": (0,),
+    "TEXTSPLIT": (0,),
+}
+# Functions whose result is text: an operand that is one of them converts no number.
+_TEXT_RESULT = frozenset(
+    {"TEXT", "FIXED", "DOLLAR", "CONCAT", "CONCATENATE", "TEXTJOIN", "LEFT", "LEFTB"}
+    | {"RIGHT", "RIGHTB", "MID", "MIDB", "UPPER", "LOWER", "PROPER", "TRIM", "CLEAN"}
+    | {"REPT", "SUBSTITUTE", "REPLACE", "TEXTBEFORE", "TEXTAFTER", "CHAR", "UNICHAR", "T"}
+    | {"ADDRESS", "FORMULATEXT", "VALUETOTEXT", "ARRAYTOTEXT", "REGEXEXTRACT"}
+    | {"REGEXREPLACE", "TEXTSPLIT"}
+)
+# Functions that can return a reference or an array: joined, more than one value.
+_MULTI_RESULT = frozenset(
+    {"OFFSET", "INDIRECT", "INDEX", "XLOOKUP", "FILTER", "SORT", "SORTBY", "UNIQUE"}
+    | {"SEQUENCE", "TRANSPOSE", "TAKE", "DROP", "CHOOSECOLS", "CHOOSEROWS", "VSTACK"}
+    | {"HSTACK", "TOCOL", "TOROW", "EXPAND"}
+)
+# Branches return one of their arguments: more than one value only if an argument is.
+_PASS_THROUGH = frozenset({"IF", "IFS", "SWITCH", "CHOOSE", "IFERROR", "IFNA"})
+# Excel writes a number as text positionally, with at most 15 significant digits, at
+# least in this range; outside it, it may switch to scientific notation.
+_GENERAL_MIN = 1e-4
+_GENERAL_MAX = 1e15
+_FORMAT_TOKEN = re.compile(r'"[^"]*"|\\.|_.|\*.|\[[^\]]*\]|;|[^"\\_*\[;]+', re.S)
+_BRACKET_OK = re.compile(r"^\[(?:\$[^\]]*|[A-Za-z]+|Color[0-9]+)\]$", re.I)
+_ELAPSED = re.compile(r"^\[(?:h+|m+|s+)\]$", re.I)
+_DATE_CODE = re.compile(r"AM/PM|A/P|[yYmMdDhHsS]")
+_PLACEHOLDER = re.compile(r"[0#?]")
+_TRAILING_COMMAS = re.compile(r"[0#?](,+)[^0#?]*$")
+_POINT_COMMAS = re.compile(r"[0#?](,+)\.")
+# A range joined as text is read one probe per cell that can hold a number Excel
+# writes differently; past this many, the join is refused for the policies that
+# evaluate it.
+JOIN_RANGE_PROBES = 1000
+
 _TEXT_REF = re.compile(
     rf"^(?:(?P<sheet>{SHEET})!)?\$?(?P<c1>[A-Za-z]{{1,3}})\$?(?P<r1>[0-9]+)"
     r"(?::\$?(?P<c2>[A-Za-z]{1,3})\$?(?P<r2>[0-9]+))?$"
@@ -106,6 +203,7 @@ class ProbeKind(StrEnum):
     rounding = "rounding"
     comparison = "comparison"
     dynamic_ref = "dynamic_ref"
+    number_text = "number_text"
 
 
 @dataclass(slots=True)
@@ -138,6 +236,22 @@ class ProbePlan:
     probes: list[Probe]
     unplaced: dict[CellRef, list[ProbeKind]]
     sheets: dict[str, str] = field(default_factory=dict)
+    join_uses: list[JoinUse] = field(default_factory=list)
+    """Joins that read a shared source probe (one per source cell, planned last)."""
+    over_cap: int = 0
+    """Probes left unplaced only because the cap was reached: a cap of
+    ``len(probes) + over_cap`` holds them all."""
+
+
+@dataclass(slots=True, frozen=True)
+class JoinUse:
+    """A join reading one source cell: the joining cell, the arms that guard the join,
+    the check (``general`` or ``criterion``) and the index of the source's probe."""
+
+    cell: CellRef
+    guards: tuple[Guard, ...]
+    check: str
+    source: int
 
 
 @dataclass(slots=True)
@@ -157,6 +271,8 @@ class ProbeReadings:
     """Cells whose probe computed an error code Excel does not have."""
     type_mismatch: set[CellRef] = field(default_factory=set)
     """Cells with an approximate lookup whose value and matched key differ in type."""
+    number_text: dict[CellRef, set[str]] = field(default_factory=dict)
+    """Cells that turned a number into text where Excel's text may differ, and why."""
 
 
 class NameScopes(Protocol):
@@ -218,6 +334,195 @@ def near_flip(fn: str, x: float, arg: float | None) -> bool:
         return False
 
 
+# -- number to text --------------------------------------------------------------
+
+
+def _format_sections(fmt: str) -> list[str]:
+    """The sections of a number format, with quoted text, escapes, fills, colours and
+    locales blanked out: what is left decides how a number is shown.
+
+    Raises:
+        ValueError: for a condition (``[>100]``), more than four sections, or text the
+            scan does not read.
+    """
+    tokens = _FORMAT_TOKEN.findall(fmt)
+    if "".join(tokens) != fmt:
+        raise ValueError(f"cannot read number format {fmt!r}")
+    sections: list[list[str]] = [[]]
+    for token in tokens:
+        if token == ";":
+            sections.append([])
+        elif token[0] in '"\\_*':
+            sections[-1].append(" ")
+        elif token.startswith("["):
+            if _ELAPSED.match(token):
+                sections[-1].append("h")
+            elif not _BRACKET_OK.match(token):
+                raise ValueError(f"format condition {token!r}")
+        else:
+            sections[-1].append(token)
+    if len(sections) > 4:
+        raise ValueError(f"cannot read number format {fmt!r}")
+    return ["".join(s) for s in sections]
+
+
+def number_format_rounding(fmt: str) -> tuple[int, float] | None:
+    """``(decimals, scale)`` for a ``TEXT`` format: the number shown is ``x * scale``
+    rounded to ``decimals`` places (``%`` multiplies by 100, a comma after the last
+    digit placeholder divides by 1,000). None when the format shows no number: a date,
+    a time, or only literal text.
+
+    Raises:
+        ValueError: for a format whose rounding the scan does not read: ``General``,
+            ``@``, scientific, fractions, fractional seconds, conditions, sections that
+            round differently, or letters that are not format codes.
+    """
+    found: set[tuple[int, float]] = set()
+    # The third section shows an exact zero only, which sits on no tie: it does not
+    # take part (the fourth is for text).
+    for section in _format_sections(fmt)[:2]:
+        upper = section.upper()
+        if "GENERAL" in upper or "@" in section:
+            raise ValueError(f"cannot read number format {fmt!r}")
+        if "E+" in upper or "E-" in upper:
+            raise ValueError(f"scientific format {fmt!r}")
+        if _DATE_CODE.search(section):
+            if re.search(r"[sS]\.0", section):
+                raise ValueError(f"fractional seconds in {fmt!r}")
+            continue
+        if re.search(r"[A-Za-z]", section):
+            raise ValueError(f"cannot read number format {fmt!r}")
+        if not _PLACEHOLDER.search(section):
+            continue
+        if "/" in section:
+            raise ValueError(f"fraction format {fmt!r}")
+        point = section.find(".")
+        decimals = len(_PLACEHOLDER.findall(section[point + 1 :])) if point >= 0 else 0
+        m = _TRAILING_COMMAS.search(section) or _POINT_COMMAS.search(section)
+        commas = len(m.group(1)) if m is not None else 0
+        found.add((decimals, 100.0 ** section.count("%") / 1000.0**commas))
+    if len(found) > 1:
+        raise ValueError(f"sections of {fmt!r} round differently")
+    return found.pop() if found else None
+
+
+def excel_general_text(x: float) -> str | None:
+    """The text Excel makes of ``x`` (``&``, ``CONCAT``, ``LEN``): at most 15
+    significant digits. None outside 0.0001 to 1e15, where Excel may write scientific
+    notation."""
+    if x == 0:
+        return "0"
+    if not (math.isfinite(x) and _GENERAL_MIN <= abs(x) < _GENERAL_MAX):
+        return None
+    text = format(Decimal(format(x, ".15g")), "f")
+    return text.rstrip("0").rstrip(".") if "." in text else text
+
+
+def text_drops_sign(x: float, decimals: int, scale: float) -> bool:
+    """True when IronCalc 0.9.1's ``TEXT`` may write ``x`` without its minus sign under
+    a one-section format: ``x`` is negative and, shown at ``decimals`` places after
+    ``scale``, rounds to zero or one unit of the last place (``TEXT(-1,"0")`` is
+    ``"1"``, ``TEXT(-0.01,"0%")`` is ``"1%"``). Excel keeps the sign (``"-1"``)."""
+    if not x < 0:
+        return False
+    return abs(x * scale) * 10.0 ** min(decimals, 300) < 1.5
+
+
+def plain_number(x: float) -> bool:
+    """True when Excel's text for ``x`` (15 significant digits) is the engine's text:
+    ``x`` needs no more digits, sits in the positional range and is not ``-0``."""
+    if x == 0:
+        return math.copysign(1.0, x) > 0
+    text = excel_general_text(x)
+    return text is not None and float(text) == x
+
+
+def _shows_digits(fmt: ASTNode) -> bool:
+    """False for a literal ``TEXT`` format that shows no number (a date, a time, only
+    text); True otherwise, unreadable and non-literal formats included."""
+    text = literal(fmt)
+    if not isinstance(text, str):
+        return True
+    try:
+        return number_format_rounding(text) is not None
+    except ValueError:
+        return True
+
+
+def _maybe_number(node: ASTNode) -> bool:
+    """False when ``node`` cannot be a computed number: a literal, or text."""
+    if literal(node) is not UNKNOWN:
+        return False
+    if isinstance(node, BinaryNode) and node.operator == "&":
+        return False
+    return not (isinstance(node, FunctionNode) and function_name(node.name) in _TEXT_RESULT)
+
+
+def _criteria_args(name: str, n: int) -> range:
+    """Positions of the criteria of a SUMIF-family function with ``n`` arguments."""
+    if name in {"SUMIF", "COUNTIF", "AVERAGEIF"}:
+        return range(1, min(n, 2))
+    if name == "COUNTIFS":
+        return range(1, n, 2)
+    if name in {"SUMIFS", "AVERAGEIFS", "MAXIFS", "MINIFS"}:
+        return range(2, n, 2)
+    return range(0)
+
+
+def _joined(node: ASTNode) -> list[ASTNode]:
+    """The parts a criterion joins into text: the operands of ``&`` and ``CONCAT``."""
+    if isinstance(node, BinaryNode) and node.operator == "&":
+        return [*_joined(node.left), *_joined(node.right)]
+    if isinstance(node, FunctionNode) and function_name(node.name) in _JOINS:
+        return [part for arg in node.args for part in _joined(arg)]
+    return [node]
+
+
+def _number_text_reason(probe: Probe, values: list[EngineValue]) -> str | None:
+    """Why the engine's text for this conversion may not be Excel's; None when it is."""
+    if probe.meta["check"] == "always":
+        # A join calc cannot read cell by cell: refused wherever it is evaluated.
+        return NUMBER_TEXT_NOT_CHECKED
+    if probe.meta["check"] != "tie" and len(values) > 2:
+        # A joined function result: read like a number only when it is one value.
+        size = values[2]
+        if not isinstance(size, float):
+            return None
+        if size != 1:
+            return NUMBER_TEXT_NOT_CHECKED
+    x = values[0]
+    if not isinstance(x, float):
+        return None
+    if probe.meta["check"] == "tie":
+        if "decimals" in probe.meta:
+            decimals, scale = int(probe.meta["decimals"]), float(probe.meta["scale"])
+        else:
+            given = values[1] if len(values) > 1 else 2.0
+            if not isinstance(given, float):
+                return None
+            decimals, scale = math.trunc(given), 1.0
+        y = x * scale
+        if not math.isfinite(y) or abs(y) * 10.0 ** min(decimals, 300) >= _GENERAL_MAX:
+            # Excel shows 15 significant digits and pads with zeros; the engine does not.
+            return NUMBER_TEXT_DIGITS
+        if probe.meta.get("sections") == "1" and text_drops_sign(x, decimals, scale):
+            return NUMBER_TEXT_NEGATIVE
+        return NUMBER_TEXT_TIE if near_flip("ROUND", y, decimals) else None
+    return _general_reason(values, probe.meta["check"])
+
+
+def _general_reason(values: list[EngineValue], check: str) -> str | None:
+    """For ``(x, x&"")`` readings: why Excel's text for ``x`` may differ; None if not."""
+    x, text = values[0], values[1]
+    if not isinstance(x, float) or not isinstance(text, str) or text == "":
+        # An empty cell reads 0 but joins as "" in Excel and the engine alike.
+        return None
+    differs = excel_general_text(x) != text
+    if check == "criterion" and (differs or x != math.floor(x)):
+        return NUMBER_TEXT_CRITERION
+    return NUMBER_TEXT_DIGITS if differs else None
+
+
 # -- anchoring -----------------------------------------------------------------
 
 
@@ -242,7 +547,7 @@ def _anchor_ref(ref: str, sheet: str, names: NameScopes | None) -> str:
         raise ValueError(f"cannot lift reference {ref!r}")
     s1, s2, b = m.group("s1"), m.group("s2"), m.group("b")
     kind, a = _end(m.group("a"))
-    prefix = s1 if s1 is not None else quote_sheet_name(sheet)
+    prefix = s1 if s1 is not None else quote_sheet(sheet)
     if b is None:
         if kind == "cell":
             return f"{prefix}!{a}"
@@ -334,18 +639,27 @@ def _emit_function(node: FunctionNode, sheet: str, names: NameScopes | None) -> 
             raise ValueError("cannot lift INDIRECT with R1C1-style text")
         # Text without a sheet resolves against the formula's own sheet, not the probe's.
         text = args[0]
-        prefix = _text_literal(f"{quote_sheet_name(sheet)}!")
+        prefix = _text_literal(f"{quote_sheet(sheet)}!")
         args[0] = f'IF(ISERROR(FIND("!",{text})),{prefix}&({text}),{text})'
     return f"{node.name}({','.join(args)})"
 
 
-def anchor(node: ASTNode, sheet: str, *, names: NameScopes | None = None) -> str:
+def anchor(
+    node: ASTNode,
+    sheet: str,
+    *,
+    names: NameScopes | None = None,
+    as_of: date | None = None,
+) -> str:
     """Formula text for ``node`` that computes the same on the probe sheet.
 
-    Unqualified references are qualified with ``sheet`` (quoted like
-    :meth:`CellRef.a1`); every cell, column and row reference becomes absolute;
-    workbook-level names stay names. ``INDIRECT`` text without a sheet is prefixed
-    with ``sheet`` at run time.
+    Unqualified references are qualified with ``sheet`` (quoted by
+    :func:`quote_sheet`, so ``'2024'!``); every cell, column and row reference
+    becomes absolute; workbook-level names stay names. ``INDIRECT`` text without a
+    sheet is prefixed with ``sheet`` at run time. With ``as_of``, ``TODAY()`` and
+    ``NOW()`` become that date, as they are in the engine copy. Operands of binary
+    operators are always parenthesised when they are operations themselves, so the
+    text means what the parsed tree means.
 
     Raises:
         ValueError: (when ``names`` is given) for a formula name, a name with a
@@ -354,7 +668,8 @@ def anchor(node: ASTNode, sheet: str, *, names: NameScopes | None = None) -> str
             ``LET``/``LAMBDA`` and friends, a bare ``ROW()``/``COLUMN()``/``SHEET()``,
             ``CELL`` without a reference, or R1C1-style ``INDIRECT``.
     """
-    return _emit(node, sheet, names)
+    text = _emit(node, sheet, names)
+    return rewrite_clock(text, as_of) if as_of is not None else text
 
 
 # -- planning ------------------------------------------------------------------
@@ -363,24 +678,43 @@ def anchor(node: ASTNode, sheet: str, *, names: NameScopes | None = None) -> str
 Builder = Callable[[], tuple[tuple[str, ...], dict[str, str]]]
 
 
+def _fixed(formulas: tuple[str, ...], meta: dict[str, str]) -> Builder:
+    """A builder for formulas known in advance."""
+    return lambda: (formulas, dict(meta))
+
+
 @dataclass(slots=True)
 class _Planner:
     graph: WorkbookGraph
     cap: int
+    as_of: date | None = None
     probes: list[Probe] = field(default_factory=list)
     unplaced: dict[CellRef, list[ProbeKind]] = field(default_factory=dict)
     cell: CellRef = CellRef("", 0, 0)
     family: str = ""
     counters: dict[ProbeKind, int] = field(default_factory=dict)
     guards: tuple[Guard, ...] = ()
+    inputs: frozenset[CellRef] = frozenset()
+    """Mapped input cells: constants that change per policy."""
+    sources: dict[CellRef, list[tuple[CellRef, tuple[Guard, ...], str]]] = field(
+        default_factory=dict
+    )
+    """Join source cell -> the joins reading it: (joining cell, guards, check)."""
+    ranges: dict[tuple[str, str], list[CellRef] | None] = field(default_factory=dict)
+    """(formula sheet, reference) -> the cells a joined range holds that need a probe."""
+    join_uses: list[JoinUse] = field(default_factory=list)
+    over_cap: int = 0
+    criteria: set[int] = field(default_factory=set)
+    """``id`` of the nodes a SUMIF-family criterion joins as text, in this cell."""
 
     def lift(self, node: ASTNode) -> str:
-        return anchor(node, self.cell.sheet, names=self.graph)
+        return anchor(node, self.cell.sheet, names=self.graph, as_of=self.as_of)
 
     def add(self, kind: ProbeKind, scoped: bool, build: Builder) -> None:
         ordinal = self.counters.get(kind, 0)
         self.counters[kind] = ordinal + 1
         if scoped or len(self.probes) >= self.cap:
+            self.over_cap += not scoped
             self.unplaced.setdefault(self.cell, []).append(kind)
             return
         try:
@@ -399,6 +733,9 @@ class _Planner:
         if isinstance(node, BinaryNode):
             if in_cond and node.operator in _COMPARISONS:
                 self.add(ProbeKind.comparison, blocked, lambda: self._comparison(node))
+            if node.operator == "&":
+                for operand in (node.left, node.right):
+                    self._to_text(operand, blocked, joins=False)
             self.visit(node.left, in_cond, blocked)
             self.visit(node.right, in_cond, blocked)
             return
@@ -413,7 +750,7 @@ class _Planner:
         self._probe_function(node, name, blocked)
         inner = blocked or name in ALWAYS_ARRAY
         conds = _condition_args(name, len(node.args))
-        arms = _arm_outcomes(name, len(node.args)) if name in _BRANCHES and node.args else {}
+        arms = _arm_outcomes(name, len(node.args)) if _is_branch(node, name) else {}
         outer = self.guards
         for i, arg in enumerate(node.args):
             arm = arms.get(i)
@@ -423,6 +760,13 @@ class _Planner:
             self.guards = outer
 
     def _probe_function(self, node: FunctionNode, name: str, scoped: bool) -> None:
+        if built_range(node.name) is not None:
+            # ``B1:OFFSET(...)``: a reference from B1 to where the call lands.
+            self.add(ProbeKind.dynamic_ref, scoped, lambda: self._built_range(node))
+            return
+        if name == "XLOOKUP" and _is_branch(node, name):
+            # Found or not decides whether the if_not_found arm is used.
+            self.add(ProbeKind.branch, scoped, lambda: self._not_found(node))
         if name in _BRANCHES and node.args:
             self.add(ProbeKind.branch, scoped, lambda: self._branch(node, name))
         elif name in _LOOKUPS and len(node.args) >= 2:
@@ -433,8 +777,189 @@ class _Planner:
             self.add(ProbeKind.rounding, scoped, lambda: self._rounding(node, name))
         elif name in _DYNAMIC and node.args:
             self.add(ProbeKind.dynamic_ref, scoped, lambda: self._dynamic(node, name))
+        self._probe_text(node, name, scoped)
+
+    def _probe_text(self, node: FunctionNode, name: str, scoped: bool) -> None:
+        """Number-to-text probes: a formatter's rounding, a join's or a text function's
+        conversion; and, first, which parts a SUMIF-family criterion joins."""
+        args = node.args
+        for i in _criteria_args(name, len(args)):
+            self.criteria.update(id(part) for part in _joined(args[i]))
+        if name in _FORMATTERS and args and _maybe_number(args[0]):
+            if name != "TEXT" or (len(args) >= 2 and _shows_digits(args[1])):
+                self.add(ProbeKind.number_text, scoped, lambda: self._formatter(node, name))
+        elif name in _JOINS:
+            for arg in args[_JOINS[name] :]:
+                if self._multi(arg, joins=True):
+                    self._join_many(arg, scoped)
+                else:
+                    self._to_text(arg, scoped, joins=True)
+        elif name in TEXT_ARGUMENTS:
+            for i in TEXT_ARGUMENTS[name]:
+                if i < len(args):
+                    self._to_text(args[i], scoped, joins=False)
+
+    def _to_text(self, node: ASTNode, scoped: bool, *, joins: bool) -> None:
+        """Probe ``node``'s conversion to text, unless it cannot be a number."""
+        if not _maybe_number(node):
+            return
+        check = "criterion" if id(node) in self.criteria else "general"
+        self.add(ProbeKind.number_text, scoped, lambda: self._general(node, check, joins))
+
+    def _join_many(self, node: ASTNode, scoped: bool) -> None:
+        """A range or array joined as text.
+
+        Constants Excel writes as the engine does need nothing. Every other cell of a
+        range is a *source*: probed once per plan, after every cell's own probes, and
+        read per policy for each join under that join's guards (:meth:`place_sources`).
+        A function result is read with its size, so one value is checked like a number
+        and an array refused. A join calc cannot read cell by cell (a reference it
+        cannot resolve, or more than ``JOIN_RANGE_PROBES`` cells to read) is refused
+        per policy, under its arm's guards.
+        """
+        check = "criterion" if id(node) in self.criteria else "general"
+        if isinstance(node, FunctionNode):
+            self.add(ProbeKind.number_text, scoped, lambda: self._sized(node, check))
+            return
+        todo = self._sources_of(node) if isinstance(node, RefNode) else None
+        if todo is None or len(todo) > JOIN_RANGE_PROBES:
+            self.add(ProbeKind.number_text, scoped, _fixed(("TRUE",), {"check": "always"}))
+            return
+        if not todo:
+            return
+        if scoped:
+            # Inside an array formula or LET: the cells cannot be read for this join.
+            self.add(ProbeKind.number_text, True, _fixed(("TRUE",), {"check": "always"}))
+            return
+        for source in todo:
+            self.sources.setdefault(source, []).append((self.cell, self.guards, check))
+
+    def _sources_of(self, node: RefNode) -> list[CellRef] | None:
+        """The cells of a joined range that need a probe; cached per sheet and text, so
+        a join copied down a column resolves its range once."""
+        key = (self.cell.sheet, node.ref)
+        if key not in self.ranges:
+            cells = self._range_cells(node)
+            self.ranges[key] = (
+                None if cells is None else [c for c in cells if not self._plain_constant(c)]
+            )
+        return self.ranges[key]
+
+    def place_sources(self) -> None:
+        """Plan the join sources, after every cell's own probes so they never displace
+        them. A join with a source past the cap is refused for its own cell only."""
+        lost: set[CellRef] = set()
+        for source in sorted(self.sources):
+            uses = self.sources[source]
+            if len(self.probes) >= self.cap:
+                self.over_cap += 1
+                lost.update(cell for cell, _guards, _check in uses)
+                continue
+            index = len(self.probes)
+            ref = f"{quote_sheet(source.sheet)}!${_number_to_col(source.col)}${source.row}"
+            formulas = (ref, f'({ref})&""')
+            meta = {"check": "source"}
+            self.probes.append(Probe(ProbeKind.number_text, source, "", 0, formulas, meta))
+            self.join_uses.extend(
+                JoinUse(cell, guards, check, index) for cell, guards, check in uses
+            )
+        self.sources.clear()
+        for cell in sorted(lost):
+            self.unplaced.setdefault(cell, []).append(ProbeKind.number_text)
+
+    def _range_cells(self, node: RefNode) -> list[CellRef] | None:
+        """Every cell a range or multi-cell name covers (a whole column or row cut to
+        the used range); None when it cannot be read statically."""
+        m = _REF.match(node.ref)
+        if m is None:
+            return None
+        if m.group("b") is None:
+            found = self.graph.lookup_name(node.ref, self.cell.sheet)
+            if found is None or found.kind != "cells" or found.relative:
+                return None
+            if found.scope is not None or "!" in node.ref:
+                # A sheet's own name stays unplaced, as when it is lifted.
+                return None
+            return self.graph.name_cells(node.ref, self.cell.sheet)
+        s1, s2 = m.group("s1"), m.group("s2")
+        if s2 is not None and s2 != s1:
+            return None
+        sheet = _unquote(s1) if s1 is not None else self.cell.sheet
+        target = f"{quote_sheet(sheet)}!{m.group('a')}:{m.group('b')}"
+        try:
+            return self.graph.resolve_target(target)
+        except CalcInputError:
+            return None
+
+    def _plain_constant(self, cell: CellRef) -> bool:
+        """A cell no policy changes whose text Excel writes as the engine does: blank,
+        text, a boolean, or a number that needs at most 15 significant digits. A cell of
+        an array formula's range is computed, however its stored value looks, and so is
+        an empty cell a dynamic array can spill into."""
+        if cell in self.inputs or self.graph.formula(cell) is not None:
+            return False
+        if self.graph.array_anchor(cell) is not None:
+            return False
+        if not self.graph.has_stored(cell):
+            # Blank, unless a dynamic array's spill can grow into it for some policy.
+            return not self.graph.may_spill_into(cell)
+        value = self.graph.stored(cell)
+        return not isinstance(value, float) or plain_number(value)
 
     # -- builders --
+
+    def _formatter(self, node: FunctionNode, name: str) -> tuple[tuple[str, ...], dict[str, str]]:
+        x = self.lift(node.args[0])
+        if name == "TEXT":
+            fmt = literal(node.args[1])
+            if not isinstance(fmt, str):
+                raise ValueError("TEXT format is not literal text")
+            rounding = number_format_rounding(fmt)  # raises for an unreadable format
+            if rounding is None:
+                raise ValueError(f"format {fmt!r} shows no number")
+            decimals, scale = rounding
+            sections = str(len(_format_sections(fmt)))
+            meta = {"check": "tie", "function": name, "decimals": str(decimals)}
+            return (x,), {**meta, "scale": repr(scale), "sections": sections}
+        meta = {"check": "tie", "function": name}
+        if len(node.args) < 2:
+            return (x,), meta
+        return (x, self.lift(node.args[1])), meta
+
+    def _sized(self, node: ASTNode, check: str) -> tuple[tuple[str, ...], dict[str, str]]:
+        x = self.lift(node)
+        return (x, f'({x})&""', f"ROWS({x})*COLUMNS({x})"), {"check": check}
+
+    def _general(
+        self, node: ASTNode, check: str, joins: bool
+    ) -> tuple[tuple[str, ...], dict[str, str]]:
+        if self._multi(node, joins):
+            raise ValueError("a range or array converted to text")
+        x = self.lift(node)
+        return (x, f'({x})&""'), {"check": check}
+
+    def _multi(self, node: ASTNode, joins: bool) -> bool:
+        """True when ``node`` may hold more than one value: a range, a multi-cell name
+        or, as a joined argument, a function that can return a reference or an array."""
+        if isinstance(node, FunctionNode):
+            if built_range(node.name) is not None:
+                return True
+            name = function_name(node.name)
+            if name in _PASS_THROUGH:
+                return any(self._multi(arg, joins) for arg in node.args[1:])
+            return joins and name in _MULTI_RESULT
+        if not isinstance(node, RefNode):
+            return False
+        m = _REF.match(node.ref)
+        if m is None or m.group("b") is not None:
+            return True
+        if _end(m.group("a"))[0] != "name":
+            return False
+        found = self.graph.lookup_name(node.ref, self.cell.sheet)
+        if found is None or found.kind != "cells":
+            return found is not None
+        cells = sum((r2 - r1 + 1) * (c2 - c1 + 1) for _s, r1, c1, r2, c2 in found.rects)
+        return found.whole or cells > 1
 
     def _comparison(self, node: BinaryNode) -> tuple[tuple[str, ...], dict[str, str]]:
         return (self.lift(node.left), self.lift(node.right)), {"operator": node.operator}
@@ -460,9 +985,35 @@ class _Planner:
         # cell would swallow) is still seen; FALSE when it does not.
         return (f"IF(ISERROR({first}),{first},FALSE)",), meta
 
+    def _xmatch(self, node: FunctionNode, name: str) -> str:
+        """XMATCH text for an XLOOKUP / XMATCH: the position its own modes find.
+
+        The position counts from the start of the lookup array whichever way the search
+        runs, so with search_mode -1 "first" is still the array's first row and "last"
+        its last (a recorded decision: both edges must be exercised on their own either
+        way, so swapping the labels would change no status).
+        """
+        match_at, search_at = _X_MODES[name]
+        args = [self.lift(node.args[0]), self.lift(node.args[1])]
+        if len(node.args) > search_at:
+            mode = self.lift(node.args[match_at]) if len(node.args) > match_at else "0"
+            args += [mode, self.lift(node.args[search_at])]
+        elif len(node.args) > match_at:
+            args.append(self.lift(node.args[match_at]))
+        return f"XMATCH({','.join(args)})"
+
+    def _not_found(self, node: FunctionNode) -> tuple[tuple[str, ...], dict[str, str]]:
+        # #N/A is "nothing found"; any other error is the cell's error, read as such.
+        pos = self._xmatch(node, "XLOOKUP")
+        text = f'IF(ISNA({pos}),"{_NOT_FOUND}",IF(ISERROR({pos}),{pos},"found"))'
+        return (text,), {"function": "XLOOKUP"}
+
     def _keys(self, node: FunctionNode, name: str) -> tuple[str, str]:
         """Key vector and its length, as formula text."""
         table = self.lift(node.args[1])
+        if name in _X_MODES:
+            # The lookup array is one row or one column.
+            return table, f"ROWS({table})*COLUMNS({table})"
         if name == "VLOOKUP":
             return f"INDEX({table},0,1)", f"ROWS({table})"
         if name == "HLOOKUP":
@@ -475,6 +1026,8 @@ class _Planner:
         return table, f"ROWS({table})*COLUMNS({table})"
 
     def _match(self, node: FunctionNode, name: str) -> str:
+        if name in _X_MODES:
+            return self._xmatch(node, name)
         keys, _size = self._keys(node, name)
         mode = _lookup_mode(node, name)
         if mode is None:
@@ -493,7 +1046,11 @@ class _Planner:
         keys, _size = self._keys(node, name)
         key = f"INDEX({keys},{self._match(node, name)})"
         if _lookup_mode(node, name) is None:
-            if name in {"VLOOKUP", "HLOOKUP"}:
+            if name in _X_MODES:
+                # Only next smaller / next larger can match a key that differs.
+                mode = self.lift(node.args[_X_MODES[name][0]])
+                key = f"IF(ABS({mode})=1,{key},NA())"
+            elif name in {"VLOOKUP", "HLOOKUP"}:
                 key = f"IF({self.lift(node.args[3])},{key},NA())"
             else:
                 key = f"IF(({self.lift(node.args[2])})=0,NA(),{key})"
@@ -515,33 +1072,128 @@ class _Planner:
         return formulas, {"function": name, "sheet": self._static_sheet(node.args[0])}
 
     def _static_sheet(self, node: ASTNode) -> str:
-        """The sheet a reference expression lands on, when knowable without running it."""
-        if isinstance(node, FunctionNode) and node.args:
-            if function_name(node.name) in {"OFFSET", "INDEX"}:
-                return self._static_sheet(node.args[0])
-        if not isinstance(node, RefNode):
-            raise ValueError("OFFSET base is not a static reference")
-        m = _REF.match(node.ref)
-        if m is None:
-            raise ValueError(f"cannot lift reference {node.ref!r}")
-        if _end(m.group("a"))[0] == "name" and m.group("b") is None:
-            found = self.graph.lookup_name(node.ref, self.cell.sheet)
-            sheets = {r[0] for r in found.rects} if found is not None else set()
-            if found is None or found.kind != "cells" or found.whole or len(sheets) != 1:
-                # A whole column or row would land on up to a million cells per reading.
-                raise ValueError(f"name {node.ref!r} is not a bounded range on one sheet")
-            return sheets.pop()
-        s1 = m.group("s1")
-        if s1 is None:
-            return self.cell.sheet
-        written = _unquote(s1)
-        return self.graph.sheet(written) or written
+        return _static_sheet(self.graph, self.cell, node)
+
+    def _built_range(self, node: FunctionNode) -> tuple[tuple[str, ...], dict[str, str]]:
+        """Both corners of a range built by a call (``B1:OFFSET(...)``): the start's
+        and the call's first cell and size. The range is the smallest rectangle holding
+        both, as Excel's ``:`` makes it."""
+        parts = built_range(node.name)
+        if parts is None or "!" in parts[1]:
+            raise ValueError(f"cannot read range end {node.name!r}")
+        start_text, function = parts
+        start = RefNode(start_text)
+        sheet = self._static_sheet(start)
+        end = FunctionNode(function, node.args)
+        end_sheet: str | None = None
+        if function_name(function) in {"OFFSET", "INDEX"} and node.args:
+            end_sheet = self._static_sheet(node.args[0])
+        elif function_name(function) == "INDIRECT" and node.args:
+            end_sheet = _text_sheet(self.graph, node.args[0])
+        if end_sheet is not None and end_sheet != sheet:
+            # Excel's ``:`` cannot join references on two sheets (``#VALUE!``).
+            raise ValueError(f"range {node.name!r} spans two sheets")
+        formulas: list[str] = []
+        for ref in (self.lift(start), self.lift(end)):
+            corner = f"OFFSET({ref},0,0,1,1)"
+            formulas += [f"ROW({corner})", f"COLUMN({corner})", f"ROWS({ref})", f"COLUMNS({ref})"]
+        return tuple(formulas), {"function": _RANGE, "sheet": sheet}
 
 
 def _unquote(sheet: str) -> str:
     if len(sheet) >= 2 and sheet.startswith("'") and sheet.endswith("'"):
         return sheet[1:-1].replace("''", "'")
     return sheet
+
+
+def _static_sheet(graph: WorkbookGraph, cell: CellRef, node: ASTNode) -> str:
+    """The sheet a reference expression in ``cell``'s formula lands on, when knowable
+    without running it.
+
+    Raises:
+        ValueError: when it is not (the expression is not a reference, or a name over
+            several sheets or a whole column or row).
+    """
+    if isinstance(node, FunctionNode) and node.args:
+        if function_name(node.name) in {"OFFSET", "INDEX"}:
+            return _static_sheet(graph, cell, node.args[0])
+    if not isinstance(node, RefNode):
+        raise ValueError("OFFSET base is not a static reference")
+    m = _REF.match(node.ref)
+    if m is None:
+        raise ValueError(f"cannot lift reference {node.ref!r}")
+    if _end(m.group("a"))[0] == "name" and m.group("b") is None:
+        found = graph.lookup_name(node.ref, cell.sheet)
+        sheets = {r[0] for r in found.rects} if found is not None else set()
+        if found is None or found.kind != "cells" or found.whole or len(sheets) != 1:
+            # A whole column or row would land on up to a million cells per reading.
+            raise ValueError(f"name {node.ref!r} is not a bounded range on one sheet")
+        if found.relative or found.scope is not None or "!" in node.ref:
+            # Neither is read off the formula's own sheet (see :func:`_lift_name`).
+            raise ValueError(f"name {node.ref!r} cannot be read off its own sheet")
+        return sheets.pop()
+    s1 = m.group("s1")
+    if s1 is None:
+        return cell.sheet
+    written = _unquote(s1)
+    return graph.sheet(written) or written
+
+
+def _text_sheet(graph: WorkbookGraph, text: ASTNode) -> str | None:
+    """The sheet an ``INDIRECT`` text names literally: its leading text literal holds
+    ``Sheet!`` (``"Rates!B"&row``). None when the text names no sheet that way."""
+    node = text
+    while True:
+        if isinstance(node, BinaryNode) and node.operator == "&":
+            node = node.left
+        elif (
+            isinstance(node, FunctionNode)
+            and function_name(node.name) in {"CONCAT", "CONCATENATE"}
+            and node.args
+        ):
+            node = node.args[0]
+        else:
+            break
+    value = literal(node)
+    if not isinstance(value, str) or "!" not in value:
+        return None
+    return graph.sheet(_unquote(value.partition("!")[0]))
+
+
+def reach_sheets(graph: WorkbookGraph, cell: CellRef) -> set[str]:
+    """The sheets the dynamic references in ``cell``'s formula can land on, where that
+    is known without running them: an ``OFFSET``'s starting sheet, the sheet
+    an ``INDIRECT`` text names literally, a built range's sheet. Other ``INDIRECT``
+    texts can land anywhere; they are not listed."""
+    text = graph.formula(cell)
+    if text is None or DYNAMIC_HINT.search(text) is None:
+        return set()
+    root = parse_formula(text)
+    if root is None:
+        return set()
+    out: set[str] = set()
+    for node in iter_nodes(root):
+        if not isinstance(node, FunctionNode) or not node.args:
+            continue
+        try:
+            parts = built_range(node.name)
+            if parts is not None:
+                out.add(_static_sheet(graph, cell, RefNode(parts[0])))
+                continue
+            name = function_name(node.name)
+            if name == "OFFSET":
+                out.add(_static_sheet(graph, cell, node.args[0]))
+            elif name == "INDIRECT" and (sheet := _text_sheet(graph, node.args[0])) is not None:
+                out.add(sheet)
+        except ValueError:
+            continue
+    return {sheet for sheet in out if graph.sheet(sheet) is not None}
+
+
+def probe_kinds(graph: WorkbookGraph, cell: CellRef) -> list[ProbeKind]:
+    """The probes ``cell``'s formula would get, placed or not."""
+    plan = plan_probes(graph, [cell], cap=1 << 30)
+    return [p.kind for p in plan.probes] + plan.unplaced.get(cell, [])
 
 
 def _condition_args(name: str, n: int) -> set[int]:
@@ -556,12 +1208,21 @@ def _condition_args(name: str, n: int) -> set[int]:
     return set()
 
 
+def _is_branch(node: FunctionNode, name: str) -> bool:
+    """A function with a branch probe: the IF family, or an XLOOKUP with if_not_found."""
+    if name == "XLOOKUP":
+        return len(node.args) >= 4
+    return name in _BRANCHES and bool(node.args)
+
+
 def _arm_outcomes(name: str, n: int) -> dict[int, tuple[frozenset[str], frozenset[str]]]:
     """Per guarded argument of a branch: the outcomes that evaluate it, and those after
     which it may have been evaluated (an error from a condition before or at it).
 
     Arguments not listed are always evaluated (the first condition, the switch value).
     """
+    if name == "XLOOKUP":
+        return {3: (frozenset({_NOT_FOUND}), _NONE)}
     if name == "IF":
         return {1: (frozenset({"TRUE"}), _NONE), 2: (frozenset({"FALSE"}), _NONE)}
     if name == "CHOOSE":
@@ -592,9 +1253,22 @@ def _arm_outcomes(name: str, n: int) -> dict[int, tuple[frozenset[str], frozense
 
 
 def _lookup_mode(node: FunctionNode, name: str) -> str | None:
-    """MATCH mode text: ``"1"``/``"-1"`` approximate, ``"0"`` exact, None when not literal."""
+    """MATCH mode text: ``"1"``/``"-1"`` approximate, ``"0"`` exact, None when not literal.
+
+    For XLOOKUP / XMATCH: ``"0"`` for exact and wildcard (2) matches, ``"1"``/``"-1"``
+    for next larger / next smaller.
+    """
     if name == "LOOKUP":
         return "1"
+    if name in _X_MODES:
+        at = _X_MODES[name][0]
+        if len(node.args) <= at:
+            return "0"
+        value = literal(node.args[at])
+        if value in (2, 2.0):
+            return "0"
+        s = sign(value)
+        return None if s is None else str(s)
     at = 3 if name in {"VLOOKUP", "HLOOKUP"} else 2
     if len(node.args) <= at:
         return "1"
@@ -606,31 +1280,46 @@ def _lookup_mode(node: FunctionNode, name: str) -> str | None:
     return str(s)
 
 
-def plan_probes(graph: WorkbookGraph, cells: Iterable[CellRef], *, cap: int) -> ProbePlan:
-    """Plan probes for the branch, lookup, rounding, comparison and dynamic-ref
-    nodes of each cell's formula; cells are taken in sorted order.
+def plan_probes(
+    graph: WorkbookGraph,
+    cells: Iterable[CellRef],
+    *,
+    cap: int,
+    as_of: date | None = None,
+    inputs: Iterable[CellRef] = (),
+    extra: Iterable[CellRef] = (),
+) -> ProbePlan:
+    """Plan probes for the branch, lookup, rounding, comparison, dynamic-ref and
+    number-to-text nodes of each cell's formula; cells are taken in sorted order, then
+    the ``extra`` cells not among them (so they are the first to go past ``cap``).
+    ``as_of`` is the run's ``--as-of`` date, which lifted ``TODAY()``/``NOW()`` read;
+    ``inputs`` are the mapped input cells (constants a policy changes).
 
     A node that :func:`anchor` cannot lift, any node beneath ``LET``/``LAMBDA``,
     every node of an array formula or inside an always-array function's arguments
     (``SUMPRODUCT``...), and every probe beyond ``cap`` is recorded in ``unplaced`` (one entry per probe).
     Unparseable formulas produce no probes (the pattern scan refuses them).
     """
-    planner = _Planner(graph, cap)
-    for cell in sorted(set(cells)):
-        text = graph.formula(cell)
-        if text is None:
-            continue
-        root = parse_formula(text)
-        if root is None:
-            logger.debug("no probes for {}: unparseable formula", cell.a1())
-            continue
-        planner.cell = cell
-        planner.family = graph.family(cell)
-        planner.counters = {}
-        planner.visit(root, False, graph.is_array_formula(cell))
-    return ProbePlan(
-        planner.probes, planner.unplaced, {name.lower(): name for name in graph.sheets()}
-    )
+    planner = _Planner(graph, cap, as_of, inputs=frozenset(inputs))
+    first = set(cells)
+    for group in (sorted(first), sorted(set(extra) - first)):
+        for cell in group:
+            text = graph.formula(cell)
+            if text is None:
+                continue
+            root = parse_formula(text)
+            if root is None:
+                logger.debug("no probes for {}: unparseable formula", cell.a1())
+                continue
+            planner.cell = cell
+            planner.family = graph.family(cell)
+            planner.counters = {}
+            planner.criteria = set()
+            planner.visit(root, False, graph.is_array_formula(cell))
+        # Each group's join sources go after its cells' own probes.
+        planner.place_sources()
+    sheets = {name.lower(): name for name in graph.sheets()}
+    return ProbePlan(planner.probes, planner.unplaced, sheets, planner.join_uses, planner.over_cap)
 
 
 # -- placing and reading -------------------------------------------------------
@@ -724,7 +1413,12 @@ def _types_differ(probe: Probe, values: list[EngineValue]) -> bool:
 
 
 def _text_cells(text: EngineValue, sheet: str, sheets: dict[str, str]) -> list[CellRef] | None:
-    """Cells of an ``INDIRECT`` text address (A1 style); None when not a plain range."""
+    """Cells of an ``INDIRECT`` text address (A1 style); None when not a plain range.
+
+    An address off the grid (row 0, past row 1,048,576 or column XFD) is None too:
+    Excel's ``INDIRECT`` gives ``#REF!`` there, while IronCalc 0.9.1 reads a
+    sheet-qualified row 0 as 0 (or a range from it as starting on row 1).
+    """
     if not isinstance(text, str) or _is_error(text):
         return None
     m = _TEXT_REF.match(text.strip())
@@ -735,6 +1429,8 @@ def _text_cells(text: EngineValue, sheet: str, sheets: dict[str, str]) -> list[C
     r1, c1 = int(m.group("r1")), _col_to_number(m.group("c1"))
     r2 = int(m.group("r2")) if m.group("r2") else r1
     c2 = _col_to_number(m.group("c2")) if m.group("c2") else c1
+    if not (1 <= min(r1, r2) and max(r1, r2) <= _MAX_ROW and max(c1, c2) <= _MAX_COL):
+        return None
     return _rect(target, min(r1, r2), min(c1, c2), abs(r2 - r1) + 1, abs(c2 - c1) + 1)
 
 
@@ -748,6 +1444,8 @@ def _dynamic_cells(
     """The cells a dynamic reference landed on; None when the reading is unusable."""
     if probe.meta["function"] == "INDIRECT":
         return _text_cells(values[0], probe.meta["sheet"], sheets)
+    if probe.meta["function"] == _RANGE:
+        return _range_cells(probe.meta["sheet"], values)
     nums = [v for v in values if isinstance(v, float)]
     if len(nums) != 4 or nums[2] < 1 or nums[3] < 1:
         return None
@@ -755,11 +1453,33 @@ def _dynamic_cells(
     return _rect(probe.meta["sheet"], row, col, rows, cols)
 
 
+def _range_cells(sheet: str, values: list[EngineValue]) -> list[CellRef] | None:
+    """The rectangle spanning a built range's two corners (first cell and size each)."""
+    nums = [v for v in values if isinstance(v, float)]
+    if len(nums) != 8 or min(nums) < 1:
+        return None
+    tops, lefts, bottoms, rights = [], [], [], []
+    for row, col, rows, cols in (nums[:4], nums[4:]):
+        tops.append(int(row))
+        lefts.append(int(col))
+        bottoms.append(int(row + rows) - 1)
+        rights.append(int(col + cols) - 1)
+    top, left = min(tops), min(lefts)
+    return _rect(sheet, top, left, max(bottoms) - top + 1, max(rights) - left + 1)
+
+
 def _live(probe: Probe, outcomes: dict[tuple[CellRef, int], str]) -> bool | None:
     """Whether the cell evaluates the probe's part: True, False, or None (unknown)."""
+    return _live_at(probe.cell, probe.guards, outcomes)
+
+
+def _live_at(
+    cell: CellRef, guards: tuple[Guard, ...], outcomes: dict[tuple[CellRef, int], str]
+) -> bool | None:
+    """Whether ``cell`` evaluates a part under ``guards``: True, False or None."""
     live: bool | None = True
-    for ordinal, taken, maybe in probe.guards:
-        outcome = outcomes.get((probe.cell, ordinal))
+    for ordinal, taken, maybe in guards:
+        outcome = outcomes.get((cell, ordinal))
         if outcome is None or outcome in maybe:
             live = None
         elif outcome not in taken:
@@ -815,10 +1535,22 @@ def read_probes(engine: Engine, plan: ProbePlan) -> ProbeReadings:
                 readings.near_comparison.add(probe.cell)
             if _types_differ(probe, values):
                 readings.type_mismatch.add(probe.cell)
+        elif probe.kind is ProbeKind.number_text:
+            if probe.meta["check"] == "source":
+                continue  # read below, once for each join that reads it
+            detail = _number_text_reason(probe, values)
+            if detail is not None:
+                readings.number_text.setdefault(probe.cell, set()).add(detail)
         else:
             landed = _dynamic_cells(probe, values, plan.sheets)
             dynamic.setdefault(probe.cell, set()).update(landed or ())
             if landed is None:
                 readings.dynamic_unread.add(probe.cell)
+    for use in plan.join_uses:
+        if _live_at(use.cell, use.guards, outcomes) is False:
+            continue
+        detail = _general_reason(values_of[use.source], use.check)
+        if detail is not None:
+            readings.number_text.setdefault(use.cell, set()).add(detail)
     readings.dynamic_refs = {cell: sorted(cells) for cell, cells in dynamic.items()}
     return readings
