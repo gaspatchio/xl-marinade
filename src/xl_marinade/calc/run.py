@@ -27,7 +27,13 @@ from xl_marinade.calc.config import (
     load_variables,
     parse_outputs,
 )
-from xl_marinade.calc.engine import Engine, EngineValue, engine_version, quiet_native_output
+from xl_marinade.calc.engine import (
+    Engine,
+    EngineValue,
+    engine_version,
+    functions_engine_lacks,
+    quiet_native_output,
+)
 from xl_marinade.calc.graph import ListItems, StoredValue, WorkbookGraph, open_graph
 from xl_marinade.calc.models import (
     ArrayRange,
@@ -198,7 +204,9 @@ def coerce_input(raw: str, stored: StoredValue) -> float | str | bool:
             written ``YYYY-MM-DD``, a time), a leading apostrophe, an error value, a
             number outside Excel's range, and an ISO date before 1900-03-01.
     """
-    text = raw.strip()
+    # Excel's entry ignores ordinary spaces around a number, date or boolean, not other
+    # white space (a non-breaking space makes the entry text).
+    text = raw.strip(" ")
     if isinstance(stored, bool):
         upper = text.upper()
         if upper not in (_TRUE, _FALSE):
@@ -259,6 +267,13 @@ def _locale_spelling(text: str) -> str | None:
         return (
             "text with a leading apostrophe, which Excel drops (it keeps the rest as "
             "text); give the value without it"
+        )
+    if any(ch.isspace() and ch != " " for ch in text) and _PLAIN_NUMBER.fullmatch(
+        "".join(text.split())
+    ):
+        return (
+            "a number with a non-breaking space or other white space, which Excel does "
+            "not ignore (it keeps the entry as text); remove it"
         )
     kind = _locale_kind(text)
     if kind is None:
@@ -366,7 +381,8 @@ def _allowed(raw: str, value: float | str | bool | None, allowed: ListItems) -> 
     number matches number items only, text or a boolean non-number items ignoring case.
     """
     if allowed.literal:
-        folded = raw.lower()
+        # A converted entry is checked as entered: without the spaces conversion drops.
+        folded = (raw.strip(" ") if isinstance(value, (bool, float)) else raw).lower()
         for item in allowed.items:
             text = _as_text(item)
             if text.lower() == folded:
@@ -1075,7 +1091,12 @@ def calc(req: CalcRequest) -> CalcResult:
             _with_unheld_externals(
                 graph,
                 prepared,
-                scan_patterns(graph, as_of=req.as_of, data_table_cells=prepared.data_table_cells),
+                scan_patterns(
+                    graph,
+                    as_of=req.as_of,
+                    data_table_cells=prepared.data_table_cells,
+                    engine_lacks=functions_engine_lacks,
+                ),
             ),
             input_dependent_lookups(graph, set(inputs.values())),
             _relative_lists(graph, inputs),

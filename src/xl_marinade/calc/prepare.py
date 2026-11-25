@@ -371,11 +371,13 @@ def has_relative_reference(text: str) -> bool:
     return False
 
 
-def relative_names(src: Path) -> set[tuple[str | None, str]]:
-    """Defined names whose reference is relative, as (owning sheet or None, name).
+def defined_name_texts(src: Path) -> dict[tuple[str | None, str], str]:
+    """Every defined name's text as ``xl/workbook.xml`` holds it, keyed by (owning
+    sheet or None, name).
 
-    The extraction IR stores name destinations without ``$``, so this reads
-    ``xl/workbook.xml``.
+    The extraction IR keeps only reference destinations, without ``$``: a formula
+    name (a LAMBDA, say) has no text there, and a relative reference reads as an
+    absolute one.
 
     Raises:
         CalcInputError: if ``src`` is not a readable xlsx package.
@@ -386,16 +388,19 @@ def relative_names(src: Path) -> set[tuple[str | None, str]]:
     except (OSError, zipfile.BadZipFile, KeyError, ET.ParseError) as exc:
         raise CalcInputError(f"cannot read defined names of {src}: {exc}") from exc
     sheets = [el.get("name", "") for el in root.findall("m:sheets/m:sheet", _NS)]
-    found: set[tuple[str | None, str]] = set()
+    found: dict[tuple[str | None, str], str] = {}
     for el in root.findall("m:definedNames/m:definedName", _NS):
-        if not has_relative_reference(el.text or ""):
-            continue
         local = el.get("localSheetId")
         owner = sheets[int(local)] if local is not None and local.isdigit() else None
         if local is not None and (owner is None or int(local) >= len(sheets)):
             continue
-        found.add((owner, el.get("name", "")))
+        found[(owner, el.get("name", ""))] = el.text or ""
     return found
+
+
+def relative_names(texts: dict[tuple[str | None, str], str]) -> set[tuple[str | None, str]]:
+    """The defined names (from :func:`defined_name_texts`) whose reference is relative."""
+    return {key for key, text in texts.items() if has_relative_reference(text)}
 
 
 def prepare_engine_copy(src: Path, dst: Path, *, as_of: date | None) -> PreparedCopy:

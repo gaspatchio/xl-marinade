@@ -94,14 +94,24 @@ schema is a versioned public contract.
   type, so `1` no longer matches a cell holding the text `001`. Lists fed by a formula
   (`INDIRECT`, `OFFSET`, cascading dropdowns) or by a table column are still not
   checked; the guide now says so.
-- **`marinade calc`: a function IronCalc lacks is refused by name.** IronCalc 0.9.1
-  answers `#NAME?` for `AGGREGATE`, `BAHTTEXT` and 25 other Excel functions, and
-  `#NAME?` is an Excel error code too, so an `IFERROR`, `IF(ISERROR(…))` or
-  `IF(ISNUMBER(…))` around the call (the `AGGREGATE(14,6,…)` "largest ignoring errors"
-  idiom) came back `ok` with the error arm's value where Excel computes a number. Such a
-  call is now a refused pattern, `function IronCalc does not implement: AGGREGATE`; the
-  list is pinned to the installed IronCalc by a test. A `#NAME?` that appears in an output
-  for a policy, where the trust run had none, is an `engine_error`.
+- **`marinade calc`: a function the engine cannot compute is refused by name.** IronCalc
+  0.9.1 answers `#NAME?` for a function it does not know (`AGGREGATE`, `BAHTTEXT` and 25
+  other Excel functions, any VBA or add-in function, and functions newer than the
+  engine), and `#N/IMPL!` for some it knows but has not implemented. An `IFERROR`,
+  `IF(ISERROR(…))` or `IF(ISNUMBER(…))` around the call (the `AGGREGATE(14,6,…)` "largest
+  ignoring errors" idiom, or a VBA function with a fallback) turned that error into the
+  fallback value, which came back `ok` where Excel computes a number. calc now asks the
+  installed engine about every function the workbook calls and refuses each call it
+  cannot compute, on every input set: `function IronCalc does not implement: MYFN`. A
+  workbook whose VBA function is missing in Excel too is refused as well. Calls the
+  engine computes for some arguments only are refused by shape: `SHEETS` with a
+  reference; `RANK`/`RANK.EQ`/`RANK.AVG` unless the list is written as a range; and
+  `DATEDIF`, `DATEVALUE`, `FORMULATEXT`, `N` or `UNICODE` given a range, a LET or LAMBDA
+  parameter, or an expression over one (not through a function that returns one value,
+  such as `SUM`, `INDEX` with literal non-zero row and column, or a lookup of one value).
+  A LAMBDA held in a defined name gets every check a cell formula gets, through its
+  body, for every cell that calls it. A `#NAME?` that appears in an output for a
+  policy, where the trust run had none, is an `engine_error`.
 - **`marinade calc`: an `INDIRECT` address off the grid is refused.** IronCalc reads
   `INDIRECT("Rates!B0")` as 0 (and a range from row 0 as starting on row 1) where Excel
   gives `#REF!`, so a policy just below a table's first row came back `ok` with 0. An
@@ -234,6 +244,14 @@ schema is a versioned public contract.
   id field is exempt (it may be written into a display cell).
   `run.json` gains `inputs`: per field, the cell it sets and whether a requested output
   reads it (`true`, `false` or `"unknown"`).
+- **`marinade calc`: a policy value keeps its spaces.** Every value in `policies.csv`
+  was trimmed before it reached its cell, so `"  A "` set the text `A` in a text cell
+  and a formula reading it (`LEN`, a comparison, a lookup key) came back `ok` with the
+  value for `A`. Values are now set as written; a number, date or boolean cell still
+  reads through surrounding spaces, as Excel's entry does (ordinary spaces only: a
+  non-breaking space makes a number entry text, which is refused by name), and a value of only
+  spaces is still a blank value. Ids are still trimmed, and so is an id mapped to a
+  cell.
 
 ## [0.8.0] - 2026-11-24
 

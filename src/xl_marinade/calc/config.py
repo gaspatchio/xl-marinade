@@ -115,11 +115,15 @@ def _no_dropped_fields(
 
 
 def _field(fields: list[str], at: int) -> str:
-    return fields[at].strip() if at < len(fields) else ""
+    """The field as the file holds it; ``""`` past the end of a short row."""
+    return fields[at] if at < len(fields) else ""
 
 
 def load_policies(path: Path, input_map: InputMap) -> list[Policy]:
-    """Load ``policies.csv``; ids stay text, and every mapped field must be filled."""
+    """Load ``policies.csv``; ids stay text, and every mapped field must be filled.
+
+    Values are kept exactly as written (spaces included); ids are trimmed.
+    """
     id_col = input_map.id_field or "id"
     try:
         with path.open(encoding="utf-8-sig", newline="") as fh:
@@ -142,7 +146,7 @@ def load_policies(path: Path, input_map: InputMap) -> list[Policy]:
             for fields in reader:
                 if not fields:
                     continue  # a blank line
-                pid = _field(fields, at[id_col])
+                pid = _field(fields, at[id_col]).strip()  # an id is a label
                 if not pid:
                     raise CalcInputError(f"{path} has a row with a blank {id_col!r}")
                 _no_dropped_fields(fields, header, pid, path, reader.line_num)
@@ -151,8 +155,10 @@ def load_policies(path: Path, input_map: InputMap) -> list[Policy]:
                 seen.add(pid)
                 values: dict[str, str] = {}
                 for name in input_map.fields:
-                    val = _field(fields, at[name])
-                    if not val:
+                    # Kept as written: spaces are part of a text value, and a number
+                    # cell reads through them as Excel's entry does (coerce_input).
+                    val = pid if name == id_col else _field(fields, at[name])
+                    if not val.strip():
                         raise CalcInputError(f"policy {pid!r}: blank value for field {name!r}")
                     values[name] = val
                 policies.append(Policy(id=pid, values=values))

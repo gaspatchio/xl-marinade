@@ -19,6 +19,7 @@ ironcalc = pytest.importorskip("ironcalc")
 
 from tests.calc.conftest import F  # noqa: E402
 from xl_marinade.calc import CalcRequest, CalcResult, calc  # noqa: E402
+from xl_marinade.calc.engine import functions_engine_lacks  # noqa: E402
 from xl_marinade.calc.formula_ast import ENGINE_LACKS  # noqa: E402
 from xl_marinade.calc.models import CellRef  # noqa: E402
 from xl_marinade.calc.probes import _text_cells  # noqa: E402
@@ -191,7 +192,7 @@ def test_xlookup_not_found_arm_holding_aggregate_is_refused(
     assert _LACKS_AGGREGATE.format(cell="Calc!B1") in row["reasons"]
 
 
-def test_name_error_off_the_stored_path_is_an_engine_error(make_book: Book, tmp_path: Path) -> None:
+def test_unknown_function_is_refused_by_name_on_every_path(make_book: Book, tmp_path: Path) -> None:
     # A function the engine does not know (here one no list could hold) answers #NAME?
     # only on the arm the stored inputs did not take; the stored value 2 reproduces.
     # For x = 7 the cell evaluates the unknown function: whatever Excel makes of it,
@@ -205,11 +206,348 @@ def test_name_error_off_the_stored_path_is_an_engine_error(make_book: Book, tmp_
     )
     res = _run(tmp_path, book, "id,x\nP1,1\nP7,7\n", {"x": "Inputs!B1"}, ["Calc!B1"])
     rows = _rows(res)
-    assert rows[("P1", "Calc!B1")]["status"] in {"ok", "unverified_path"}
-    row = rows[("P7", "Calc!B1")]
-    assert row["value"] == "#NAME?"
-    assert row["status"] == "refused"
-    assert "engine_error@Calc!B1:" in row["reasons"]
+    # The installed engine is asked about every function the workbook calls, so the
+    # unknown one is refused by name on every path, the stored one included.
+    for pid in ("P1", "P7"):
+        row = rows[(pid, "Calc!B1")]
+        assert row["status"] == "refused", (pid, row)
+        assert (
+            "refused_pattern@Calc!B1:function IronCalc does not implement: NOTAFUNCTIONYET"
+            in row["reasons"]
+        )
+    assert rows[("P7", "Calc!B1")]["value"] == "#NAME?"
+
+
+# -- functions the installed engine lacks, asked at run time ----------------------
+
+
+def test_engine_reports_the_functions_it_lacks() -> None:
+    # A bare call answers an argument error for a function IronCalc implements,
+    # #NAME? for one it does not know, and #N/IMPL! for one it knows but has not
+    # implemented. Prefixes are dropped; LET/LAMBDA parameters (_xlpm.) are not asked.
+    asked = {
+        "SUM",
+        "_xlfn.XLOOKUP",
+        "MYUDF",
+        "_xll.ADDIN",
+        "_xlfn.FUTUREFN",
+        "_xlfn.FORECAST.ETS",
+        "_xlfn.AGGREGATE",
+        "SHEETS",
+        "_xlpm.f",
+    }
+    assert functions_engine_lacks(asked) == frozenset(
+        {"MYUDF", "ADDIN", "FUTUREFN", "FORECAST.ETS", "AGGREGATE"}
+    )
+    assert functions_engine_lacks(set()) == frozenset()
+
+
+@pytest.mark.parametrize(
+    ("call", "name"),
+    [
+        ("MYUDF(Inputs!B1)", "MYUDF"),  # a VBA function
+        ("_xll.ADDIN(Inputs!B1)", "ADDIN"),  # an add-in function
+        ("_xlfn.FUTUREFN(Inputs!B1)", "FUTUREFN"),  # newer than the engine
+        ("_xlfn.FORECAST.ETS(4,Inputs!B2:B4,Inputs!C2:C4)", "FORECAST.ETS"),  # #N/IMPL!
+    ],
+)
+def test_a_function_the_engine_lacks_is_refused_even_behind_an_error_handler(
+    make_book: Book, tmp_path: Path, call: str, name: str
+) -> None:
+    # IronCalc answers #NAME? or #N/IMPL!; IFERROR and IF(ISERROR()) turn either into
+    # the fallback 0 on every input, a plausible value no trust run can tell apart
+    # from Excel's when the stored inputs take the other arm. x = 1 keeps the stored
+    # arm (2); x = 7 takes the handler.
+    book = make_book(
+        "lack",
+        {
+            "Inputs": {"B1": 1, "B2": 1, "B3": 2, "B4": 3, "C2": 10, "C3": 20, "C4": 30},
+            "Calc": {
+                "B1": F(f"=IF(Inputs!B1>5,IFERROR({call},0),2)", 2.0),
+                "B2": F(f"=IF(Inputs!B1>5,IF(ISERROR({call}),0,1),2)", 2.0),
+            },
+        },
+    )
+    res = _run(tmp_path, book, "id,x\nP1,1\nP7,7\n", {"x": "Inputs!B1"}, ["Calc!B1", "Calc!B2"])
+    rows = _rows(res)
+    for pid in ("P1", "P7"):
+        for out in ("Calc!B1", "Calc!B2"):
+            row = rows[(pid, out)]
+            assert row["status"] == "refused", (pid, out, row)
+            assert (
+                f"refused_pattern@{out}:function IronCalc does not implement: {name}"
+                in row["reasons"]
+            )
+
+
+def test_sheets_of_a_reference_is_refused(make_book: Book, tmp_path: Path) -> None:
+    # Excel's SHEETS(Inputs!B1) is 1, so B1 = 1; IronCalc answers #N/IMPL! for SHEETS
+    # with an argument, which ISERROR turns into 0. SHEETS() with no argument works.
+    book = make_book(
+        "sh",
+        {
+            "Inputs": {"B1": 1},
+            "Calc": {
+                "B1": F("=IF(ISERROR(_xlfn.SHEETS(Inputs!B1)),0,1)", 1.0),
+                "B2": F("=_xlfn.SHEETS()+Inputs!B1", 3.0),
+            },
+        },
+    )
+    res = _run(tmp_path, book, "id,x\nP1,1\n", {"x": "Inputs!B1"}, ["Calc!B1", "Calc!B2"])
+    rows = _rows(res)
+    assert rows[("P1", "Calc!B1")]["status"] == "refused"
+    assert (
+        "refused_pattern@Calc!B1:function IronCalc does not implement: SHEETS with a reference"
+        in rows[("P1", "Calc!B1")]["reasons"]
+    )
+    assert "SHEETS" not in rows[("P1", "Calc!B2")]["reasons"]
+
+
+def test_a_let_bound_lambda_is_not_mistaken_for_an_unknown_function(
+    make_book: Book, tmp_path: Path
+) -> None:
+    # LET(f, LAMBDA(x, x+1), f(B1)): Excel stores f as _xlpm.f, which a bare call
+    # outside the LET does not know. For x = 1 the result is 2, for x = 4 it is 5.
+    book = make_book(
+        "let",
+        {
+            "Inputs": {"B1": 1},
+            "Calc": {
+                "B1": F(
+                    "=_xlfn.LET(_xlpm.f,_xlfn.LAMBDA(_xlpm.x,_xlpm.x+1),_xlpm.f(Inputs!B1))",
+                    2.0,
+                )
+            },
+        },
+    )
+    res = _run(tmp_path, book, "id,x\nP4,4\n", {"x": "Inputs!B1"}, ["Calc!B1"])
+    row = _rows(res)[("P4", "Calc!B1")]
+    assert "does not implement" not in row["reasons"], row
+    assert row["value"] == "5.0"
+
+
+def test_a_lambda_held_in_a_defined_name_is_not_asked_about(
+    make_book: Book, tmp_path: Path
+) -> None:
+    # AddOne = LAMBDA(x, x+1) is a defined name, which the engine resolves in the
+    # workbook; for x = 4 the result is 5.
+    book = make_book(
+        "nl",
+        {"Inputs": {"B1": 1}, "Calc": {"B1": F("=AddOne(Inputs!B1)", 2.0)}},
+        names={"AddOne": "_xlfn.LAMBDA(_xlpm.x,_xlpm.x+1)"},
+    )
+    res = _run(tmp_path, book, "id,x\nP4,4\n", {"x": "Inputs!B1"}, ["Calc!B1"])
+    row = _rows(res)[("P4", "Calc!B1")]
+    assert "does not implement" not in row["reasons"], row
+    assert row["value"] == "5.0"
+
+
+def test_a_udf_prefix_is_dropped_from_the_reason(make_book: Book, tmp_path: Path) -> None:
+    book = make_book(
+        "udf",
+        {"Inputs": {"B1": 1}, "Calc": {"B1": F("=IFERROR(_xludf.MYFN(Inputs!B1),2)", 2.0)}},
+    )
+    res = _run(tmp_path, book, "id,x\nP1,1\n", {"x": "Inputs!B1"}, ["Calc!B1"])
+    assert _patterns(res)["Calc!B1"] == ["function IronCalc does not implement: MYFN"]
+
+
+@pytest.mark.parametrize(
+    ("formula", "array", "reason"),
+    [
+        # Excel applies DATEVALUE to each cell of the range in an array context and
+        # COUNT counts the one date (1); IronCalc answers one #N/IMPL!, which COUNT
+        # skips (0).
+        ("=COUNT(DATEVALUE(Inputs!B1:B3))", True, "DATEVALUE over a range"),
+        ("=SUMPRODUCT(COUNT(DATEVALUE(Inputs!B1:B3)))", False, "DATEVALUE over a range"),
+        ("=COUNT(_xlfn.UNICODE(Inputs!B1:B3))", True, "UNICODE over a range"),
+        ("=COUNT(N(Inputs!B1:B3))", True, "N over a range"),
+        ('=COUNT(DATEDIF(Inputs!B1:B3,Inputs!C1:C3,"d"))', True, "DATEDIF over a range"),
+    ],
+)
+def test_a_shape_the_engine_cannot_compute_is_refused(
+    make_book: Book, tmp_path: Path, formula: str, array: bool, reason: str
+) -> None:
+    from openpyxl.worksheet.formula import ArrayFormula
+
+    stored = {"B1": "x", "B2": "y", "B3": "z", "C1": "a", "C2": "b", "C3": "c"}
+    cell = F(ArrayFormula("B1", formula), 0.0) if array else F(formula, 0.0)
+    book = make_book("shape", {"Inputs": stored, "Calc": {"B1": cell}})
+    res = _run(tmp_path, book, "id,x\nP1,2024-01-02\n", {"x": "Inputs!B2"}, ["Calc!B1"])
+    row = _rows(res)[("P1", "Calc!B1")]
+    assert row["status"] == "refused", row
+    assert f"function IronCalc does not implement: {reason}" in row["reasons"]
+
+
+@pytest.mark.parametrize("rank", ["RANK", "_xlfn.RANK.EQ", "_xlfn.RANK.AVG"])
+def test_rank_over_a_single_cell_is_refused(make_book: Book, tmp_path: Path, rank: str) -> None:
+    # Stored 1 in a list of the single cell C1 (2) is not found: #N/A, COUNT 0. The
+    # policy's 2 is found, ranking first, so Excel's COUNT is 1; IronCalc answers
+    # #N/IMPL! for a single-cell list, which COUNT skips (0).
+    book = make_book(
+        "rk1",
+        {
+            "Inputs": {"B1": 1, "C1": 2},
+            "Calc": {"B1": F(f"=COUNT({rank}(Inputs!B1,Inputs!C1))", 0.0)},
+        },
+    )
+    res = _run(tmp_path, book, "id,x\nP2,2\n", {"x": "Inputs!B1"}, ["Calc!B1"])
+    row = _rows(res)[("P2", "Calc!B1")]
+    assert row["status"] == "refused", row
+    name = rank.removeprefix("_xlfn.")
+    assert f"function IronCalc does not implement: {name} over a single cell" in row["reasons"]
+
+
+def test_rank_over_a_range_is_not_refused(make_book: Book, tmp_path: Path) -> None:
+    # 2 ranks second (descending) in 1, 2, 3 -> 2; the policy's 3 ranks first.
+    book = make_book(
+        "rk",
+        {
+            "Inputs": {"B1": 2, "C1": 1, "C2": 2, "C3": 3},
+            "Calc": {"B1": F("=RANK(Inputs!B1,Inputs!C1:C3)", 2.0)},
+        },
+    )
+    res = _run(tmp_path, book, "id,x\nP3,3\n", {"x": "Inputs!B1"}, ["Calc!B1"])
+    row = _rows(res)[("P3", "Calc!B1")]
+    assert "does not implement" not in row["reasons"], row
+    assert row["value"] == "1.0"
+
+
+_SHAPES = {
+    "B1": "x",
+    "B2": "y",
+    "B3": "z",
+    "C1": "2024-01-02",
+    "C2": "2024-01-05",
+    "C3": "2024-01-09",
+    "D1": 1,
+    "D2": 2,
+    "D3": 3,
+}
+
+
+def test_a_lambda_body_gets_every_check_a_cell_formula_gets(
+    make_book: Book, tmp_path: Path
+) -> None:
+    # Rate = IF(D1>2, 0.1, 1/0); Scale(x) = IFERROR(x*Rate, 0). Stored D1 = 2: Rate is
+    # #DIV/0!, Scale is 0. For D1 = 25 Excel gives 2.5; the engine's copy of a formula
+    # name is not evidence, as it is not when a cell reads Rate directly.
+    book = make_book(
+        "body",
+        {"Inputs": {"D1": 2}, "Calc": {"B1": F("=Scale(Inputs!D1)", 0.0)}},
+        names={
+            "Rate": "IF(Inputs!$D$1>2,0.1,1/0)",
+            "Scale": "_xlfn.LAMBDA(_xlpm.x,IFERROR(_xlpm.x*Rate,0))",
+        },
+    )
+    res = _run(tmp_path, book, "id,x\nP25,25\n", {"x": "Inputs!D1"}, ["Calc!B1"])
+    row = _rows(res)[("P25", "Calc!B1")]
+    assert row["status"] == "refused", row
+    assert "refused_pattern@Calc!B1:name holds a formula" in row["reasons"]
+
+
+@pytest.mark.parametrize(
+    ("formula", "names", "field", "value", "reason"),
+    [
+        # Safe(x) = IFERROR(MYUDF(x), 0): the engine answers 0 on every input.
+        (
+            "=Safe(Inputs!D1)",
+            {"Safe": "_xlfn.LAMBDA(_xlpm.x,IFERROR(MYUDF(_xlpm.x),0))"},
+            "Inputs!D1",
+            "2",
+            "MYUDF",
+        ),
+        # CountDates over B1:B3 with one ISO date: Excel 1, the engine 0.
+        (
+            "=CountDates(Inputs!B1:B3)",
+            {"CountDates": "_xlfn.LAMBDA(_xlpm.r,SUMPRODUCT(COUNT(DATEVALUE(_xlpm.r))))"},
+            "Inputs!B2",
+            "2024-01-02",
+            "DATEVALUE over a range",
+        ),
+        # The same through LET: r is a range Excel walks cell by cell.
+        (
+            "=SUMPRODUCT(_xlfn.LET(_xlpm.r,Inputs!B1:B3,COUNT(DATEVALUE(_xlpm.r))))",
+            None,
+            "Inputs!B2",
+            "2024-01-02",
+            "DATEVALUE over a range",
+        ),
+        # INDEX with row 0 returns the whole column B1:B3: Excel 1, the engine 0.
+        (
+            "=SUMPRODUCT(COUNT(DATEVALUE(INDEX(Inputs!B1:B3,0,1))))",
+            None,
+            "Inputs!B2",
+            "2024-01-02",
+            "DATEVALUE over a range",
+        ),
+        # A computed INDEX row may be 0 too.
+        (
+            "=SUMPRODUCT(COUNT(DATEVALUE(INDEX(Inputs!B1:B3,Inputs!D1-1,1))))",
+            None,
+            "Inputs!B2",
+            "2024-01-02",
+            "DATEVALUE over a range",
+        ),
+        # A lookup given a range of lookup values returns one value per lookup value.
+        (
+            "=SUMPRODUCT(COUNT(DATEVALUE(VLOOKUP(Inputs!D1:D3,Inputs!D1:E3,2,FALSE))))",
+            None,
+            "Inputs!E2",
+            "2024-01-02",
+            "DATEVALUE over a range",
+        ),
+        # RANK over a single cell an INDEX returns: Excel 1, the engine #N/IMPL!.
+        (
+            "=COUNT(RANK(2,INDEX(Inputs!D1:D3,Inputs!D1)))",
+            None,
+            "Inputs!D1",
+            "2",
+            "RANK over a computed reference",
+        ),
+    ],
+)
+def test_a_gap_behind_a_name_let_or_computed_reference_is_refused(
+    make_book: Book,
+    tmp_path: Path,
+    formula: str,
+    names: dict[str, str] | None,
+    field: str,
+    value: str,
+    reason: str,
+) -> None:
+    book = make_book("hid", {"Inputs": _SHAPES, "Calc": {"B1": F(formula, 0.0)}}, names=names)
+    res = _run(tmp_path, book, f"id,x\nP1,{value}\n", {"x": field}, ["Calc!B1"])
+    row = _rows(res)[("P1", "Calc!B1")]
+    assert row["status"] == "refused", row
+    assert f"function IronCalc does not implement: {reason}" in row["reasons"]
+
+
+@pytest.mark.parametrize(
+    ("formula", "stored", "policy", "want"),
+    [
+        # A range inside a function that returns one value is not walked per cell.
+        ("=N(SUM(Inputs!D1:D3))+Inputs!D1", 7.0, "2", "9.0"),  # (2+2+3) + 2
+        # INDEX with a literal non-zero row is one cell: C2 = 2024-01-05, plus D1 = 2.
+        ("=DATEVALUE(INDEX(Inputs!C1:C3,2))+Inputs!D1", 45297.0, "2", "45298.0"),
+        (
+            "=DATEVALUE(VLOOKUP(Inputs!D1,Inputs!D1:E3,2,FALSE))+0",
+            45293.0,
+            "3",
+            "45293.0",
+        ),  # D1 is now 3, the first match: E1 = 2024-01-02
+        ("=_xlfn.UNICODE(LEFT(INDEX(Inputs!C1:C3,2)))+Inputs!D1", 51.0, "2", "52.0"),  # "2" = 50
+    ],
+)
+def test_a_range_under_a_single_value_function_is_not_refused(
+    make_book: Book, tmp_path: Path, formula: str, stored: float, policy: str, want: str
+) -> None:
+    inputs = dict(_SHAPES)
+    inputs.update({"E1": "2024-01-02", "E2": "2024-01-05", "E3": "2024-01-09"})
+    book = make_book("fp", {"Inputs": inputs, "Calc": {"B1": F(formula, stored)}})
+    res = _run(tmp_path, book, f"id,x\nP1,{policy}\n", {"x": "Inputs!D1"}, ["Calc!B1"])
+    row = _rows(res)[("P1", "Calc!B1")]
+    assert "does not implement" not in row["reasons"], row
+    assert row["value"] == want
 
 
 # -- T07: INDIRECT text off the grid ---------------------------------------------

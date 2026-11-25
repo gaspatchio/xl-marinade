@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
-from collections.abc import Iterator
+from collections.abc import Callable, Collection, Iterator
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Literal
@@ -154,6 +154,9 @@ class _Scan:
     as_of: date | None
     names: dict[tuple[str, str], NameDef | None] = field(default_factory=dict)
     lookups: dict[tuple[str, str, Axis, frozenset[Order]], str | None] = field(default_factory=dict)
+    calls: dict[str, set[CellRef]] = field(default_factory=dict)
+    """Function names as written, each with the cells that call it, for the engine to be
+    asked about."""
 
 
 def _multi_cell(ref: str, default_sheet: str) -> bool:
@@ -330,10 +333,178 @@ def _lookup_problem(
     return problem
 
 
+_PER_CELL = frozenset({"DATEDIF", "DATEVALUE", "FORMULATEXT", "N", "UNICODE"})
+"""Functions IronCalc answers ``#N/IMPL!`` for when an argument covers several cells,
+where Excel computes each cell (in an array context) or the one in line with the
+formula."""
+_RANK = frozenset({"RANK", "RANK.EQ", "RANK.AVG"})
+
+
+_ONE_VALUE = frozenset(
+    {
+        "AND",
+        "AREAS",
+        "AVERAGE",
+        "AVERAGEA",
+        "AVERAGEIF",
+        "AVERAGEIFS",
+        "COLUMNS",
+        "CONCAT",
+        "CONCATENATE",
+        "COUNT",
+        "COUNTA",
+        "COUNTBLANK",
+        "COUNTIF",
+        "COUNTIFS",
+        "IRR",
+        "MAX",
+        "MAXA",
+        "MAXIFS",
+        "MEDIAN",
+        "MIN",
+        "MINA",
+        "MINIFS",
+        "NPV",
+        "OR",
+        "PRODUCT",
+        "ROWS",
+        "STDEV",
+        "STDEV.P",
+        "STDEV.S",
+        "SUM",
+        "SUMIF",
+        "SUMIFS",
+        "SUMPRODUCT",
+        "TEXTJOIN",
+        "VAR",
+        "VAR.P",
+        "VAR.S",
+        "XOR",
+    }
+)
+"""Functions that reduce the ranges they are given to one value, so a range inside them
+does not reach the call around them."""
+_LOOKUPS = frozenset({"HLOOKUP", "LOOKUP", "MATCH", "VLOOKUP", "XMATCH"})
+_LET_PARAMETER = "_XLPM."
+
+
+def _covers_cells(scan: _Scan, cell: CellRef, arg: ASTNode) -> bool:
+    """True when ``arg`` may hand the function around it more than one cell: a
+    reference or name over several cells, or a LET/LAMBDA parameter (which can be
+    bound to one), reached through operators and functions that keep their shape."""
+    stack = [arg]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, RefNode):
+            if node.ref.upper().startswith(_LET_PARAMETER):
+                return True
+            definition = _name_def(scan, cell, node.ref)
+            if definition is not None:
+                if definition.kind == "cells" and _multi_cell_name(definition):
+                    return True
+            elif _multi_cell(node.ref, cell.sheet):
+                return True
+        elif isinstance(node, FunctionNode):
+            stack.extend(_shape_args(node))
+        elif isinstance(node, BinaryNode):
+            stack.extend([node.left, node.right])
+        elif isinstance(node, UnaryNode):
+            stack.append(node.operand)
+    return False
+
+
+def _shape_args(node: FunctionNode) -> list[ASTNode]:
+    """The arguments whose shape can become the shape of ``node``'s result.
+
+    A reducing function (``SUM``, ``COUNT``...) returns one value whatever it is given.
+    ``INDEX`` returns one cell only when its row and column are literal non-zero
+    numbers; row or column 0, or one computed at run time, can return a whole column or
+    row. A lookup returns one value per lookup value, so its first argument passes its
+    shape through. Any other function may keep the shape of all its arguments.
+    """
+    name = function_name(node.name)
+    if name == "INDEX":
+        picks = node.args[1:]
+        fixed = all(
+            isinstance(v, int | float) and not isinstance(v, bool) and v != 0
+            for v in (literal(a) for a in picks)
+        )
+        return [] if picks and fixed else node.args
+    if name in _LOOKUPS:
+        return node.args[:1]
+    return [] if name in _ONE_VALUE else node.args
+
+
+def _range_ref(scan: _Scan, cell: CellRef, arg: ASTNode) -> bool:
+    """True when ``arg`` is written as a reference to more than one cell."""
+    if not isinstance(arg, RefNode) or arg.ref.upper().startswith(_LET_PARAMETER):
+        return False
+    definition = _name_def(scan, cell, arg.ref)
+    if definition is not None:
+        return definition.kind == "cells" and _multi_cell_name(definition)
+    return _multi_cell(arg.ref, cell.sheet)
+
+
+def _shape_gap(scan: _Scan, cell: CellRef, name: str, args: list[ASTNode]) -> str | None:
+    """A call the engine knows but answers ``#N/IMPL!`` for with these arguments, where
+    Excel computes a value; None when the shape is not one of those."""
+    if name == "SHEETS" and args:
+        return "SHEETS with a reference"
+    if name in _RANK and len(args) >= 2 and not _range_ref(scan, cell, args[1]):
+        # IronCalc ranks only within a range written as such.
+        written = isinstance(args[1], RefNode) and not args[1].ref.upper().startswith(
+            _LET_PARAMETER
+        )
+        return f"{name} over a single cell" if written else f"{name} over a computed reference"
+    if name in _PER_CELL and any(_covers_cells(scan, cell, a) for a in args):
+        return f"{name} over a range"
+    return None
+
+
+def _call_reasons(scan: _Scan, cell: CellRef, node: FunctionNode, seen: frozenset[str]) -> set[str]:
+    """Why a call in ``cell``'s formula cannot be computed as Excel would: a function
+    the engine lacks, a shape it answers ``#N/IMPL!`` for, a random or clock function.
+
+    A defined name called like a function (one holding a LAMBDA) is the workbook's
+    own: its body gets every check a formula in this cell gets (:func:`_tree_reasons`),
+    instead of asking the engine (a scratch model has none of the workbook's names).
+    ``seen`` stops a name that calls itself.
+    """
+    found: set[str] = set()
+    definition = _name_def(scan, cell, node.name)
+    if definition is None:
+        scan.calls.setdefault(node.name, set()).add(cell)
+    elif definition.kind == "formula" and definition.name.upper() not in seen:
+        body = parse_formula(definition.text) if definition.text else None
+        if body is None:
+            found.add(UNPARSEABLE)
+        else:
+            found |= _tree_reasons(scan, cell, body, seen | {definition.name.upper()})
+    name = function_name(node.name)
+    gap = _shape_gap(scan, cell, name, node.args)
+    if gap is not None:
+        found.add(f"{ENGINE_LACKS_PREFIX}{gap}")
+    if name in ENGINE_LACKS:
+        # The engine's #NAME? is an Excel error code: an error handler around the
+        # call turns it into a plausible value no trust run can tell from Excel's.
+        found.add(f"{ENGINE_LACKS_PREFIX}{name}")
+    if name in _RANDOM:
+        found.add(name)
+    if name in _CLOCK and scan.as_of is None:
+        found.add(name)
+    return found
+
+
 def _formula_reasons(scan: _Scan, cell: CellRef, text: str) -> set[str]:
     root = parse_formula(text)
     if root is None:
         return {UNPARSEABLE}
+    return _tree_reasons(scan, cell, root, frozenset())
+
+
+def _tree_reasons(scan: _Scan, cell: CellRef, root: ASTNode, seen: frozenset[str]) -> set[str]:
+    """The refused patterns in a parsed formula of ``cell``, or in the body of a
+    LAMBDA name it calls (``seen`` holds the names being scanned)."""
     found: set[str] = set()
     for node, exempt in _walk(root):
         if isinstance(node, RefNode):
@@ -360,15 +531,8 @@ def _formula_reasons(scan: _Scan, cell: CellRef, text: str) -> set[str]:
             continue
         if not isinstance(node, FunctionNode):
             continue
+        found |= _call_reasons(scan, cell, node, seen)
         name = function_name(node.name)
-        if name in ENGINE_LACKS:
-            # The engine's #NAME? is an Excel error code: an error handler around the
-            # call turns it into a plausible value no trust run can tell from Excel's.
-            found.add(f"{ENGINE_LACKS_PREFIX}{name}")
-        if name in _RANDOM:
-            found.add(name)
-        if name in _CLOCK and scan.as_of is None:
-            found.add(name)
         spec = _lookup_spec(name, node.args)
         if spec is None:
             continue
@@ -447,9 +611,18 @@ def input_dependent_lookups(
 
 
 def scan_patterns(
-    graph: WorkbookGraph, *, as_of: date | None, data_table_cells: list[CellRef]
+    graph: WorkbookGraph,
+    *,
+    as_of: date | None,
+    data_table_cells: list[CellRef],
+    engine_lacks: Callable[[Collection[str]], frozenset[str]] | None = None,
 ) -> dict[CellRef, list[Reason]]:
     """Find cells whose formulas must be refused even when they reproduce.
+
+    ``engine_lacks`` is asked once about every function name the formulas call and
+    returns those the installed engine cannot compute (``engine.functions_engine_lacks``);
+    each call to one is refused by name, as :data:`ENGINE_LACKS` is. Without it only
+    that fixed list is used.
 
     Returns a map from cell to its ``refused_pattern`` reasons (root = the cell),
     sorted and without duplicates; cells with no reason are absent.
@@ -463,6 +636,15 @@ def scan_patterns(
         found = _formula_reasons(scan, cell, text)
         if found:
             details[cell].update(found)
+    if engine_lacks is not None and scan.calls:
+        # The engine's #NAME? or #N/IMPL! is an error value: an error handler around
+        # the call turns it into a plausible value on every input.
+        lacking = engine_lacks(set(scan.calls))
+        for raw, cells in scan.calls.items():
+            name = function_name(raw)
+            if name in lacking:
+                for cell in cells:
+                    details[cell].add(f"{ENGINE_LACKS_PREFIX}{name}")
     for cell in _cycle_cells(graph):
         details[cell].add(CIRCULAR)
     for cell in data_table_cells:
