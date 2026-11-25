@@ -190,3 +190,27 @@ def test_rows_for_and_writer_sorts_reasons(tmp_path: Path) -> None:
     assert path.read_text().splitlines()[1] == (
         "p1,w,,1.5,uncertain,engine_error:boom; near_comparison@S!A1:y; near_comparison@S!A2:x"
     )
+
+
+def test_values_keeps_edge_spaces_in_text_results(make_book: Book, tmp_path: Path) -> None:
+    # Excel's text results, as cached: " "&"Total" is " Total"; TEXT(1.5,"0.00")&"  " is
+    # "1.50  "; IF(TRUE,"",0) is the empty string (a value, not an empty cell).
+    p = make_book(
+        "pad",
+        {
+            "S": {
+                "A1": F('=" "&"Total"', " Total"),
+                "A2": F('=TEXT(1.5,"0.00")&"  "', "1.50  "),
+                "A3": F('=IF(TRUE,"",0)', ""),
+            }
+        },
+    )
+    vars_ = write_json(tmp_path, {"c": {"range": "S!A1:A3", "period_start": 0}})
+    out = values(ValuesRequest(p, vars_, tmp_path / "o"))
+    assert out.read_text().splitlines()[1:] == [
+        "stored,c,0, Total,stored,",
+        "stored,c,1,1.50  ,stored,",
+        "stored,c,2,,stored,",
+    ]
+    graph = open_graph(p, None, tmp_path / "t")
+    assert graph.has_stored(CellRef("S", 3, 1)) and graph.stored(CellRef("S", 3, 1)) == ""
