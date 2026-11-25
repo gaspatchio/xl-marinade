@@ -356,11 +356,7 @@ _ONE_VALUE = frozenset(
         "COUNTBLANK",
         "COUNTIF",
         "COUNTIFS",
-        "HLOOKUP",
-        "INDEX",
         "IRR",
-        "LOOKUP",
-        "MATCH",
         "MAX",
         "MAXA",
         "MAXIFS",
@@ -383,13 +379,12 @@ _ONE_VALUE = frozenset(
         "VAR",
         "VAR.P",
         "VAR.S",
-        "VLOOKUP",
-        "XMATCH",
         "XOR",
     }
 )
-"""Functions that reduce the ranges they are given to one value (``INDEX`` and the
-lookups to one cell), so a range inside them does not reach the call around them."""
+"""Functions that reduce the ranges they are given to one value, so a range inside them
+does not reach the call around them."""
+_LOOKUPS = frozenset({"HLOOKUP", "LOOKUP", "MATCH", "VLOOKUP", "XMATCH"})
 _LET_PARAMETER = "_XLPM."
 
 
@@ -410,13 +405,34 @@ def _covers_cells(scan: _Scan, cell: CellRef, arg: ASTNode) -> bool:
             elif _multi_cell(node.ref, cell.sheet):
                 return True
         elif isinstance(node, FunctionNode):
-            if function_name(node.name) not in _ONE_VALUE:
-                stack.extend(node.args)
+            stack.extend(_shape_args(node))
         elif isinstance(node, BinaryNode):
             stack.extend([node.left, node.right])
         elif isinstance(node, UnaryNode):
             stack.append(node.operand)
     return False
+
+
+def _shape_args(node: FunctionNode) -> list[ASTNode]:
+    """The arguments whose shape can become the shape of ``node``'s result.
+
+    A reducing function (``SUM``, ``COUNT``...) returns one value whatever it is given.
+    ``INDEX`` returns one cell only when its row and column are literal non-zero
+    numbers; row or column 0, or one computed at run time, can return a whole column or
+    row. A lookup returns one value per lookup value, so its first argument passes its
+    shape through. Any other function may keep the shape of all its arguments.
+    """
+    name = function_name(node.name)
+    if name == "INDEX":
+        picks = node.args[1:]
+        fixed = all(
+            isinstance(v, int | float) and not isinstance(v, bool) and v != 0
+            for v in (literal(a) for a in picks)
+        )
+        return [] if picks and fixed else node.args
+    if name in _LOOKUPS:
+        return node.args[:1]
+    return [] if name in _ONE_VALUE else node.args
 
 
 def _range_ref(scan: _Scan, cell: CellRef, arg: ASTNode) -> bool:
@@ -450,9 +466,9 @@ def _call_reasons(scan: _Scan, cell: CellRef, node: FunctionNode, seen: frozense
     the engine lacks, a shape it answers ``#N/IMPL!`` for, a random or clock function.
 
     A defined name called like a function (one holding a LAMBDA) is the workbook's
-    own: its body is scanned the same way, for this cell, instead of asking the engine
-    (a scratch model has none of the workbook's names). ``seen`` stops a name that
-    calls itself.
+    own: its body gets every check a formula in this cell gets (:func:`_tree_reasons`),
+    instead of asking the engine (a scratch model has none of the workbook's names).
+    ``seen`` stops a name that calls itself.
     """
     found: set[str] = set()
     definition = _name_def(scan, cell, node.name)
@@ -463,10 +479,7 @@ def _call_reasons(scan: _Scan, cell: CellRef, node: FunctionNode, seen: frozense
         if body is None:
             found.add(UNPARSEABLE)
         else:
-            inner = seen | {definition.name.upper()}
-            for sub, _exempt in _walk(body):
-                if isinstance(sub, FunctionNode):
-                    found |= _call_reasons(scan, cell, sub, inner)
+            found |= _tree_reasons(scan, cell, body, seen | {definition.name.upper()})
     name = function_name(node.name)
     gap = _shape_gap(scan, cell, name, node.args)
     if gap is not None:
@@ -486,6 +499,12 @@ def _formula_reasons(scan: _Scan, cell: CellRef, text: str) -> set[str]:
     root = parse_formula(text)
     if root is None:
         return {UNPARSEABLE}
+    return _tree_reasons(scan, cell, root, frozenset())
+
+
+def _tree_reasons(scan: _Scan, cell: CellRef, root: ASTNode, seen: frozenset[str]) -> set[str]:
+    """The refused patterns in a parsed formula of ``cell``, or in the body of a
+    LAMBDA name it calls (``seen`` holds the names being scanned)."""
     found: set[str] = set()
     for node, exempt in _walk(root):
         if isinstance(node, RefNode):
@@ -512,7 +531,7 @@ def _formula_reasons(scan: _Scan, cell: CellRef, text: str) -> set[str]:
             continue
         if not isinstance(node, FunctionNode):
             continue
-        found |= _call_reasons(scan, cell, node, frozenset())
+        found |= _call_reasons(scan, cell, node, seen)
         name = function_name(node.name)
         spec = _lookup_spec(name, node.args)
         if spec is None:

@@ -108,8 +108,9 @@ schema is a versioned public contract.
   reference; `RANK`/`RANK.EQ`/`RANK.AVG` unless the list is written as a range; and
   `DATEDIF`, `DATEVALUE`, `FORMULATEXT`, `N` or `UNICODE` given a range, a LET or LAMBDA
   parameter, or an expression over one (not through a function that returns one value,
-  such as `SUM`, `INDEX` or `VLOOKUP`). A LAMBDA held in a defined name is checked
-  through its body, for every cell that calls it. A `#NAME?` that appears in an output for a
+  such as `SUM`, `INDEX` with literal non-zero row and column, or a lookup of one value).
+  A LAMBDA held in a defined name gets every check a cell formula gets, through its
+  body, for every cell that calls it. A `#NAME?` that appears in an output for a
   policy, where the trust run had none, is an `engine_error`.
 - **`marinade calc`: an `INDIRECT` address off the grid is refused.** IronCalc reads
   `INDIRECT("Rates!B0")` as 0 (and a range from row 0 as starting on row 1) where Excel

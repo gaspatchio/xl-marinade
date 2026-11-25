@@ -425,6 +425,26 @@ _SHAPES = {
 }
 
 
+def test_a_lambda_body_gets_every_check_a_cell_formula_gets(
+    make_book: Book, tmp_path: Path
+) -> None:
+    # Rate = IF(D1>2, 0.1, 1/0); Scale(x) = IFERROR(x*Rate, 0). Stored D1 = 2: Rate is
+    # #DIV/0!, Scale is 0. For D1 = 25 Excel gives 2.5; the engine's copy of a formula
+    # name is not evidence, as it is not when a cell reads Rate directly.
+    book = make_book(
+        "body",
+        {"Inputs": {"D1": 2}, "Calc": {"B1": F("=Scale(Inputs!D1)", 0.0)}},
+        names={
+            "Rate": "IF(Inputs!$D$1>2,0.1,1/0)",
+            "Scale": "_xlfn.LAMBDA(_xlpm.x,IFERROR(_xlpm.x*Rate,0))",
+        },
+    )
+    res = _run(tmp_path, book, "id,x\nP25,25\n", {"x": "Inputs!D1"}, ["Calc!B1"])
+    row = _rows(res)[("P25", "Calc!B1")]
+    assert row["status"] == "refused", row
+    assert "refused_pattern@Calc!B1:name holds a formula" in row["reasons"]
+
+
 @pytest.mark.parametrize(
     ("formula", "names", "field", "value", "reason"),
     [
@@ -449,6 +469,30 @@ _SHAPES = {
             "=SUMPRODUCT(_xlfn.LET(_xlpm.r,Inputs!B1:B3,COUNT(DATEVALUE(_xlpm.r))))",
             None,
             "Inputs!B2",
+            "2024-01-02",
+            "DATEVALUE over a range",
+        ),
+        # INDEX with row 0 returns the whole column B1:B3: Excel 1, the engine 0.
+        (
+            "=SUMPRODUCT(COUNT(DATEVALUE(INDEX(Inputs!B1:B3,0,1))))",
+            None,
+            "Inputs!B2",
+            "2024-01-02",
+            "DATEVALUE over a range",
+        ),
+        # A computed INDEX row may be 0 too.
+        (
+            "=SUMPRODUCT(COUNT(DATEVALUE(INDEX(Inputs!B1:B3,Inputs!D1-1,1))))",
+            None,
+            "Inputs!B2",
+            "2024-01-02",
+            "DATEVALUE over a range",
+        ),
+        # A lookup given a range of lookup values returns one value per lookup value.
+        (
+            "=SUMPRODUCT(COUNT(DATEVALUE(VLOOKUP(Inputs!D1:D3,Inputs!D1:E3,2,FALSE))))",
+            None,
+            "Inputs!E2",
             "2024-01-02",
             "DATEVALUE over a range",
         ),
@@ -483,14 +527,15 @@ def test_a_gap_behind_a_name_let_or_computed_reference_is_refused(
     [
         # A range inside a function that returns one value is not walked per cell.
         ("=N(SUM(Inputs!D1:D3))+Inputs!D1", 7.0, "2", "9.0"),  # (2+2+3) + 2
-        ("=DATEVALUE(INDEX(Inputs!C1:C3,Inputs!D1))", 45293.0, "2", "45296.0"),  # 2024-01-05
+        # INDEX with a literal non-zero row is one cell: C2 = 2024-01-05, plus D1 = 2.
+        ("=DATEVALUE(INDEX(Inputs!C1:C3,2))+Inputs!D1", 45297.0, "2", "45298.0"),
         (
             "=DATEVALUE(VLOOKUP(Inputs!D1,Inputs!D1:E3,2,FALSE))+0",
             45293.0,
             "3",
             "45293.0",
         ),  # D1 is now 3, the first match: E1 = 2024-01-02
-        ("=_xlfn.UNICODE(LEFT(INDEX(Inputs!C1:C3,Inputs!D1)))", 50.0, "2", "50.0"),  # "2"
+        ("=_xlfn.UNICODE(LEFT(INDEX(Inputs!C1:C3,2)))+Inputs!D1", 51.0, "2", "52.0"),  # "2" = 50
     ],
 )
 def test_a_range_under_a_single_value_function_is_not_refused(
