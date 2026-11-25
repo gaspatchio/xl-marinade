@@ -115,7 +115,9 @@ Schema notes — when a query errors, list the view's columns with
   JSON) — key columns `cell_address` (`Sheet!A1`), `sheet`, `row`, `col`,
   `formula` (A1), `formula_r1c1`, `data_type`, `is_array_formula` (1 on
   the top-left cell of an array formula; always 0 in databases extracted
-  before 0.7.1, and `is_spilled` is always 0).
+  before 0.7.1, and `is_spilled` is always 0). `value` keeps a formula's
+  text result exactly (edge spaces included) and stores `""` for an empty
+  result; databases extracted before 0.8.1 trimmed it and dropped `""`.
 - `agent_bindings` — `sheet`, `address` (`Sheet!A1:A10`), `formula_pattern`
   (R1C1; NULL for constant/heterogeneous blocks), `label`, `binding_type`,
   `classification`, `confidence`.
