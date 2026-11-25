@@ -204,7 +204,9 @@ def coerce_input(raw: str, stored: StoredValue) -> float | str | bool:
             written ``YYYY-MM-DD``, a time), a leading apostrophe, an error value, a
             number outside Excel's range, and an ISO date before 1900-03-01.
     """
-    text = raw.strip()
+    # Excel's entry ignores ordinary spaces around a number, date or boolean, not other
+    # white space (a non-breaking space makes the entry text).
+    text = raw.strip(" ")
     if isinstance(stored, bool):
         upper = text.upper()
         if upper not in (_TRUE, _FALSE):
@@ -372,7 +374,8 @@ def _allowed(raw: str, value: float | str | bool | None, allowed: ListItems) -> 
     number matches number items only, text or a boolean non-number items ignoring case.
     """
     if allowed.literal:
-        folded = raw.lower()
+        # A converted entry is checked as entered: without the spaces conversion drops.
+        folded = (raw.strip(" ") if isinstance(value, (bool, float)) else raw).lower()
         for item in allowed.items:
             text = _as_text(item)
             if text.lower() == folded:

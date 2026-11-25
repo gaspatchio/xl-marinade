@@ -326,6 +326,92 @@ def test_a_let_bound_lambda_is_not_mistaken_for_an_unknown_function(
     assert row["value"] == "5.0"
 
 
+def test_a_lambda_held_in_a_defined_name_is_not_asked_about(
+    make_book: Book, tmp_path: Path
+) -> None:
+    # AddOne = LAMBDA(x, x+1) is a defined name, which the engine resolves in the
+    # workbook; for x = 4 the result is 5.
+    book = make_book(
+        "nl",
+        {"Inputs": {"B1": 1}, "Calc": {"B1": F("=AddOne(Inputs!B1)", 2.0)}},
+        names={"AddOne": "_xlfn.LAMBDA(_xlpm.x,_xlpm.x+1)"},
+    )
+    res = _run(tmp_path, book, "id,x\nP4,4\n", {"x": "Inputs!B1"}, ["Calc!B1"])
+    row = _rows(res)[("P4", "Calc!B1")]
+    assert "does not implement" not in row["reasons"], row
+    assert row["value"] == "5.0"
+
+
+def test_a_udf_prefix_is_dropped_from_the_reason(make_book: Book, tmp_path: Path) -> None:
+    book = make_book(
+        "udf",
+        {"Inputs": {"B1": 1}, "Calc": {"B1": F("=IFERROR(_xludf.MYFN(Inputs!B1),2)", 2.0)}},
+    )
+    res = _run(tmp_path, book, "id,x\nP1,1\n", {"x": "Inputs!B1"}, ["Calc!B1"])
+    assert _patterns(res)["Calc!B1"] == ["function IronCalc does not implement: MYFN"]
+
+
+@pytest.mark.parametrize(
+    ("formula", "array", "reason"),
+    [
+        # Excel applies DATEVALUE to each cell of the range in an array context and
+        # COUNT counts the one date (1); IronCalc answers one #N/IMPL!, which COUNT
+        # skips (0).
+        ("=COUNT(DATEVALUE(Inputs!B1:B3))", True, "DATEVALUE over a range"),
+        ("=SUMPRODUCT(COUNT(DATEVALUE(Inputs!B1:B3)))", False, "DATEVALUE over a range"),
+        ("=COUNT(_xlfn.UNICODE(Inputs!B1:B3))", True, "UNICODE over a range"),
+        ("=COUNT(N(Inputs!B1:B3))", True, "N over a range"),
+        ('=COUNT(DATEDIF(Inputs!B1:B3,Inputs!C1:C3,"d"))', True, "DATEDIF over a range"),
+    ],
+)
+def test_a_shape_the_engine_cannot_compute_is_refused(
+    make_book: Book, tmp_path: Path, formula: str, array: bool, reason: str
+) -> None:
+    from openpyxl.worksheet.formula import ArrayFormula
+
+    stored = {"B1": "x", "B2": "y", "B3": "z", "C1": "a", "C2": "b", "C3": "c"}
+    cell = F(ArrayFormula("B1", formula), 0.0) if array else F(formula, 0.0)
+    book = make_book("shape", {"Inputs": stored, "Calc": {"B1": cell}})
+    res = _run(tmp_path, book, "id,x\nP1,2024-01-02\n", {"x": "Inputs!B2"}, ["Calc!B1"])
+    row = _rows(res)[("P1", "Calc!B1")]
+    assert row["status"] == "refused", row
+    assert f"function IronCalc does not implement: {reason}" in row["reasons"]
+
+
+@pytest.mark.parametrize("rank", ["RANK", "_xlfn.RANK.EQ", "_xlfn.RANK.AVG"])
+def test_rank_over_a_single_cell_is_refused(make_book: Book, tmp_path: Path, rank: str) -> None:
+    # Stored 1 in a list of the single cell C1 (2) is not found: #N/A, COUNT 0. The
+    # policy's 2 is found, ranking first, so Excel's COUNT is 1; IronCalc answers
+    # #N/IMPL! for a single-cell list, which COUNT skips (0).
+    book = make_book(
+        "rk1",
+        {
+            "Inputs": {"B1": 1, "C1": 2},
+            "Calc": {"B1": F(f"=COUNT({rank}(Inputs!B1,Inputs!C1))", 0.0)},
+        },
+    )
+    res = _run(tmp_path, book, "id,x\nP2,2\n", {"x": "Inputs!B1"}, ["Calc!B1"])
+    row = _rows(res)[("P2", "Calc!B1")]
+    assert row["status"] == "refused", row
+    name = rank.removeprefix("_xlfn.")
+    assert f"function IronCalc does not implement: {name} over a single cell" in row["reasons"]
+
+
+def test_rank_over_a_range_is_not_refused(make_book: Book, tmp_path: Path) -> None:
+    # 2 ranks second (descending) in 1, 2, 3 -> 2; the policy's 3 ranks first.
+    book = make_book(
+        "rk",
+        {
+            "Inputs": {"B1": 2, "C1": 1, "C2": 2, "C3": 3},
+            "Calc": {"B1": F("=RANK(Inputs!B1,Inputs!C1:C3)", 2.0)},
+        },
+    )
+    res = _run(tmp_path, book, "id,x\nP3,3\n", {"x": "Inputs!B1"}, ["Calc!B1"])
+    row = _rows(res)[("P3", "Calc!B1")]
+    assert "does not implement" not in row["reasons"], row
+    assert row["value"] == "1.0"
+
+
 # -- T07: INDIRECT text off the grid ---------------------------------------------
 
 

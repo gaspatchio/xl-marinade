@@ -1136,3 +1136,38 @@ def test_a_text_value_keeps_its_spaces_and_a_number_reads_through_them(
     assert got[("p", "Calc!B3")]["value"] == "41.0"
     for out in outs:
         assert got[("p", out)]["status"] == "ok", got[("p", out)]
+
+
+def test_a_non_breaking_space_is_not_read_through(make_book: Book, tmp_path: Path) -> None:
+    # Excel ignores ordinary spaces around a number it enters, not a non-breaking one
+    # (U+00A0, common in pasted text): "\u00a040" is not entered as 40, so a number cell
+    # refuses it by name.
+    book = make_book("nb", {"Inputs": {"B1": 1}, "Calc": {"B1": F("=Inputs!B1+1", 2.0)}})
+    imap = {"fields": {"x": "Inputs!B1"}}
+    with pytest.raises(CalcInputError, match=r"policy 'p' field 'x'.*spaces or separators"):
+        calc(_req(tmp_path, book, "id,x\np,\u00a040\n", imap, ["Calc!B1"]))
+
+
+def test_a_boolean_with_spaces_passes_its_list_check(make_book: Book, tmp_path: Path) -> None:
+    # " FALSE " enters FALSE in a boolean cell, which the list TRUE,FALSE allows: B1 = 2
+    # (unverified: the stored inputs never took that arm), not refused by the list.
+    book = make_book(
+        "bl",
+        {"Inputs": {"B1": True}, "Calc": {"B1": F("=IF(Inputs!B1,1,2)", 1.0)}},
+        validations=[("Inputs!B1", ["TRUE", "FALSE"])],
+    )
+    imap = {"fields": {"x": "Inputs!B1"}}
+    got = _results(calc(_req(tmp_path, book, "id,x\np, FALSE \n", imap, ["Calc!B1"])))
+    assert got[("p", "Calc!B1")]["value"] == "2.0"
+    assert got[("p", "Calc!B1")]["status"] == "unverified_path", got[("p", "Calc!B1")]
+
+
+def test_a_mapped_id_is_set_trimmed(make_book: Book, tmp_path: Path) -> None:
+    # The id " P1 " is the label P1, and the cell it is mapped to gets P1: LEN 2 + 1 = 3.
+    book = make_book(
+        "im",
+        {"Inputs": {"A1": "P0", "B1": 1}, "Calc": {"B1": F("=LEN(Inputs!A1)+Inputs!B1", 3.0)}},
+    )
+    imap = {"id_field": "id", "fields": {"id": "Inputs!A1", "x": "Inputs!B1"}}
+    got = _results(calc(_req(tmp_path, book, "id,x\n P1 ,1\n", imap, ["Calc!B1"])))
+    assert got[("P1", "Calc!B1")]["value"] == "3.0"

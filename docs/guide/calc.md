@@ -30,7 +30,7 @@ pip install 'xl-marinade[calc]'
 | Option | File | What it holds |
 |---|---|---|
 | `WORKBOOK` | `.xlsx` / `.xlsm` | The model, saved by Excel so it carries stored values. |
-| `--policies` | `policies.csv` | One row per input set. An id column plus one column per mapped field. UTF-8 (save from Excel as "CSV UTF-8"). Values are read exactly as written, spaces included; ids stay text and lose surrounding spaces. A blank value (empty or only spaces), a duplicate id, a duplicate column name or a row with more values than the header has names (an unquoted `250,000`) is an error, and so is a value under a column with no name. Columns with no name (the empty trailing columns some exports add) are ignored while they are empty, and so are empty values past the last column. |
+| `--policies` | `policies.csv` | One row per input set. An id column plus one column per mapped field. UTF-8 (save from Excel as "CSV UTF-8"). Values are read exactly as written, spaces included; ids stay text and lose surrounding spaces, also where the id is mapped to a cell. A blank value (empty or only spaces), a duplicate id, a duplicate column name or a row with more values than the header has names (an unquoted `250,000`) is an error, and so is a value under a column with no name. Columns with no name (the empty trailing columns some exports add) are ignored while they are empty, and so are empty values past the last column. |
 | `--map` | `map.json` | Which cell or defined name each field sets. |
 | `--outputs` | repeatable | Output cells, ranges or defined names (`'Results!B5:B64'`). Ranges expand to cells. |
 | `--variables` | `vars.json` | Optional. Named output variables for `rows.csv`. |
@@ -109,7 +109,8 @@ the value the cell holds:
 
 - A number cell takes a plain decimal (`40`, `-1.5`, `.5`, `4e1`, `0042`) or an ISO date
   (`2024-06-30`), which becomes its Excel serial (45473). Spaces around it are ignored,
-  as Excel ignores them when it enters a number.
+  as Excel ignores them when it enters a number; other white space, such as the
+  non-breaking space pasted text often carries, is refused.
 - A boolean cell takes `TRUE` or `FALSE`, in any case.
 - A text cell takes the text as written, spaces included (`"  A "` is four characters),
   even when it looks like a number, less one leading apostrophe: Excel's entry prefix, so
@@ -484,7 +485,7 @@ the next. They are refused even when the trust run reproduces them. The `detail`
 | `unparseable formula` | The formula could not be parsed. Error literals typed into a formula, such as `#N/A`, are a known source of these. |
 | `external reference not held` | The formula reads an external reference the engine copy cannot hold: a range, one with no cached value (IronCalc returns `#ERROR!` or `#REF!` for those), or a defined name that points into another workbook. |
 | `approximate lookup on input-dependent keys` | An approximate lookup whose key cells change with a mapped input (an input cell, or a formula that depends on one). The keys may be sorted for the stored inputs and not for the next policy. |
-| `function IronCalc does not implement: NAME` | The formula calls a function the installed IronCalc cannot compute. calc asks the engine about every function the workbook calls, so this covers Excel functions IronCalc 0.9.1 does not have (`AGGREGATE`, `BAHTTEXT`, `CALL`, the `CUBE…` functions, `DBCS`, `DETECTLANGUAGE`, `EUROCONVERT`, `FIELDVALUE`, `FILTERXML`, `GETPIVOTDATA`, `GROUPBY`, `IMAGE`, `JIS`, `PHONETIC`, `PIVOTBY`, `REGISTER.ID`, `RTD`, `SQL.REQUEST`, `STOCKHISTORY`, `TRANSLATE`, `WEBSERVICE`), ones it knows but has not implemented (the `FORECAST.ETS` family), functions newer than the engine, and VBA and add-in functions. The engine answers `#NAME?` or `#N/IMPL!`, both Excel error codes, so an `IFERROR`, `ISERROR` or `ISNUMBER` around the call would turn the gap into a plausible value. LET and LAMBDA parameters called like functions are not affected. `function IronCalc does not implement: SHEETS with a reference` is the same for `SHEETS(ref)`, which IronCalc answers `#N/IMPL!` (`SHEETS()` works). |
+| `function IronCalc does not implement: NAME` | The formula calls a function the installed IronCalc cannot compute. calc asks the engine about every function the workbook calls, so this covers Excel functions IronCalc 0.9.1 does not have (`AGGREGATE`, `BAHTTEXT`, `CALL`, the `CUBE…` functions, `DBCS`, `DETECTLANGUAGE`, `EUROCONVERT`, `FIELDVALUE`, `FILTERXML`, `GETPIVOTDATA`, `GROUPBY`, `IMAGE`, `JIS`, `PHONETIC`, `PIVOTBY`, `REGISTER.ID`, `RTD`, `SQL.REQUEST`, `STOCKHISTORY`, `TRANSLATE`, `WEBSERVICE`), ones it knows but has not implemented (the `FORECAST.ETS` family), functions newer than the engine, and VBA and add-in functions (also when Excel lacks them too). The engine answers `#NAME?` or `#N/IMPL!`, error values an `IFERROR`, `ISERROR` or `ISNUMBER` around the call would turn into a plausible value. LET and LAMBDA parameters called like functions, and a LAMBDA held in a defined name, are not affected. Calls the engine computes only for some arguments are refused by shape, as `NAME with a reference`, `NAME over a single cell` or `NAME over a range`: `SHEETS(ref)`; `RANK`, `RANK.EQ` and `RANK.AVG` over a single cell; `DATEDIF`, `DATEVALUE`, `FORMULATEXT`, `N` and `UNICODE` given a range. |
 
 Some refusals are per policy, read from the probes:
 

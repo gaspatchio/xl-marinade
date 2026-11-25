@@ -54,8 +54,6 @@ NOT_HELD = "external reference not held"
 INPUT_KEYS = "approximate lookup on input-dependent keys"
 RELATIVE_NAME = "name with a relative reference"
 ENGINE_LACKS_PREFIX = "function IronCalc does not implement: "
-SHEETS_OF_REFERENCE = f"{ENGINE_LACKS_PREFIX}SHEETS with a reference"
-"""IronCalc answers #N/IMPL! for SHEETS with an argument (SHEETS() works)."""
 
 _MAX_ROW = 1_048_576
 _MAX_COL = 16_384
@@ -156,8 +154,9 @@ class _Scan:
     as_of: date | None
     names: dict[tuple[str, str], NameDef | None] = field(default_factory=dict)
     lookups: dict[tuple[str, str, Axis, frozenset[Order]], str | None] = field(default_factory=dict)
-    calls: dict[CellRef, set[str]] = field(default_factory=dict)
-    """Each formula cell's function names as written, for the engine to be asked about."""
+    calls: dict[str, set[CellRef]] = field(default_factory=dict)
+    """Function names as written, each with the cells that call it, for the engine to be
+    asked about."""
 
 
 def _multi_cell(ref: str, default_sheet: str) -> bool:
@@ -334,6 +333,49 @@ def _lookup_problem(
     return problem
 
 
+_PER_CELL = frozenset({"DATEDIF", "DATEVALUE", "FORMULATEXT", "N", "UNICODE"})
+"""Functions IronCalc answers ``#N/IMPL!`` for when an argument covers several cells,
+where Excel computes each cell (in an array context) or the one in line with the
+formula."""
+_RANK = frozenset({"RANK", "RANK.EQ", "RANK.AVG"})
+
+
+def _covers_cells(scan: _Scan, cell: CellRef, arg: ASTNode) -> bool:
+    """True when ``arg`` holds a reference to more than one cell."""
+    for node, _exempt in _walk(arg):
+        if not isinstance(node, RefNode):
+            continue
+        definition = _name_def(scan, cell, node.ref)
+        if definition is not None:
+            if definition.kind == "cells" and _multi_cell_name(definition):
+                return True
+        elif _multi_cell(node.ref, cell.sheet):
+            return True
+    return False
+
+
+def _single_cell(scan: _Scan, cell: CellRef, arg: ASTNode) -> bool:
+    """True when ``arg`` is a reference to exactly one cell."""
+    if not isinstance(arg, RefNode):
+        return False
+    definition = _name_def(scan, cell, arg.ref)
+    if definition is not None:
+        return definition.kind == "cells" and not _multi_cell_name(definition)
+    return _ref_rect(arg.ref, cell.sheet) is not None and not _multi_cell(arg.ref, cell.sheet)
+
+
+def _shape_gap(scan: _Scan, cell: CellRef, name: str, args: list[ASTNode]) -> str | None:
+    """A call the engine knows but answers ``#N/IMPL!`` for with these arguments, where
+    Excel computes a value; None when the shape is not one of those."""
+    if name == "SHEETS" and args:
+        return "SHEETS with a reference"
+    if name in _RANK and len(args) >= 2 and _single_cell(scan, cell, args[1]):
+        return f"{name} over a single cell"
+    if name in _PER_CELL and any(_covers_cells(scan, cell, a) for a in args):
+        return f"{name} over a range"
+    return None
+
+
 def _formula_reasons(scan: _Scan, cell: CellRef, text: str) -> set[str]:
     root = parse_formula(text)
     if root is None:
@@ -364,10 +406,14 @@ def _formula_reasons(scan: _Scan, cell: CellRef, text: str) -> set[str]:
             continue
         if not isinstance(node, FunctionNode):
             continue
-        scan.calls.setdefault(cell, set()).add(node.name)
+        if _name_def(scan, cell, node.name) is None:
+            # A defined name called like a function (one holding a LAMBDA) is the
+            # workbook's own, which a scratch model cannot know.
+            scan.calls.setdefault(node.name, set()).add(cell)
         name = function_name(node.name)
-        if name == "SHEETS" and node.args:
-            found.add(SHEETS_OF_REFERENCE)
+        gap = _shape_gap(scan, cell, name, node.args)
+        if gap is not None:
+            found.add(f"{ENGINE_LACKS_PREFIX}{gap}")
         if name in ENGINE_LACKS:
             # The engine's #NAME? is an Excel error code: an error handler around the
             # call turns it into a plausible value no trust run can tell from Excel's.
@@ -480,13 +526,14 @@ def scan_patterns(
         if found:
             details[cell].update(found)
     if engine_lacks is not None and scan.calls:
-        # The engine's #NAME? or #N/IMPL! is an Excel error code: an error handler
-        # around the call turns it into a plausible value on every input.
-        lacking = engine_lacks({n for names in scan.calls.values() for n in names})
-        for cell, names in scan.calls.items():
-            for raw in names:
-                if function_name(raw) in lacking:
-                    details[cell].add(f"{ENGINE_LACKS_PREFIX}{function_name(raw)}")
+        # The engine's #NAME? or #N/IMPL! is an error value: an error handler around
+        # the call turns it into a plausible value on every input.
+        lacking = engine_lacks(set(scan.calls))
+        for raw, cells in scan.calls.items():
+            name = function_name(raw)
+            if name in lacking:
+                for cell in cells:
+                    details[cell].add(f"{ENGINE_LACKS_PREFIX}{name}")
     for cell in _cycle_cells(graph):
         details[cell].add(CIRCULAR)
     for cell in data_table_cells:

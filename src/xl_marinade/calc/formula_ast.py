@@ -15,7 +15,7 @@ from xl_marinade.core.parser import (
     UnaryNode,
 )
 
-FN_PREFIXES = ("_XLFN.", "_XLWS.", "_XLL.")
+FN_PREFIXES = ("_XLFN.", "_XLWS.", "_XLL.", "_XLUDF.")
 
 SHEET = r"(?:'(?:[^']|'')+'|[^'!:\s{}();,\"#\[\]]+)"
 """A sheet prefix as written in a reference (quoted or bare), without the ``!``."""
@@ -69,8 +69,10 @@ ERROR_CODES = frozenset(
 # error code, so an IFERROR / ISERROR / ISNUMBER around the call would turn the gap into
 # a plausible value. Built by calling every Excel function bare in the engine (a known
 # one gives an argument error); tests/calc/test_engine_gaps.py pins it to the installed
-# IronCalc. Functions the engine knows but has not implemented answer #N/IMPL!, which
-# calc already treats as an engine error.
+# IronCalc. At run time calc also asks the installed engine about every function the
+# workbook calls (engine.functions_engine_lacks), which adds VBA, add-in and newer
+# functions and those that answer #N/IMPL! (FORECAST.ETS); patterns._shape_gap covers
+# the calls that answer #N/IMPL! only for some arguments.
 ENGINE_LACKS = frozenset(
     {
         "AGGREGATE",

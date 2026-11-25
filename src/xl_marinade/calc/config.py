@@ -157,7 +157,7 @@ def load_policies(path: Path, input_map: InputMap) -> list[Policy]:
                 for name in input_map.fields:
                     # Kept as written: spaces are part of a text value, and a number
                     # cell reads through them as Excel's entry does (coerce_input).
-                    val = _field(fields, at[name])
+                    val = pid if name == id_col else _field(fields, at[name])
                     if not val.strip():
                         raise CalcInputError(f"policy {pid!r}: blank value for field {name!r}")
                     values[name] = val
