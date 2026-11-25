@@ -1566,7 +1566,8 @@ class TraversalContext:
             formula_r1c1 = normalize_formula(formula, ctx, self.sheet_name_map)
             self.perf_counters["normalize_formula_s"] += time.perf_counter() - t0
 
-        has_value = value is not None and value != ""
+        # A formula's "" text result (t="str") is a stored value; any other "" is not.
+        has_value = value is not None and (value != "" or data_type == "str")
         if not formula_r1c1 and not has_value:
             return []
 

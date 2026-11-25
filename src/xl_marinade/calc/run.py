@@ -658,7 +658,11 @@ class _Session:
 
 
 def _id_rows(graph: WorkbookGraph, sheet: str, column: int, first_row: int) -> dict[str, int]:
-    """Id text -> row, from ``first_row`` down to the first blank id cell."""
+    """Id text -> row, from ``first_row`` down to the first id cell with no stored value.
+
+    A formula id cell whose result is ``""`` has a stored value (it is not blank in
+    Excel), so the walk goes on past it; ``""`` itself is not an id.
+    """
     rows: dict[str, int] = {}
     row = first_row
     while graph.has_stored(CellRef(sheet, row, column)):

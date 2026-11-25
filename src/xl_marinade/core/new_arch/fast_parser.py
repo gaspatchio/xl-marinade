@@ -157,9 +157,14 @@ def stream_worksheet_cells(
     Yields tuples of (row, col, formula, value, cell_type, shared_index, shared_master, style_index) where:
     - row, col: 1-based integers
     - formula: formula string without leading '=' (or None)
-    - value: cell value as string (or None)
-    - cell_type: Excel cell type ('s' for shared string, 'str' for inline string,
-                 'n' for number, 'b' for boolean, etc.)
+    - value: cell value as string (or None). A formula's text result
+             (``t="str"``, including members of an array or spill range, which
+             carry no ``<f>``) is kept exactly as cached, and ``""`` when the
+             cached ``<v>`` is empty; other cached ``<v>`` text has surrounding
+             whitespace removed.
+    - cell_type: Excel cell type ('s' for shared string, 'str' for a formula's
+                 text result, 'inlineStr' for inline string, 'n' for number,
+                 'b' for boolean, etc.)
     - shared_index: shared formula index (or None if not shared)
     - shared_master: True if this cell defines the shared formula text
     - style_index: integer index into the workbook's cellXfs style table (or None)
@@ -252,7 +257,14 @@ def stream_worksheet_cells(
                     # Extract value
                     value = None
                     value_elem = elem.find(_NS_V)
-                    if value_elem is not None and value_elem.text:
+                    if value_elem is not None and cell_type == "str":
+                        # A formula's text result: the <v> text is the result itself,
+                        # so keep it exactly -- edge spaces, tabs and line breaks
+                        # included -- and keep an empty <v></v> or <v/> as "" (the
+                        # IF(t>Term,"",x) idiom), which is a value, not an empty cell.
+                        value = value_elem.text or ""
+                    elif value_elem is not None and value_elem.text:
+                        # Numbers, booleans, errors and shared-string indexes.
                         value_text = value_elem.text.strip()
 
                         # Resolve shared string references
@@ -280,7 +292,14 @@ def stream_worksheet_cells(
                     # get filtered here. Rare in practice (the len(elem)==0 fast
                     # path covers the vast majority of empties), but preserves the
                     # original byte-equivalent behaviour for malformed/edge XML.
-                    if formula is None and (value is None or value == "") and shared_index is None:
+                    # A t="str" cell with no <f> -- a member of an array or spill
+                    # range -- keeps a "" result: Excel saved it as that member's
+                    # value, the same as for the anchor that holds the formula.
+                    if (
+                        formula is None
+                        and shared_index is None
+                        and (value is None or (value == "" and cell_type != "str"))
+                    ):
                         elem.clear()
                         continue
 
