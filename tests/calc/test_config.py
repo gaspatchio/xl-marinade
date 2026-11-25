@@ -313,3 +313,19 @@ def test_policies_empty_unnamed_columns_still_accepted(tmp_path: Path) -> None:
         Policy(id="A", values={"sa": "250000"}),
         Policy(id="B", values={"sa": "1"}),
     ]
+
+
+def test_policies_values_are_kept_as_written(tmp_path: Path) -> None:
+    # A value reaches its cell exactly as the file holds it: the spaces around "  A "
+    # are part of the text Excel would hold. The id is a label and is trimmed.
+    p = tmp_path / "p.csv"
+    p.write_text('id,code,age\n P1 ,"  A ", 40 \n', encoding="utf-8")
+    pols = load_policies(p, InputMap(fields={"code": "S!B1", "age": "S!B2"}, id_field=None))
+    assert pols == [Policy(id="P1", values={"code": "  A ", "age": " 40 "})]
+
+
+def test_policies_whitespace_only_value_is_blank(tmp_path: Path) -> None:
+    p = tmp_path / "p.csv"
+    p.write_text("id,code\n7,   \n", encoding="utf-8")
+    with pytest.raises(CalcInputError, match=r"7.*blank value.*code"):
+        load_policies(p, InputMap(fields={"code": "S!B1"}, id_field=None))

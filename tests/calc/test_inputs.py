@@ -1110,3 +1110,29 @@ def test_a_field_read_through_a_scoped_name_on_its_own_sheet_is_read(
     assert _run_json(res)["inputs"] == {
         "f": {"target": "Inputs!B1", "read_by_requested_outputs": True}
     }
+
+
+def test_a_text_value_keeps_its_spaces_and_a_number_reads_through_them(
+    make_book: Book, tmp_path: Path
+) -> None:
+    # Typed into a text cell, "  A " is four characters (LEN 4) and not "A" (B2 FALSE);
+    # typed into a number cell, " 40 " is 40, as Excel enters it, so B3 = 41.
+    book = make_book(
+        "sp",
+        {
+            "Inputs": {"B1": "A", "B2": 30},
+            "Calc": {
+                "B1": F("=LEN(Inputs!B1)", 1.0),
+                "B2": F('=Inputs!B1="A"', True),
+                "B3": F("=Inputs!B2+1", 31.0),
+            },
+        },
+    )
+    imap = {"fields": {"code": "Inputs!B1", "age": "Inputs!B2"}}
+    outs = ["Calc!B1", "Calc!B2", "Calc!B3"]
+    got = _results(calc(_req(tmp_path, book, 'id,code,age\np,"  A ", 40 \n', imap, outs)))
+    assert got[("p", "Calc!B1")]["value"] == "4.0"
+    assert got[("p", "Calc!B2")]["value"] == "FALSE"
+    assert got[("p", "Calc!B3")]["value"] == "41.0"
+    for out in outs:
+        assert got[("p", out)]["status"] == "ok", got[("p", out)]
