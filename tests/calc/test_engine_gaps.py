@@ -19,6 +19,7 @@ ironcalc = pytest.importorskip("ironcalc")
 
 from tests.calc.conftest import F  # noqa: E402
 from xl_marinade.calc import CalcRequest, CalcResult, calc  # noqa: E402
+from xl_marinade.calc.engine import functions_engine_lacks  # noqa: E402
 from xl_marinade.calc.formula_ast import ENGINE_LACKS  # noqa: E402
 from xl_marinade.calc.models import CellRef  # noqa: E402
 from xl_marinade.calc.probes import _text_cells  # noqa: E402
@@ -191,7 +192,7 @@ def test_xlookup_not_found_arm_holding_aggregate_is_refused(
     assert _LACKS_AGGREGATE.format(cell="Calc!B1") in row["reasons"]
 
 
-def test_name_error_off_the_stored_path_is_an_engine_error(make_book: Book, tmp_path: Path) -> None:
+def test_unknown_function_is_refused_by_name_on_every_path(make_book: Book, tmp_path: Path) -> None:
     # A function the engine does not know (here one no list could hold) answers #NAME?
     # only on the arm the stored inputs did not take; the stored value 2 reproduces.
     # For x = 7 the cell evaluates the unknown function: whatever Excel makes of it,
@@ -205,11 +206,124 @@ def test_name_error_off_the_stored_path_is_an_engine_error(make_book: Book, tmp_
     )
     res = _run(tmp_path, book, "id,x\nP1,1\nP7,7\n", {"x": "Inputs!B1"}, ["Calc!B1"])
     rows = _rows(res)
-    assert rows[("P1", "Calc!B1")]["status"] in {"ok", "unverified_path"}
-    row = rows[("P7", "Calc!B1")]
-    assert row["value"] == "#NAME?"
-    assert row["status"] == "refused"
-    assert "engine_error@Calc!B1:" in row["reasons"]
+    # The installed engine is asked about every function the workbook calls, so the
+    # unknown one is refused by name on every path, the stored one included.
+    for pid in ("P1", "P7"):
+        row = rows[(pid, "Calc!B1")]
+        assert row["status"] == "refused", (pid, row)
+        assert (
+            "refused_pattern@Calc!B1:function IronCalc does not implement: NOTAFUNCTIONYET"
+            in row["reasons"]
+        )
+    assert rows[("P7", "Calc!B1")]["value"] == "#NAME?"
+
+
+# -- functions the installed engine lacks, asked at run time ----------------------
+
+
+def test_engine_reports_the_functions_it_lacks() -> None:
+    # A bare call answers an argument error for a function IronCalc implements,
+    # #NAME? for one it does not know, and #N/IMPL! for one it knows but has not
+    # implemented. Prefixes are dropped; LET/LAMBDA parameters (_xlpm.) are not asked.
+    asked = {
+        "SUM",
+        "_xlfn.XLOOKUP",
+        "MYUDF",
+        "_xll.ADDIN",
+        "_xlfn.FUTUREFN",
+        "_xlfn.FORECAST.ETS",
+        "_xlfn.AGGREGATE",
+        "SHEETS",
+        "_xlpm.f",
+    }
+    assert functions_engine_lacks(asked) == frozenset(
+        {"MYUDF", "ADDIN", "FUTUREFN", "FORECAST.ETS", "AGGREGATE"}
+    )
+    assert functions_engine_lacks(set()) == frozenset()
+
+
+@pytest.mark.parametrize(
+    ("call", "name"),
+    [
+        ("MYUDF(Inputs!B1)", "MYUDF"),  # a VBA function
+        ("_xll.ADDIN(Inputs!B1)", "ADDIN"),  # an add-in function
+        ("_xlfn.FUTUREFN(Inputs!B1)", "FUTUREFN"),  # newer than the engine
+        ("_xlfn.FORECAST.ETS(4,Inputs!B2:B4,Inputs!C2:C4)", "FORECAST.ETS"),  # #N/IMPL!
+    ],
+)
+def test_a_function_the_engine_lacks_is_refused_even_behind_an_error_handler(
+    make_book: Book, tmp_path: Path, call: str, name: str
+) -> None:
+    # IronCalc answers #NAME? or #N/IMPL!; IFERROR and IF(ISERROR()) turn either into
+    # the fallback 0 on every input, a plausible value no trust run can tell apart
+    # from Excel's when the stored inputs take the other arm. x = 1 keeps the stored
+    # arm (2); x = 7 takes the handler.
+    book = make_book(
+        "lack",
+        {
+            "Inputs": {"B1": 1, "B2": 1, "B3": 2, "B4": 3, "C2": 10, "C3": 20, "C4": 30},
+            "Calc": {
+                "B1": F(f"=IF(Inputs!B1>5,IFERROR({call},0),2)", 2.0),
+                "B2": F(f"=IF(Inputs!B1>5,IF(ISERROR({call}),0,1),2)", 2.0),
+            },
+        },
+    )
+    res = _run(tmp_path, book, "id,x\nP1,1\nP7,7\n", {"x": "Inputs!B1"}, ["Calc!B1", "Calc!B2"])
+    rows = _rows(res)
+    for pid in ("P1", "P7"):
+        for out in ("Calc!B1", "Calc!B2"):
+            row = rows[(pid, out)]
+            assert row["status"] == "refused", (pid, out, row)
+            assert (
+                f"refused_pattern@{out}:function IronCalc does not implement: {name}"
+                in row["reasons"]
+            )
+
+
+def test_sheets_of_a_reference_is_refused(make_book: Book, tmp_path: Path) -> None:
+    # Excel's SHEETS(Inputs!B1) is 1, so B1 = 1; IronCalc answers #N/IMPL! for SHEETS
+    # with an argument, which ISERROR turns into 0. SHEETS() with no argument works.
+    book = make_book(
+        "sh",
+        {
+            "Inputs": {"B1": 1},
+            "Calc": {
+                "B1": F("=IF(ISERROR(_xlfn.SHEETS(Inputs!B1)),0,1)", 1.0),
+                "B2": F("=_xlfn.SHEETS()+Inputs!B1", 3.0),
+            },
+        },
+    )
+    res = _run(tmp_path, book, "id,x\nP1,1\n", {"x": "Inputs!B1"}, ["Calc!B1", "Calc!B2"])
+    rows = _rows(res)
+    assert rows[("P1", "Calc!B1")]["status"] == "refused"
+    assert (
+        "refused_pattern@Calc!B1:function IronCalc does not implement: SHEETS with a reference"
+        in rows[("P1", "Calc!B1")]["reasons"]
+    )
+    assert "SHEETS" not in rows[("P1", "Calc!B2")]["reasons"]
+
+
+def test_a_let_bound_lambda_is_not_mistaken_for_an_unknown_function(
+    make_book: Book, tmp_path: Path
+) -> None:
+    # LET(f, LAMBDA(x, x+1), f(B1)): Excel stores f as _xlpm.f, which a bare call
+    # outside the LET does not know. For x = 1 the result is 2, for x = 4 it is 5.
+    book = make_book(
+        "let",
+        {
+            "Inputs": {"B1": 1},
+            "Calc": {
+                "B1": F(
+                    "=_xlfn.LET(_xlpm.f,_xlfn.LAMBDA(_xlpm.x,_xlpm.x+1),_xlpm.f(Inputs!B1))",
+                    2.0,
+                )
+            },
+        },
+    )
+    res = _run(tmp_path, book, "id,x\nP4,4\n", {"x": "Inputs!B1"}, ["Calc!B1"])
+    row = _rows(res)[("P4", "Calc!B1")]
+    assert "does not implement" not in row["reasons"], row
+    assert row["value"] == "5.0"
 
 
 # -- T07: INDIRECT text off the grid ---------------------------------------------

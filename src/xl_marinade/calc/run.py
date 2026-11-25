@@ -27,7 +27,13 @@ from xl_marinade.calc.config import (
     load_variables,
     parse_outputs,
 )
-from xl_marinade.calc.engine import Engine, EngineValue, engine_version, quiet_native_output
+from xl_marinade.calc.engine import (
+    Engine,
+    EngineValue,
+    engine_version,
+    functions_engine_lacks,
+    quiet_native_output,
+)
 from xl_marinade.calc.graph import ListItems, StoredValue, WorkbookGraph, open_graph
 from xl_marinade.calc.models import (
     ArrayRange,
@@ -1075,7 +1081,12 @@ def calc(req: CalcRequest) -> CalcResult:
             _with_unheld_externals(
                 graph,
                 prepared,
-                scan_patterns(graph, as_of=req.as_of, data_table_cells=prepared.data_table_cells),
+                scan_patterns(
+                    graph,
+                    as_of=req.as_of,
+                    data_table_cells=prepared.data_table_cells,
+                    engine_lacks=functions_engine_lacks,
+                ),
             ),
             input_dependent_lookups(graph, set(inputs.values())),
             _relative_lists(graph, inputs),

@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import os
 import sys
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Collection, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from xl_marinade.calc.formula_ast import function_name
 from xl_marinade.calc.models import CellRef
 from xl_marinade.errors import CalcError, CalcInputError, CalcUnavailable
 
@@ -79,6 +80,67 @@ def engine_version() -> str | None:
     except CalcUnavailable:
         return None
     return str(getattr(ironcalc, "__version__", "unknown"))
+
+
+_LACKING = frozenset({"#NAME?", "#N/IMPL!"})
+"""What a bare call answers from a function the engine cannot compute."""
+_LET_PARAMETER = "_XLPM."
+"""Excel's prefix for a LET or LAMBDA parameter: called like a function, but bound in
+the formula, so a bare call outside it says nothing."""
+
+
+def functions_engine_lacks(names: Collection[str]) -> frozenset[str]:
+    """The functions among ``names`` (as formulas write them) the installed IronCalc
+    cannot compute, each as :func:`function_name` gives it.
+
+    Each name is called bare in a scratch model: a function the engine implements
+    answers an argument error, one it does not know (a VBA or add-in function, or one
+    newer than the engine) ``#NAME?``, and one it knows but has not implemented
+    ``#N/IMPL!``. A name the engine cannot even take, or whose call crashes it, is
+    lacking too. LET and LAMBDA parameters are not asked.
+
+    Raises:
+        CalcUnavailable: if ``ironcalc`` is not importable.
+    """
+    asked = sorted({n for n in names if not n.upper().startswith(_LET_PARAMETER)})
+    if not asked:
+        return frozenset()
+    ironcalc = _import_ironcalc()
+    try:
+        with quiet_native_output():
+            lacking = _bare_calls(ironcalc, asked)
+    except BaseException as exc:
+        if not _is_panic(exc):
+            raise
+        # One call crashed the batch: ask each name on its own.
+        lacking = set()
+        for name in asked:
+            try:
+                with quiet_native_output():
+                    lacking |= _bare_calls(ironcalc, [name])
+            except BaseException as one:
+                if not _is_panic(one):
+                    raise
+                lacking.add(name)
+    return frozenset(function_name(n) for n in lacking)
+
+
+def _bare_calls(ironcalc: Any, names: list[str]) -> set[str]:
+    """The names whose bare call answers ``#NAME?`` or ``#N/IMPL!``, or that the engine
+    refuses to take as a formula."""
+    model = ironcalc.create("functions", _LOCALE, _TIMEZONE, _LANGUAGE)
+    lacking: set[str] = set()
+    placed: list[tuple[int, str]] = []
+    for row, name in enumerate(names, 1):
+        try:
+            model.update_cell_with_formula(0, row, 1, f"={name}()")
+        except Exception:  # the binding raises a bare Exception for text it cannot parse
+            lacking.add(name)
+            continue
+        placed.append((row, name))
+    model.evaluate()
+    lacking.update(name for row, name in placed if str(model.get_cell_value(0, row, 1)) in _LACKING)
+    return lacking
 
 
 class Engine:

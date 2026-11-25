@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
-from collections.abc import Iterator
+from collections.abc import Callable, Collection, Iterator
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Literal
@@ -54,6 +54,8 @@ NOT_HELD = "external reference not held"
 INPUT_KEYS = "approximate lookup on input-dependent keys"
 RELATIVE_NAME = "name with a relative reference"
 ENGINE_LACKS_PREFIX = "function IronCalc does not implement: "
+SHEETS_OF_REFERENCE = f"{ENGINE_LACKS_PREFIX}SHEETS with a reference"
+"""IronCalc answers #N/IMPL! for SHEETS with an argument (SHEETS() works)."""
 
 _MAX_ROW = 1_048_576
 _MAX_COL = 16_384
@@ -154,6 +156,8 @@ class _Scan:
     as_of: date | None
     names: dict[tuple[str, str], NameDef | None] = field(default_factory=dict)
     lookups: dict[tuple[str, str, Axis, frozenset[Order]], str | None] = field(default_factory=dict)
+    calls: dict[CellRef, set[str]] = field(default_factory=dict)
+    """Each formula cell's function names as written, for the engine to be asked about."""
 
 
 def _multi_cell(ref: str, default_sheet: str) -> bool:
@@ -360,7 +364,10 @@ def _formula_reasons(scan: _Scan, cell: CellRef, text: str) -> set[str]:
             continue
         if not isinstance(node, FunctionNode):
             continue
+        scan.calls.setdefault(cell, set()).add(node.name)
         name = function_name(node.name)
+        if name == "SHEETS" and node.args:
+            found.add(SHEETS_OF_REFERENCE)
         if name in ENGINE_LACKS:
             # The engine's #NAME? is an Excel error code: an error handler around the
             # call turns it into a plausible value no trust run can tell from Excel's.
@@ -447,9 +454,18 @@ def input_dependent_lookups(
 
 
 def scan_patterns(
-    graph: WorkbookGraph, *, as_of: date | None, data_table_cells: list[CellRef]
+    graph: WorkbookGraph,
+    *,
+    as_of: date | None,
+    data_table_cells: list[CellRef],
+    engine_lacks: Callable[[Collection[str]], frozenset[str]] | None = None,
 ) -> dict[CellRef, list[Reason]]:
     """Find cells whose formulas must be refused even when they reproduce.
+
+    ``engine_lacks`` is asked once about every function name the formulas call and
+    returns those the installed engine cannot compute (``engine.functions_engine_lacks``);
+    each call to one is refused by name, as :data:`ENGINE_LACKS` is. Without it only
+    that fixed list is used.
 
     Returns a map from cell to its ``refused_pattern`` reasons (root = the cell),
     sorted and without duplicates; cells with no reason are absent.
@@ -463,6 +479,14 @@ def scan_patterns(
         found = _formula_reasons(scan, cell, text)
         if found:
             details[cell].update(found)
+    if engine_lacks is not None and scan.calls:
+        # The engine's #NAME? or #N/IMPL! is an Excel error code: an error handler
+        # around the call turns it into a plausible value on every input.
+        lacking = engine_lacks({n for names in scan.calls.values() for n in names})
+        for cell, names in scan.calls.items():
+            for raw in names:
+                if function_name(raw) in lacking:
+                    details[cell].add(f"{ENGINE_LACKS_PREFIX}{function_name(raw)}")
     for cell in _cycle_cells(graph):
         details[cell].add(CIRCULAR)
     for cell in data_table_cells:
