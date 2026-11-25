@@ -268,6 +268,13 @@ def _locale_spelling(text: str) -> str | None:
             "text with a leading apostrophe, which Excel drops (it keeps the rest as "
             "text); give the value without it"
         )
+    if any(ch.isspace() and ch != " " for ch in text) and _PLAIN_NUMBER.fullmatch(
+        "".join(text.split())
+    ):
+        return (
+            "a number with a non-breaking space or other white space, which Excel does "
+            "not ignore (it keeps the entry as text); remove it"
+        )
     kind = _locale_kind(text)
     if kind is None:
         return None

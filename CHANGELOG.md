@@ -105,9 +105,11 @@ schema is a versioned public contract.
   cannot compute, on every input set: `function IronCalc does not implement: MYFN`. A
   workbook whose VBA function is missing in Excel too is refused as well. Calls the
   engine computes for some arguments only are refused by shape: `SHEETS` with a
-  reference, `RANK`/`RANK.EQ`/`RANK.AVG` over a single cell, and `DATEDIF`, `DATEVALUE`,
-  `FORMULATEXT`, `N` or `UNICODE` given a range. LET and LAMBDA parameters, and a LAMBDA
-  held in a defined name, are not affected. A `#NAME?` that appears in an output for a
+  reference; `RANK`/`RANK.EQ`/`RANK.AVG` unless the list is written as a range; and
+  `DATEDIF`, `DATEVALUE`, `FORMULATEXT`, `N` or `UNICODE` given a range, a LET or LAMBDA
+  parameter, or an expression over one (not through a function that returns one value,
+  such as `SUM`, `INDEX` or `VLOOKUP`). A LAMBDA held in a defined name is checked
+  through its body, for every cell that calls it. A `#NAME?` that appears in an output for a
   policy, where the trust run had none, is an `engine_error`.
 - **`marinade calc`: an `INDIRECT` address off the grid is refused.** IronCalc reads
   `INDIRECT("Rates!B0")` as 0 (and a range from row 0 as starting on row 1) where Excel
@@ -246,7 +248,7 @@ schema is a versioned public contract.
   and a formula reading it (`LEN`, a comparison, a lookup key) came back `ok` with the
   value for `A`. Values are now set as written; a number, date or boolean cell still
   reads through surrounding spaces, as Excel's entry does (ordinary spaces only: a
-  non-breaking space makes a number entry text, which is refused), and a value of only
+  non-breaking space makes a number entry text, which is refused by name), and a value of only
   spaces is still a blank value. Ids are still trimmed, and so is an id mapped to a
   cell.
 

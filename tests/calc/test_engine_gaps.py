@@ -412,6 +412,99 @@ def test_rank_over_a_range_is_not_refused(make_book: Book, tmp_path: Path) -> No
     assert row["value"] == "1.0"
 
 
+_SHAPES = {
+    "B1": "x",
+    "B2": "y",
+    "B3": "z",
+    "C1": "2024-01-02",
+    "C2": "2024-01-05",
+    "C3": "2024-01-09",
+    "D1": 1,
+    "D2": 2,
+    "D3": 3,
+}
+
+
+@pytest.mark.parametrize(
+    ("formula", "names", "field", "value", "reason"),
+    [
+        # Safe(x) = IFERROR(MYUDF(x), 0): the engine answers 0 on every input.
+        (
+            "=Safe(Inputs!D1)",
+            {"Safe": "_xlfn.LAMBDA(_xlpm.x,IFERROR(MYUDF(_xlpm.x),0))"},
+            "Inputs!D1",
+            "2",
+            "MYUDF",
+        ),
+        # CountDates over B1:B3 with one ISO date: Excel 1, the engine 0.
+        (
+            "=CountDates(Inputs!B1:B3)",
+            {"CountDates": "_xlfn.LAMBDA(_xlpm.r,SUMPRODUCT(COUNT(DATEVALUE(_xlpm.r))))"},
+            "Inputs!B2",
+            "2024-01-02",
+            "DATEVALUE over a range",
+        ),
+        # The same through LET: r is a range Excel walks cell by cell.
+        (
+            "=SUMPRODUCT(_xlfn.LET(_xlpm.r,Inputs!B1:B3,COUNT(DATEVALUE(_xlpm.r))))",
+            None,
+            "Inputs!B2",
+            "2024-01-02",
+            "DATEVALUE over a range",
+        ),
+        # RANK over a single cell an INDEX returns: Excel 1, the engine #N/IMPL!.
+        (
+            "=COUNT(RANK(2,INDEX(Inputs!D1:D3,Inputs!D1)))",
+            None,
+            "Inputs!D1",
+            "2",
+            "RANK over a computed reference",
+        ),
+    ],
+)
+def test_a_gap_behind_a_name_let_or_computed_reference_is_refused(
+    make_book: Book,
+    tmp_path: Path,
+    formula: str,
+    names: dict[str, str] | None,
+    field: str,
+    value: str,
+    reason: str,
+) -> None:
+    book = make_book("hid", {"Inputs": _SHAPES, "Calc": {"B1": F(formula, 0.0)}}, names=names)
+    res = _run(tmp_path, book, f"id,x\nP1,{value}\n", {"x": field}, ["Calc!B1"])
+    row = _rows(res)[("P1", "Calc!B1")]
+    assert row["status"] == "refused", row
+    assert f"function IronCalc does not implement: {reason}" in row["reasons"]
+
+
+@pytest.mark.parametrize(
+    ("formula", "stored", "policy", "want"),
+    [
+        # A range inside a function that returns one value is not walked per cell.
+        ("=N(SUM(Inputs!D1:D3))+Inputs!D1", 7.0, "2", "9.0"),  # (2+2+3) + 2
+        ("=DATEVALUE(INDEX(Inputs!C1:C3,Inputs!D1))", 45293.0, "2", "45296.0"),  # 2024-01-05
+        (
+            "=DATEVALUE(VLOOKUP(Inputs!D1,Inputs!D1:E3,2,FALSE))+0",
+            45293.0,
+            "3",
+            "45293.0",
+        ),  # D1 is now 3, the first match: E1 = 2024-01-02
+        ("=_xlfn.UNICODE(LEFT(INDEX(Inputs!C1:C3,Inputs!D1)))", 50.0, "2", "50.0"),  # "2"
+    ],
+)
+def test_a_range_under_a_single_value_function_is_not_refused(
+    make_book: Book, tmp_path: Path, formula: str, stored: float, policy: str, want: str
+) -> None:
+    inputs = dict(_SHAPES)
+    inputs.update({"E1": "2024-01-02", "E2": "2024-01-05", "E3": "2024-01-09"})
+    book = make_book("fp", {"Inputs": inputs, "Calc": {"B1": F(formula, stored)}})
+    res = _run(tmp_path, book, f"id,x\nP1,{policy}\n", {"x": "Inputs!D1"}, ["Calc!B1"])
+    row = _rows(res)[("P1", "Calc!B1")]
+    assert "does not implement" not in row["reasons"], row
+    assert row["value"] == want
+
+
 # -- T07: INDIRECT text off the grid ---------------------------------------------
 
 

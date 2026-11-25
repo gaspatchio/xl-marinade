@@ -1144,7 +1144,7 @@ def test_a_non_breaking_space_is_not_read_through(make_book: Book, tmp_path: Pat
     # refuses it by name.
     book = make_book("nb", {"Inputs": {"B1": 1}, "Calc": {"B1": F("=Inputs!B1+1", 2.0)}})
     imap = {"fields": {"x": "Inputs!B1"}}
-    with pytest.raises(CalcInputError, match=r"policy 'p' field 'x'.*spaces or separators"):
+    with pytest.raises(CalcInputError, match=r"policy 'p' field 'x'.*non-breaking space"):
         calc(_req(tmp_path, book, "id,x\np,\u00a040\n", imap, ["Calc!B1"]))
 
 

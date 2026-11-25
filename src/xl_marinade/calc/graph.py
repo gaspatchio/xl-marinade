@@ -21,7 +21,7 @@ from xl_marinade.calc.formula_ast import (
     parse_formula,
 )
 from xl_marinade.calc.models import ArrayRange, CellRef, _col_to_number
-from xl_marinade.calc.prepare import relative_names
+from xl_marinade.calc.prepare import defined_name_texts, relative_names
 from xl_marinade.core.db_uri import connect_read_only
 from xl_marinade.core.new_arch.cell_identity import unpack as unpack_cell_id
 from xl_marinade.core.parser import ASTNode, BinaryNode, FunctionNode, RefNode, UnaryNode
@@ -100,6 +100,9 @@ class NameDef:
     rects: tuple[_Rect, ...]
     whole: bool = False
     relative: bool = False
+    text: str = ""
+    """The definition as the workbook holds it (``_xlfn.LAMBDA(...)``), for a formula
+    name; set by :meth:`WorkbookGraph.mark_texts`."""
 
 
 def _unquote(sheet: str) -> str:
@@ -476,6 +479,16 @@ class WorkbookGraph:
             for i, found in enumerate(defs):
                 if found.name == name:
                     defs[i] = replace(found, relative=True)
+
+    def mark_texts(self, texts: dict[tuple[str | None, str], str]) -> None:
+        """Give each formula name its text, keyed by (owning sheet or None, name); the
+        IR keeps none for it, so the caller reads it from the workbook."""
+        for (owner, name), text in texts.items():
+            sheet = (self.sheet(owner) or owner) if owner is not None else None
+            defs = self._names.get((sheet, _fold(name)), [])
+            for i, found in enumerate(defs):
+                if found.name == name and found.kind == "formula":
+                    defs[i] = replace(found, text=text)
 
     # -- basic lookups ---------------------------------------------------
 
@@ -1012,6 +1025,8 @@ def open_graph(workbook: Path, ir: Path | None, tmp: Path) -> WorkbookGraph:
 
         tmp.mkdir(parents=True, exist_ok=True)
         graph = WorkbookGraph.from_ir(extract(workbook, tmp / "ir.db"))
-    graph.mark_relative(relative_names(workbook))
+    texts = defined_name_texts(workbook)
+    graph.mark_relative(relative_names(texts))
+    graph.mark_texts(texts)
     graph.add_argument_edges()
     return graph

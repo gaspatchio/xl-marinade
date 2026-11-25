@@ -340,28 +340,93 @@ formula."""
 _RANK = frozenset({"RANK", "RANK.EQ", "RANK.AVG"})
 
 
+_ONE_VALUE = frozenset(
+    {
+        "AND",
+        "AREAS",
+        "AVERAGE",
+        "AVERAGEA",
+        "AVERAGEIF",
+        "AVERAGEIFS",
+        "COLUMNS",
+        "CONCAT",
+        "CONCATENATE",
+        "COUNT",
+        "COUNTA",
+        "COUNTBLANK",
+        "COUNTIF",
+        "COUNTIFS",
+        "HLOOKUP",
+        "INDEX",
+        "IRR",
+        "LOOKUP",
+        "MATCH",
+        "MAX",
+        "MAXA",
+        "MAXIFS",
+        "MEDIAN",
+        "MIN",
+        "MINA",
+        "MINIFS",
+        "NPV",
+        "OR",
+        "PRODUCT",
+        "ROWS",
+        "STDEV",
+        "STDEV.P",
+        "STDEV.S",
+        "SUM",
+        "SUMIF",
+        "SUMIFS",
+        "SUMPRODUCT",
+        "TEXTJOIN",
+        "VAR",
+        "VAR.P",
+        "VAR.S",
+        "VLOOKUP",
+        "XMATCH",
+        "XOR",
+    }
+)
+"""Functions that reduce the ranges they are given to one value (``INDEX`` and the
+lookups to one cell), so a range inside them does not reach the call around them."""
+_LET_PARAMETER = "_XLPM."
+
+
 def _covers_cells(scan: _Scan, cell: CellRef, arg: ASTNode) -> bool:
-    """True when ``arg`` holds a reference to more than one cell."""
-    for node, _exempt in _walk(arg):
-        if not isinstance(node, RefNode):
-            continue
-        definition = _name_def(scan, cell, node.ref)
-        if definition is not None:
-            if definition.kind == "cells" and _multi_cell_name(definition):
+    """True when ``arg`` may hand the function around it more than one cell: a
+    reference or name over several cells, or a LET/LAMBDA parameter (which can be
+    bound to one), reached through operators and functions that keep their shape."""
+    stack = [arg]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, RefNode):
+            if node.ref.upper().startswith(_LET_PARAMETER):
                 return True
-        elif _multi_cell(node.ref, cell.sheet):
-            return True
+            definition = _name_def(scan, cell, node.ref)
+            if definition is not None:
+                if definition.kind == "cells" and _multi_cell_name(definition):
+                    return True
+            elif _multi_cell(node.ref, cell.sheet):
+                return True
+        elif isinstance(node, FunctionNode):
+            if function_name(node.name) not in _ONE_VALUE:
+                stack.extend(node.args)
+        elif isinstance(node, BinaryNode):
+            stack.extend([node.left, node.right])
+        elif isinstance(node, UnaryNode):
+            stack.append(node.operand)
     return False
 
 
-def _single_cell(scan: _Scan, cell: CellRef, arg: ASTNode) -> bool:
-    """True when ``arg`` is a reference to exactly one cell."""
-    if not isinstance(arg, RefNode):
+def _range_ref(scan: _Scan, cell: CellRef, arg: ASTNode) -> bool:
+    """True when ``arg`` is written as a reference to more than one cell."""
+    if not isinstance(arg, RefNode) or arg.ref.upper().startswith(_LET_PARAMETER):
         return False
     definition = _name_def(scan, cell, arg.ref)
     if definition is not None:
-        return definition.kind == "cells" and not _multi_cell_name(definition)
-    return _ref_rect(arg.ref, cell.sheet) is not None and not _multi_cell(arg.ref, cell.sheet)
+        return definition.kind == "cells" and _multi_cell_name(definition)
+    return _multi_cell(arg.ref, cell.sheet)
 
 
 def _shape_gap(scan: _Scan, cell: CellRef, name: str, args: list[ASTNode]) -> str | None:
@@ -369,11 +434,52 @@ def _shape_gap(scan: _Scan, cell: CellRef, name: str, args: list[ASTNode]) -> st
     Excel computes a value; None when the shape is not one of those."""
     if name == "SHEETS" and args:
         return "SHEETS with a reference"
-    if name in _RANK and len(args) >= 2 and _single_cell(scan, cell, args[1]):
-        return f"{name} over a single cell"
+    if name in _RANK and len(args) >= 2 and not _range_ref(scan, cell, args[1]):
+        # IronCalc ranks only within a range written as such.
+        written = isinstance(args[1], RefNode) and not args[1].ref.upper().startswith(
+            _LET_PARAMETER
+        )
+        return f"{name} over a single cell" if written else f"{name} over a computed reference"
     if name in _PER_CELL and any(_covers_cells(scan, cell, a) for a in args):
         return f"{name} over a range"
     return None
+
+
+def _call_reasons(scan: _Scan, cell: CellRef, node: FunctionNode, seen: frozenset[str]) -> set[str]:
+    """Why a call in ``cell``'s formula cannot be computed as Excel would: a function
+    the engine lacks, a shape it answers ``#N/IMPL!`` for, a random or clock function.
+
+    A defined name called like a function (one holding a LAMBDA) is the workbook's
+    own: its body is scanned the same way, for this cell, instead of asking the engine
+    (a scratch model has none of the workbook's names). ``seen`` stops a name that
+    calls itself.
+    """
+    found: set[str] = set()
+    definition = _name_def(scan, cell, node.name)
+    if definition is None:
+        scan.calls.setdefault(node.name, set()).add(cell)
+    elif definition.kind == "formula" and definition.name.upper() not in seen:
+        body = parse_formula(definition.text) if definition.text else None
+        if body is None:
+            found.add(UNPARSEABLE)
+        else:
+            inner = seen | {definition.name.upper()}
+            for sub, _exempt in _walk(body):
+                if isinstance(sub, FunctionNode):
+                    found |= _call_reasons(scan, cell, sub, inner)
+    name = function_name(node.name)
+    gap = _shape_gap(scan, cell, name, node.args)
+    if gap is not None:
+        found.add(f"{ENGINE_LACKS_PREFIX}{gap}")
+    if name in ENGINE_LACKS:
+        # The engine's #NAME? is an Excel error code: an error handler around the
+        # call turns it into a plausible value no trust run can tell from Excel's.
+        found.add(f"{ENGINE_LACKS_PREFIX}{name}")
+    if name in _RANDOM:
+        found.add(name)
+    if name in _CLOCK and scan.as_of is None:
+        found.add(name)
+    return found
 
 
 def _formula_reasons(scan: _Scan, cell: CellRef, text: str) -> set[str]:
@@ -406,22 +512,8 @@ def _formula_reasons(scan: _Scan, cell: CellRef, text: str) -> set[str]:
             continue
         if not isinstance(node, FunctionNode):
             continue
-        if _name_def(scan, cell, node.name) is None:
-            # A defined name called like a function (one holding a LAMBDA) is the
-            # workbook's own, which a scratch model cannot know.
-            scan.calls.setdefault(node.name, set()).add(cell)
+        found |= _call_reasons(scan, cell, node, frozenset())
         name = function_name(node.name)
-        gap = _shape_gap(scan, cell, name, node.args)
-        if gap is not None:
-            found.add(f"{ENGINE_LACKS_PREFIX}{gap}")
-        if name in ENGINE_LACKS:
-            # The engine's #NAME? is an Excel error code: an error handler around the
-            # call turns it into a plausible value no trust run can tell from Excel's.
-            found.add(f"{ENGINE_LACKS_PREFIX}{name}")
-        if name in _RANDOM:
-            found.add(name)
-        if name in _CLOCK and scan.as_of is None:
-            found.add(name)
         spec = _lookup_spec(name, node.args)
         if spec is None:
             continue
