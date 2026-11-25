@@ -7,6 +7,14 @@ schema is a versioned public contract.
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-11-25
+
+Fixes found by a deliberate search for wrong results in `marinade calc` and
+`marinade values`. Most of them make `calc` refuse, by name, cases it used to
+answer wrongly with status `ok`. One fix is in extraction: a formula's cached
+text result is now stored exactly as Excel saved it. The output schema is
+unchanged at 3.0.
+
 ### Fixed
 - **A formula's text result is stored exactly as Excel saved it.** The
   extractor trimmed leading and trailing whitespace (spaces, tabs, line
