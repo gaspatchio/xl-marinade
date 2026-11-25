@@ -7,6 +7,57 @@ schema is a versioned public contract.
 
 ## [Unreleased]
 
+### Fixed
+- **A formula's text result is stored exactly as Excel saved it.** The
+  extractor trimmed leading and trailing whitespace (spaces, tabs, line
+  breaks) from every cached `<v>` value, and stored nothing for a formula
+  whose result is the empty string. So `="  "&"Total"` was stored as `Total`,
+  and a projection that blanks periods beyond term with `=IF(t>Term,"",x)`
+  had no stored value in those cells. Text results (`<c t="str">`) are now
+  kept as cached, and `""` is stored as a value. This includes the members
+  of an array or spill range, which Excel saves as text results without a
+  formula. Numeric, boolean and error caches are read as before, and
+  constants (shared and inline strings, resolved by index) were never
+  trimmed. The output schema is unchanged at 3.0.
+
+  Who sees a difference:
+  - `agent_cells.value` and the value blobs of those cells.
+  - The label-scan context of bindings next to them, which records
+    neighbouring values, and documentation that prints sample values.
+  - `marinade values`, which returned the trimmed text.
+  - `marinade calc`, whose trust run failed those cells (`silently_wrong` for
+    edge whitespace, `no_stored_value` for a whitespace-only or `""` result)
+    and refused every output downstream of them.
+  - `marinade calc --check-against`: the walk down a results or input-table id
+    column stops at the first cell with no stored value. A formula id cell
+    whose result is `""` used to stop it; it is a value (not blank in Excel),
+    so the walk now goes on and reads the input sets below it.
+  - Array and spill ranges whose members hold a whitespace-only or `""`
+    result: those members were empty cells and are now cells with that
+    value. Re-extracting can add cells, and add, resize or remove the
+    constant bindings around them (`BINDING_ADDED`, `BINDING_RESIZED`,
+    `BINDING_REMOVED`, with their binding edges). A constant binding that
+    grows to take in the new members can also get a different label.
+
+  Re-extract a workbook to pick this up, and pass `marinade calc --ir` only a
+  database extracted with this version. `marinade diff` between a database
+  extracted before this fix and one extracted after:
+  - reports `VALUE_CHANGED` on text results with edge whitespace, except text
+    that reads as a number (`"1.50 "` against `"1.50"`), which diff compares
+    numerically;
+  - does not report a `""` or whitespace-only formula result that was missing
+    before: it counts as a recalculation gap, like any other cached value that
+    appears on an unchanged formula. An array or spill member has no formula,
+    so its new `""` or whitespace-only value is reported as `VALUE_CHANGED`
+    and `DTYPE_CHANGED` when the older database already had a row for that
+    cell, and only through `BINDING_ADDED` when it did not;
+  - reports `BINDING_METADATA_CHANGED` (layer `ir_inference`) on every binding
+    whose label scan quotes a changed cell.
+
+  `marinade diff` also now treats a stored `""` as a value, not as a missing
+  one, so `""` turning into text on an unchanged formula is reported as
+  `VALUE_CHANGED`.
+
 ## [0.8.0] - 2026-11-24
 
 Adds `marinade calc` and `marinade values`, both experimental. `calc` recalculates
