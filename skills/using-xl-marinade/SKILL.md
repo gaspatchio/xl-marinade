@@ -215,8 +215,23 @@ marinade values book.xlsx --variables vars.json [--map map.json] -o stored/
   constant) is an error. Every cell of an array formula's range (legacy or
   dynamic/spill) is a formula cell: compared in the trust run, carrying the
   formula's status, and an error as a map or selector target.
+- **Input values follow Excel's entry rules.** A number cell takes a plain
+  decimal or an ISO date (its serial); an empty cell also takes `TRUE`/`FALSE`
+  as a boolean and keeps other text as text. Locale-dependent spellings (`5%`,
+  `1,000`, `$100`, `30/06/2024`, `30-Jun-2024`, times), a leading apostrophe,
+  error values, numbers outside Excel's range and ISO dates before 1900-03-01
+  are errors naming the policy and field; ids like `123-45-6789` stay text.
+  Also errors: a CSV row wider than its header (or a value under an unnamed
+  column), a repeated JSON key, two fields
+  (or two check outputs) on one cell, and a field no formula can read (the id
+  field is exempt; a cell a dynamic reference, a formula name or a 3-D
+  reference may reach is accepted; `run.json` `inputs` records whether a
+  requested output reads each field: `true`, `false` or `"unknown"`).
 - **Files out** in `-o`: `results.csv`, `rows.csv`, `paths.csv`,
-  `trust_report.json`, `run.json`. Known outputs are cleared at the start of a run.
+  `trust_report.json`, `run.json`. Known outputs are cleared at the start of a run;
+  an input that is one of them, or an `-o` that is a file, is refused first.
+  `--ir` must come from an extractor of 0.8.1 or later ("re-extract with marinade
+  extract").
 - **Read `trust_report.json` first** (`share` reproduced, `failures`,
   `refused_patterns`, `settings`), then filter on `status`:
   `refused` (depends on a failing/refused root cell, or the engine returned an

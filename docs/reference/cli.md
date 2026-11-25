@@ -128,7 +128,7 @@ marinade calc [OPTIONS] WORKBOOK
 | `--outputs TEXT` | Output cell, range or name (`'Sheet'!Name` for a sheet's own name); repeat for several. | |
 | `--variables FILE` | `vars.json`: named variables for `rows.csv`; `period_start` required on every range. | |
 | `--check-against FILE` | `check.json`: stored results for other input sets, to widen the trust run. | |
-| `--ir FILE` | Reuse this IR database (must match the workbook). | extract afresh |
+| `--ir FILE` | Reuse this IR database (must match the workbook and be extracted with 0.8.1 or later). | extract afresh |
 | `--as-of TEXT` | Valuation date `YYYY-MM-DD`; replaces `TODAY`/`NOW`. | unset (those cells are refused) |
 | `--tolerance FLOAT` | Numeric comparison tolerance, relative or absolute. | `1e-09` |
 | `--probe-cap INT` | Maximum number of probe cells. When probes do not fit, a warning on stderr gives the cap that holds them all. | `50000` |
@@ -136,14 +136,14 @@ marinade calc [OPTIONS] WORKBOOK
 
 At least one of `--outputs` and `--variables` is required. Writes `results.csv`,
 `rows.csv` (with `--variables`), `paths.csv`, `trust_report.json` and `run.json`, after
-clearing those names from `--out`.
+clearing those names from `--out`; an input file that is one of them is refused first.
 
 **Exit codes**
 
 | Code | Meaning |
 |---|---|
 | 0 | Success. |
-| 1 | Error (bad input, unknown sheet, IR from another workbook). |
+| 1 | Error (bad input, unknown sheet, IR from another workbook or older than 0.8.1, an input that is one of the output files, an `-o` that is a file, the engine crashing on a formula). |
 | 5 | `xl-marinade[calc]` is not installed. |
 | 6 | The workbook is refused outright (1904 dates, precision as displayed, Strict Open XML). |
 
@@ -169,7 +169,7 @@ marinade values [OPTIONS] WORKBOOK
 |---|---|---|
 | `--variables FILE` | `vars.json`. Required. | |
 | `--map FILE` | `map.json`; its id field's stored value becomes the policy id. | policy is `stored` |
-| `--ir FILE` | Reuse this IR database. | extract afresh |
+| `--ir FILE` | Reuse this IR database (must match the workbook and be extracted with 0.8.1 or later). | extract afresh |
 | `-o`, `--out PATH` | Output directory (`rows.csv` + `run.json`). Required. | |
 
 **Exit codes**
@@ -177,7 +177,7 @@ marinade values [OPTIONS] WORKBOOK
 | Code | Meaning |
 |---|---|
 | 0 | Success. |
-| 1 | Error (bad input, unknown sheet, IR from another workbook). |
+| 1 | Error (bad input, unknown sheet, IR from another workbook or older than 0.8.1, an input that is one of the output files, an `-o` that is a file). |
 
 **Example**
 

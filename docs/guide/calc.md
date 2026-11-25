@@ -30,13 +30,15 @@ pip install 'xl-marinade[calc]'
 | Option | File | What it holds |
 |---|---|---|
 | `WORKBOOK` | `.xlsx` / `.xlsm` | The model, saved by Excel so it carries stored values. |
-| `--policies` | `policies.csv` | One row per input set. An id column plus one column per mapped field. UTF-8 (save from Excel as "CSV UTF-8"). Ids stay text; a blank value, a duplicate id or a duplicate column name is an error. Columns with no name (the empty trailing columns some exports add) are ignored. |
+| `--policies` | `policies.csv` | One row per input set. An id column plus one column per mapped field. UTF-8 (save from Excel as "CSV UTF-8"). Ids stay text; a blank value, a duplicate id, a duplicate column name or a row with more values than the header has names (an unquoted `250,000`) is an error, and so is a value under a column with no name. Columns with no name (the empty trailing columns some exports add) are ignored while they are empty, and so are empty values past the last column. |
 | `--map` | `map.json` | Which cell or defined name each field sets. |
 | `--outputs` | repeatable | Output cells, ranges or defined names (`'Results!B5:B64'`). Ranges expand to cells. |
 | `--variables` | `vars.json` | Optional. Named output variables for `rows.csv`. |
 | `--check-against` | `check.json` | Optional. Stored results for other input sets, to widen the trust run. |
 
-You must give at least one of `--outputs` and `--variables`.
+You must give at least one of `--outputs` and `--variables`. A key repeated in the same
+object of `map.json`, `vars.json` or `check.json` is an error: JSON would keep only the
+last one.
 
 ### Targets
 
@@ -80,10 +82,73 @@ sheet's definition of a name first, and the workbook's only when the sheet has n
 in `fields`, so the id is written into a workbook cell as well. Each target must be a cell
 or defined name that holds a constant; mapping onto a formula is an error, and so is
 mapping onto any cell of an array formula's range (Excel cannot hold a constant there).
-The same holds for a `check.json` selector. Before each
-input set, every mapped input is reset to its stored value. Values are converted to the
-target cell's stored type, and ISO dates become Excel serials. A value outside the cell's
-data-validation list refuses that input set's outputs.
+The same holds for a `check.json` selector. Mapping two fields onto one cell (by
+address, by name, or one of each), the id field included, is an error too, since the
+cell can hold only one of their values.
+
+A field that no formula can read is an error too: its value would change nothing, and
+every policy would get the stored inputs' answer as `ok` (a map one cell off, on the
+label beside the input, is the usual cause). A field counts as read when any formula's
+cell or range reference covers its cell, an empty one included, or when a formula reads
+it through a defined name in any form Excel resolves (`Name`, a sheet's own name,
+`'Sheet'!Name`), through a name holding a formula, or inside `CELL`, `INFO` or
+`GETPIVOTDATA`. A field is refused only when no read can reach it: where a read cannot be
+placed (an `OFFSET` or `INDIRECT` landing beyond the cell it lands on with the stored
+inputs, a name holding `OFFSET` or `INDIRECT`, a name with a relative reference, a 3-D
+reference such as `S1:S3!B1`), every cell it may reach is accepted. A `Sheet!Name` that
+no definition answers is `#NAME?` in Excel, so it reads nothing. The id field is never
+refused, since it may be written into a display cell. A field read only by outputs you
+did not request is accepted. `run.json` records, under
+`inputs`, the cell each field sets and whether a requested output reads it.
+
+Before each input set, every mapped input is reset to its stored value. A value outside
+the cell's data-validation list refuses that input set's outputs.
+
+Values are converted the way Excel converts what is typed into the cell, by the type of
+the value the cell holds:
+
+- A number cell takes a plain decimal (`40`, `-1.5`, `.5`, `4e1`, `0042`) or an ISO date
+  (`2024-06-30`), which becomes its Excel serial (45473).
+- A boolean cell takes `TRUE` or `FALSE`, in any case.
+- A text cell takes the text as written, even when it looks like a number, less one
+  leading apostrophe: Excel's entry prefix, so `'123` sets the text `123`.
+- A cell the workbook saved empty takes an ISO date as its serial, `TRUE`/`FALSE` (any
+  case) as a boolean and a plain decimal as a number; any other text stays text.
+
+On a number cell or an empty one, these are errors that name the policy, the field and
+what is wrong, rather than a guess:
+
+- spellings Excel reads by the locale's rules: `5%`, `1,000`, `1,5`, `1.234.567`,
+  `$100`, `(100)`, `4 000`, digits other than 0-9 (`٤٠`, `１２３`), fractions (`1 1/2`),
+  times and date-times (`12:30`, `3:2`, `2024-06-30T12:00`), and dates not written
+  `YYYY-MM-DD`. Give a plain decimal or an ISO date instead;
+- a leading apostrophe (`'123`): Excel makes the rest text, which a number or empty
+  cell would not hold as calc reads it, so give the value without it;
+- error values such as `#N/A`;
+- numbers outside the range Excel accepts (`1e-400`, `1e400`);
+- ISO dates before 1900-03-01. Excel's 1900 date system counts a 29 February 1900 that
+  never was, so its serials before March 1900 are a day off the calendar, and it has no
+  dates before 1900. Give the serial number instead.
+
+A date not written `YYYY-MM-DD` is text some locale reads as a date: digits joined by
+`/`, `-` or `.` whose parts can be a day (1-31), a month (1-12) and a year (one or two
+digits, or four from 1900), in day-month-year, month-day-year or year-month-day order
+(`30/06/2024`, `6/30/2024`, `30.06.2024`, `2024/06/30`), or two of them (`10-20`,
+`6/2024`, `2024-06`); or an English month name, in any case, with a day or year
+(`30-Jun-2024`, `June 30, 2024`, `Jun 2024`). Other text stays text on an empty cell,
+so ids and codes such as `123-45-6789`, `1234-5678` or `100-200` written into a blank
+display cell are kept as written.
+
+A number cell also refuses any other text (`1_000`, `abc`, `inf`, `nan`); on an empty
+cell those stay text, as in Excel. `--check-against` table values are set with the type
+they are stored with: a table cell holding `TRUE` sets a boolean.
+
+A number keeps every digit it is written with. Excel keeps 15 significant digits of a
+number typed into a cell and turns the rest to zeros (`1234567890123456789` becomes
+`1234567890123450000`), so a policy value with more than 15 significant digits (a long
+policy number used as a lookup key, or a value written by a script with 17 digits) can
+compute differently from Excel typing it. Values set by a macro or a query keep full
+precision in Excel too.
 
 The list is the validation's literal items, or the stored values of its source: a range,
 a whole column (the cells it holds) or a defined name over cells (the validation sheet's
@@ -136,9 +201,10 @@ batch-results sheet, so the trust run can recalculate those input sets too and c
 ```
 
 `results.outputs` maps an output cell to the results-sheet column holding its stored value
-per input set. `inputs` has exactly one of `table` (a column per `map.json` field) or
-`selector` (a single cell, e.g. `"Control!C4"`, that picks the input set by id). Only input
-sets the engine reproduced count towards the exercised paths.
+per input set; two outputs that resolve to one cell are an error. `inputs` has exactly one
+of `table` (a column per `map.json` field) or `selector` (a single cell, e.g.
+`"Control!C4"`, that picks the input set by id; it may be a mapped field's cell too). Only
+input sets the engine reproduced count towards the exercised paths.
 
 A **mismatch** (an input set whose recalculated output differs from the stored one by more
 than `--tolerance`) refuses that output only for policies that took the same path to it:
@@ -176,7 +242,9 @@ checked points, 100% came back `ok`, and all of them were correct.
    Strict Open XML file refuse the whole workbook (exit code 6).
 2. Extract the formula graph into a temporary database, or reuse `--ir` if it matches the
    workbook. Give `--ir` a database extracted with 0.8.1 or later: earlier ones trimmed
-   formulas' text results and dropped `""` results, which the trust run then fails.
+   formulas' text results and dropped `""` results, which the trust run then fails. An
+   older one is refused (exit code 1) with "re-extract with marinade extract". The
+   version checked is the one the extracting install stamped into the database.
 3. Scan the formulas for [refused patterns](#refused-patterns).
 4. Load a copy with every formula's stored value deleted, so the engine has to compute.
    The **trust run** compares each formula cell with what Excel stored, within
@@ -196,7 +264,13 @@ checked points, 100% came back `ok`, and all of them were correct.
 The extraction database is never written by `calc`. The run clears its own known output
 files from `-o` at the start (`results.csv`, `rows.csv`, `paths.csv`, `trust_report.json`,
 `run.json`), so a failed run cannot leave stale ones behind. Nothing else in the directory
-is touched.
+is touched. Before clearing anything, the run refuses (exit code 1) an `-o` that is a file
+rather than a directory, and an input file that is one of those output files (the same
+name in `-o`, or the same file through a link): clearing it would delete your input.
+
+The probe cells go on a hidden sheet named `_marinade_probes`. A workbook that already
+has a sheet of that name (in any case) is refused when the run needs probes; rename the
+sheet in a copy of the workbook.
 
 ## The files out
 
@@ -208,11 +282,12 @@ All in the `-o` directory, UTF-8, `\n` line endings, no timestamps.
 | `rows.csv` | With `--variables`: `policy`, `variable`, `period`, `value`, `status`, `reasons`. |
 | `paths.csv` | `policy_id`, `cell`, `family`, `kind`, `ordinal`, `outcome`, `exercised`. The branch or lookup edge each policy took, in the cells that fed its outputs: through the cells its dynamic references landed on for that policy, not the cell an `OFFSET` starts from or where it landed with the stored inputs; `ordinal` tells apart several probes of one kind in one cell; `exercised` is `true` when the trust run took it too. |
 | `trust_report.json` | `formula_cells`, `checked`, `reproduced`, `share`, `failures`, `refused_patterns`, `settings` (with `settings.refused`), `held_external_links`, `check_against` (`input_sets`, and `mismatches` with `input_set`, `cell`, `detail`, `stored`, `computed`, `relative_difference`), `probes_unplaced` (probes that could not be placed, for any reason) and `probes_over_cap` (those left out only because `--probe-cap` was reached). |
-| `run.json` | `ironcalc_version`, `marinade_version`, `workbook_sha256`, `tolerance`, `as_of`, `probe_cap`, `probes_unplaced`, and per variable its range, `period_start` and the cell period 0 falls on. |
+| `run.json` | `ironcalc_version`, `marinade_version`, `workbook_sha256`, `tolerance`, `as_of`, `probe_cap`, `probes_unplaced`, per variable its range, `period_start` and the cell period 0 falls on, and per map field (`inputs`) the cell it sets (`target`) and whether a requested output reads it (`read_by_requested_outputs`: `true`, `false`, or `"unknown"` when only a read that cannot be placed, as above, may reach it). |
 
 `marinade values` writes `rows.csv` and `run.json` (variables only). Its rows carry status
-`stored`, and the policy is `stored`, or the stored value of the id field when `--map`
-maps it.
+`stored`, and the policy is `stored`, or the stored value of the id field (`id_field`,
+default `id`) when `--map` maps it, written as `policies.csv` would hold it (`555`,
+`TRUE`), so its rows join `calc`'s rows for the same input set.
 
 In `reasons`, each entry reads `kind@root:detail`, joined by `; `, in a stable order. The
 root is the cell the problem starts at; it can be upstream of the output.
@@ -464,7 +539,7 @@ it, are listed in `ref/calc/upstream/` in the repository.
 | Code | Meaning |
 |---|---|
 | 0 | Success. |
-| 1 | Error: bad input file, unknown sheet or name, a target that covers no cells, mapping onto a formula, IR from another workbook. |
+| 1 | Error: bad input file, unknown sheet or name, a target that covers no cells, mapping onto a formula, IR from another workbook or from an extractor older than 0.8.1, an input that is one of the output files, an `-o` that is a file, a sheet named `_marinade_probes`, or the engine crashing on a formula (an IronCalc panic, such as on `XNPV(1,1)`; the error names the workbook and the policy or input set, not the cell). |
 | 5 | The `[calc]` extra is not installed. |
 | 6 | The workbook is refused outright (1904 dates, precision as displayed, Strict Open XML). `trust_report.json` and `run.json` are still written. |
 

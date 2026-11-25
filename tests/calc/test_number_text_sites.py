@@ -461,8 +461,8 @@ def test_a_range_resolved_once_for_every_cell_joining_it(
     codes = {f"A{r}": f"c{r}" for r in range(1, 11)}
     joined = ",".join(f"c{r}" for r in range(1, 11))
     calc_cells = {f"B{r}": F('=_xlfn.TEXTJOIN(",",TRUE,Codes!A:A)', joined) for r in range(1, 31)}
-    book = make_book("col", {"Inputs": {"B1": 1}, "Codes": codes, "Calc": calc_cells})
-    rows = _rows(_run(tmp_path, book, "id,x\nP,2\n", {"x": "Inputs!B1"}, ["Calc!B1:B30"]))
+    book = make_book("col", {"Inputs": {"B1": "id"}, "Codes": codes, "Calc": calc_cells})
+    rows = _rows(_run(tmp_path, book, "id\nP\n", {"id": "Inputs!B1"}, ["Calc!B1:B30"]))
     assert all(r["status"] == "ok" for r in rows.values())
     assert sum(1 for t in calls if "A:" in t or "$A:" in t) == 1
 

@@ -177,6 +177,63 @@ schema is a versioned public contract.
   `probes_unplaced` and `probes_over_cap`, and the command prints the cap needed), and
   `paths.csv` lists the cells each policy's references reached, not the stored inputs'
   landing cell.
+- **`marinade calc`: an input file can no longer drop a value without a word.** A
+  `policies.csv` row with more values than the header has names (an unquoted
+  `250,000`) set the field to the first part and filed the rest under no column, so the
+  output came back `ok` with the wrong number; it is now an error naming the policy
+  and the line, and so is a value under a column the header leaves unnamed (`id,sa,`
+  with `A,250,000`). Empty values there, as exports write them, are still accepted. A
+  key repeated in `map.json`, `vars.json` or `check.json` kept only its last value; it
+  is now an error naming the key. Two map fields that resolve to one cell (by address
+  or by name) and two `check.json` outputs on one cell are errors too: one value or one
+  comparison was dropped, and which one depended on key order.
+- **`marinade calc`: policy values are converted by Excel's entry rules.** A value for
+  a cell the workbook saved empty stayed text, so `2024-06-30` compared greater than
+  every number, `TRUE` was not a boolean, and outputs came back `ok` with the wrong
+  number; such a cell now takes an ISO date as its serial, `TRUE`/`FALSE` as a boolean
+  and a plain decimal as a number; other text, such as an id like `123-45-6789`, stays
+  text. Spellings Excel reads by the locale's rules (`5%`, `1,000`, `$100`, `(100)`,
+  dates such as `30/06/2024` or `30-Jun-2024`, times, other scripts' digits), a leading
+  apostrophe, error values and numbers outside Excel's range (`1e-400` used to become
+  0) are now errors that name the policy and field, on empty and number cells, and so
+  is `1_000` on a number cell. On a text cell a leading apostrophe is dropped, as
+  Excel's entry prefix (`'123` sets the text `123`). ISO dates before 1900-03-01 are
+  refused: their serial was one too high (a 1900-01-01 placeholder date became 2), and
+  Excel has no dates before 1900.
+  `--check-against` table values keep their stored type: a stored `TRUE` was set as
+  the text `"TRUE"`, which made a false mismatch and refused the output.
+- **`marinade values`: the stored row is labelled with the default id field.** With
+  `fields.id` mapped and no `id_field`, `values` labelled its row `stored` while `calc`
+  used the id, so the two files did not join; it now reads the same default (`id`). A
+  boolean id cell is written `TRUE`, as `calc` reads it, not `True`.
+- **`marinade calc` / `marinade values`: a run never touches your files or sheets.** The
+  run clears its own output names from `-o` before reading its inputs, so an input
+  stored there under one of those names (a `map.json` saved as `run.json`) was deleted
+  and the run then failed; such an input, through any path or link, is now refused
+  before anything is cleared. An `-o` that is a file is refused up front instead of
+  failing with a traceback after the whole run. A workbook with a sheet named
+  `_marinade_probes` is refused by name instead of failing with a traceback when the
+  probe sheet is added. An IronCalc panic (`XNPV(1,1)` raises one) is a calc error
+  naming the workbook and the policy or input set, exit code 1, instead of a raw
+  traceback.
+- **`marinade calc` / `marinade values`: `--ir` refuses databases from extractors older
+  than 0.8.1.** Only the workbook hash was checked, so an older IR was reused as is:
+  before 0.7.1 no cell was marked as an array formula (probes then landed inside array
+  formulas), and before 0.8.1 formulas' text results were trimmed and `""` dropped. Such
+  an IR is now refused, naming its version and the floor, with "re-extract with
+  marinade extract". The version is the one the extracting install stamped; an IR
+  stamped with the running install's own version is always accepted.
+- **`marinade calc`: a map field that no formula reads is an error.** A field aimed one
+  cell off (at the label beside the input) was accepted, so every policy got the stored
+  inputs' answer reported `ok` and nothing recorded that the field had no effect. It is
+  now an error naming the field and its cell, but only when no formula can read it: a
+  reference covering the cell (an empty one included), a defined name in any form Excel
+  resolves (`'Sheet'!Name` included), a name holding a formula, or a `CELL`, `INFO` or
+  `GETPIVOTDATA` argument counts as a read, and a cell an `OFFSET` or `INDIRECT` may
+  land on, a name holding one may reach, or a 3-D reference may read is accepted. The
+  id field is exempt (it may be written into a display cell).
+  `run.json` gains `inputs`: per field, the cell it sets and whether a requested output
+  reads it (`true`, `false` or `"unknown"`).
 
 ## [0.8.0] - 2026-11-24
 

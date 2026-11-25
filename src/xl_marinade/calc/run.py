@@ -47,6 +47,7 @@ from xl_marinade.calc.output import (
     PathRecord,
     PolicyWriter,
     clear_outputs,
+    guard_out_dir,
     write_run,
     write_trust_report,
 )
@@ -68,6 +69,7 @@ from xl_marinade.calc.probes import (
     reach_sheets,
     read_probes,
 )
+from xl_marinade.calc.reads import HiddenReads, field_read, hidden_reads
 from xl_marinade.calc.rows import VariableCells, expand_variables, rows_for, variables_record
 from xl_marinade.calc.settings import read_settings, refusal_reasons
 from xl_marinade.calc.status import (
@@ -90,9 +92,53 @@ from xl_marinade.calc.status import (
     unplaced_roots,
 )
 from xl_marinade.calc.trust import TrustResult, run_trust, same
-from xl_marinade.errors import CalcInputError, WorkbookRefused
+from xl_marinade.errors import CalcError, CalcInputError, WorkbookRefused
 
-_ISO_DATE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+_ISO_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+# Excel's number entry, in ASCII: optional sign, digits with an optional fraction (or a
+# bare fraction), optional exponent. No "_" separators, no inf/nan, no other scripts.
+_PLAIN_NUMBER = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
+_EXCEL_MAX = 9.99999999999999e307  # the largest number Excel accepts typed into a cell
+_EXCEL_MIN = 2.2251e-308  # the smallest positive number Excel holds
+_TIME = re.compile(r"[0-9]{1,2}:[0-9]{1,2}(?::[0-9]{1,2}(?:\.[0-9]+)?)?(?:\s*[AaPp][Mm])?")
+_DATE_TIME = re.compile(
+    r"[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}[Tt ]+[0-9]{1,2}:[0-9]{2}(?::[0-9]{2}(?:\.[0-9]+)?)?Z?"
+)
+# Day, month and year in any order or with two parts (``30/06/2024``, ``1/2``, ``2024-6``).
+_OTHER_DATE = re.compile(r"([0-9]{1,4})[/.-]([0-9]{1,4})(?:[/.-]([0-9]{1,4}))?")
+_MONTHS = (
+    "jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec|january|february|march|april"
+    "|june|july|august|september|october|november|december"
+)
+# A month name with day and/or year numbers around it: 30-Jun-2024, June 30, 2024,
+# Jun 2024, Jun-24. The month alone, or with other words, is text.
+_MONTH_DATE = re.compile(
+    rf"(?:[0-9]{{1,4}}[ ./,-]+)?(?:{_MONTHS})\.?(?:[ ./,-]+[0-9]{{1,4}}){{0,2}}",
+    re.IGNORECASE,
+)
+_FRACTION = re.compile(r"[+-]?(?:[0-9]+ +)?[0-9]+/[0-9]+")  # 1 1/2 is 1.5 in Excel
+_DOT_THOUSANDS = re.compile(r"[+-]?[0-9]{1,3}(?:\.[0-9]{3}){2,}(?:,[0-9]+)?")  # 1.234.567
+_CURRENCY = "$€£¥"
+_DECORATION = "%,()'" + _CURRENCY
+_ERROR_VALUES = frozenset(
+    {
+        "#NULL!",
+        "#DIV/0!",
+        "#VALUE!",
+        "#REF!",
+        "#NAME?",
+        "#NUM!",
+        "#N/A",
+        "#GETTING_DATA",
+        "#SPILL!",
+        "#CALC!",
+        "#FIELD!",
+        "#BLOCKED!",
+        "#CONNECT!",
+        "#BUSY!",
+        "#UNKNOWN!",
+    }
+)
 _COLUMN = re.compile(r"^[A-Za-z]{1,3}$")
 _EXCEL_EPOCH = date(1899, 12, 30)
 _TRUE, _FALSE = "TRUE", "FALSE"
@@ -133,14 +179,24 @@ class CalcResult:
 
 
 def coerce_input(raw: str, stored: StoredValue) -> float | str | bool:
-    """Convert a policy value to the type of the target cell's stored value.
+    """Convert a policy value as Excel converts what is typed into the target cell.
 
-    A number cell takes a number, or an ISO ``YYYY-MM-DD`` date as its Excel 1900
-    serial; a boolean cell takes ``TRUE``/``FALSE`` in any case; any other cell takes
-    text. An empty target cell takes a number when the text is one, else text.
+    The target's stored type decides:
+
+    - a number cell takes a plain ASCII decimal (optional sign, digits, optional
+      fraction and exponent) or an ISO ``YYYY-MM-DD`` date as its Excel 1900 serial;
+    - a boolean cell takes ``TRUE``/``FALSE`` in any case;
+    - a text cell takes the text as written, less one leading apostrophe (Excel's
+      entry prefix);
+    - a cell the workbook saved empty takes an ISO date as its serial, ``TRUE``/``FALSE``
+      as a boolean, a plain decimal as a number, and any other text as text.
 
     Raises:
-        CalcInputError: if the value does not fit a number or boolean cell.
+        CalcInputError: for a value that does not fit a number or boolean cell; on a
+            number or empty cell, for a spelling whose meaning depends on the locale
+            (``5%``, ``1,000``, ``$100``, ``(100)``, digits other than 0-9, a date not
+            written ``YYYY-MM-DD``, a time), a leading apostrophe, an error value, a
+            number outside Excel's range, and an ISO date before 1900-03-01.
     """
     text = raw.strip()
     if isinstance(stored, bool):
@@ -148,28 +204,142 @@ def coerce_input(raw: str, stored: StoredValue) -> float | str | bool:
         if upper not in (_TRUE, _FALSE):
             raise CalcInputError(f"{raw!r} is not TRUE or FALSE")
         return upper == _TRUE
-    if isinstance(stored, float):
-        if _ISO_DATE.match(text):
-            try:
-                return float((date.fromisoformat(text) - _EXCEL_EPOCH).days)
-            except ValueError as exc:
-                raise CalcInputError(f"{raw!r} is not a valid date") from exc
-        number = _number(text)
-        if number is None:
-            raise CalcInputError(f"{raw!r} is not a number")
-        return number
+    if isinstance(stored, str):
+        # Excel's entry prefix: '123 typed into a cell holds the text 123.
+        return raw[1:] if raw.startswith("'") else raw
+    if _ISO_DATE.fullmatch(text):
+        return _iso_serial(raw, text)
+    if stored is None and text.upper() in (_TRUE, _FALSE):
+        return text.upper() == _TRUE
+    if _PLAIN_NUMBER.fullmatch(text):
+        return _excel_number(raw, text)
+    spelling = _locale_spelling(text)
+    if spelling is not None:
+        raise CalcInputError(f"{raw!r} is {spelling}")
     if stored is None:
-        number = _number(text)
-        return number if number is not None else raw
-    return raw
+        return raw
+    raise CalcInputError(f"{raw!r} is not a number")
 
 
-def _number(text: str) -> float | None:
+def _iso_serial(raw: str, text: str) -> float:
+    """An ISO date's Excel 1900 serial; dates before 1900-03-01 are refused (D4)."""
+    year, month, day = (int(part) for part in text.split("-"))
+    if (year, month, day) < (1900, 3, 1):
+        raise CalcInputError(
+            f"{raw!r} is before 1900-03-01: Excel's 1900 date system counts a "
+            "29 February 1900 (the 1900 leap-year error), so its serials before March "
+            "1900 are a day off the calendar, and it has no dates before 1900; give the "
+            "serial number instead"
+        )
     try:
-        value = float(text)
-    except ValueError:
+        return float((date(year, month, day) - _EXCEL_EPOCH).days)
+    except ValueError as exc:
+        raise CalcInputError(f"{raw!r} is not a valid date") from exc
+
+
+def _excel_number(raw: str, text: str) -> float:
+    """A plain decimal as Excel holds it; refused outside the range Excel accepts."""
+    value = float(text) + 0.0  # Excel has no negative zero
+    if not math.isfinite(value) or abs(value) > _EXCEL_MAX:
+        raise CalcInputError(f"{raw!r} is beyond Excel's largest number (9.99999999999999E+307)")
+    mantissa = re.split(r"[eE]", text)[0]
+    if (value == 0.0 and any(ch in "123456789" for ch in mantissa)) or (
+        0.0 < abs(value) < _EXCEL_MIN
+    ):
+        raise CalcInputError(f"{raw!r} is below Excel's smallest number (2.2251E-308)")
+    return value
+
+
+def _locale_spelling(text: str) -> str | None:
+    """Why Excel would type ``text`` into a number, date, time or error by rules calc
+    does not apply (most of them the locale's); None when Excel keeps it as text."""
+    if text.upper() in _ERROR_VALUES:
+        return "an error value; calc cannot set one as an input"
+    if text.startswith("'"):
+        return (
+            "text with a leading apostrophe, which Excel drops (it keeps the rest as "
+            "text); give the value without it"
+        )
+    kind = _locale_kind(text)
+    if kind is None:
         return None
-    return value if math.isfinite(value) else None
+    return (
+        f"{kind}, which Excel reads by the locale's rules; give a plain decimal "
+        "(0.05, 1000, -100) or an ISO date (YYYY-MM-DD)"
+    )
+
+
+def _locale_kind(text: str) -> str | None:
+    if _TIME.fullmatch(text) or _DATE_TIME.fullmatch(text):
+        return "a time or date-time"
+    if _FRACTION.fullmatch(text) and " " in text.strip("+-"):
+        return "a fraction"
+    if _is_locale_date(text):
+        return "a date not written YYYY-MM-DD"
+    if _DOT_THOUSANDS.fullmatch(text):
+        return "a number with dots between thousands"
+    if any(ch.isdecimal() and not ("0" <= ch <= "9") for ch in text):
+        if _PLAIN_NUMBER.fullmatch(_ascii_digits(text)):
+            return "a number written with digits other than 0-9"
+        return None
+    bare = "".join(ch for ch in text if ch not in _DECORATION and not ch.isspace())
+    if bare == text or not _PLAIN_NUMBER.fullmatch(bare):
+        return None
+    kinds = [
+        ("%", "a percent"),
+        (",", "a number with a comma (thousands or decimal)"),
+        ("(", "a number in parentheses"),
+    ]
+    for mark, kind in kinds:
+        if mark in text:
+            return kind
+    if any(ch in _CURRENCY for ch in text):
+        return "a currency amount"
+    return "a number with spaces or separators"
+
+
+def _is_locale_date(text: str) -> bool:
+    """True when some locale reads ``text`` as a date: digits joined by / - . whose
+    parts can be a day (1-31), a month (1-12) and a year (1-2 digits, or 4 digits from
+    1900) in day-month-year, month-day-year or year-month-day order, or two of them;
+    or a month name with day and/or year numbers. ``123-45-6789`` is text everywhere."""
+    if _MONTH_DATE.fullmatch(text):
+        return any(ch.isdigit() for ch in text)
+    m = _OTHER_DATE.fullmatch(text)
+    if m is None:
+        return False
+    parts = [p for p in m.groups() if p is not None]
+
+    def day(p: str) -> bool:
+        return len(p) <= 2 and 1 <= int(p) <= 31
+
+    def month(p: str) -> bool:
+        return len(p) <= 2 and 1 <= int(p) <= 12
+
+    def year(p: str) -> bool:
+        return len(p) <= 2 or (len(p) == 4 and 1900 <= int(p) <= 9999)
+
+    def long_year(p: str) -> bool:
+        return len(p) == 4 and 1900 <= int(p) <= 9999
+
+    if len(parts) == 3:
+        a, b, c = parts
+        return (
+            (day(a) and month(b) and year(c))
+            or (month(a) and day(b) and year(c))
+            or (long_year(a) and month(b) and day(c))
+        )
+    a, b = parts
+    return (
+        (month(a) and day(b))
+        or (day(a) and month(b))
+        or (month(a) and long_year(b))
+        or (long_year(a) and month(b))
+    )
+
+
+def _ascii_digits(text: str) -> str:
+    return "".join(str(int(ch)) if ch.isdecimal() else ch for ch in text)
 
 
 def _as_text(value: StoredValue) -> str:
@@ -201,7 +371,7 @@ def _allowed(raw: str, value: float | str | bool | None, allowed: ListItems) -> 
             text = _as_text(item)
             if text.lower() == folded:
                 return True
-            if isinstance(value, float) and _NUMBER_TEXT.match(text) and _number(text) == value:
+            if isinstance(value, float) and _NUMBER_TEXT.match(text) and float(text) == value:
                 return True
         return False
     if isinstance(value, float):
@@ -305,9 +475,59 @@ def _resolve_targets(
             inputs[name] = _input_cell(graph, target, f"map field {name!r}")
         except CalcInputError as exc:
             problems.append(str(exc))
+    problems.extend(_shared_cells(inputs, "map fields"))
     if problems:
         raise CalcInputError("; ".join(problems))
     return variables, cells, inputs
+
+
+def _shared_cells(entries: dict[str, CellRef], what: str) -> list[str]:
+    """One problem per cell that two entries resolve to: a cell holds one value, so
+    one entry would be dropped without a word."""
+    by_cell: dict[CellRef, list[str]] = {}
+    for name, cell in entries.items():
+        by_cell.setdefault(cell, []).append(name)
+    return [
+        f"{what} {' and '.join(repr(n) for n in sorted(names))} both resolve to {cell.a1()}"
+        for cell, names in sorted(by_cell.items())
+        if len(names) > 1
+    ]
+
+
+def _input_use(
+    graph: WorkbookGraph, inputs: dict[str, CellRef], reach: frozenset[CellRef], id_field: str
+) -> dict[str, dict[str, object]]:
+    """Per map field, the cell it sets and whether a requested output reads it, for
+    ``run.json``: True, False, or ``"unknown"`` when only a read the graph cannot place
+    (through a dynamic reference, a name holding a formula, a 3-D reference) may reach
+    it.
+
+    Raises:
+        CalcInputError: naming every field no formula can read: its value would
+            change nothing, so each policy would get the stored inputs' answer as
+            ``ok``. The id field is exempt (writing the id into a display cell is a
+            documented use).
+    """
+    hidden: HiddenReads | None = None
+    use: dict[str, dict[str, object]] = {}
+    problems: list[str] = []
+    for name, cell in inputs.items():
+        if hidden is None:
+            hidden = hidden_reads(graph)  # one workbook scan per run
+        read = field_read(graph, cell, reach, hidden)
+        if read is None and name != id_field:
+            problems.append(
+                f"map field {name!r} sets {cell.a1()}, which no formula reads, so its "
+                "value would change nothing; map the field onto the input cell the "
+                "formulas read"
+            )
+        use[name] = {
+            "target": cell.a1(),
+            "read_by_requested_outputs": False if read is None else read,
+        }
+    if problems:
+        raise CalcInputError("; ".join(problems))
+    return use
 
 
 # -- reports -------------------------------------------------------------------
@@ -369,6 +589,7 @@ def _run_record(
     ironcalc: str | None,
     plan: ProbePlan | None,
     variables: dict[str, dict[str, object]],
+    inputs: dict[str, dict[str, object]] | None = None,
 ) -> dict[str, Any]:
     from xl_marinade import __version__
 
@@ -381,6 +602,7 @@ def _run_record(
         "probe_cap": req.probe_cap,
         "probes_unplaced": _unplaced_count(plan),
         "variables": variables,
+        "inputs": inputs or {},
     }
 
 
@@ -506,8 +728,12 @@ def _check_against(
     results = _id_rows(
         graph, results_sheet, _column(check.id_column, "results.id_column"), check.first_row
     )
+    resolved = {target: _single(graph, target, "check output") for target in check.outputs}
+    shared = _shared_cells(resolved, "check outputs")
+    if shared:
+        raise CalcInputError("; ".join(shared))
     outputs = {
-        _single(graph, target, "check output"): _column(col, f"results column for {target}")
+        resolved[target]: _column(col, f"results column for {target}")
         for target, col in check.outputs.items()
     }
     table_rows: dict[str, int] = {}
@@ -542,8 +768,15 @@ def _check_against(
                 src = CellRef(table_sheet, trow, col)
                 if not graph.has_stored(src):
                     raise CalcInputError(f"input set {pid!r}: no value in {src.a1()}")
-                s.set_input(cell, _as_text(graph.stored(src)), f"input set {pid!r}")
-        reading = s.recalc()
+                # The table's value as stored (a TRUE stays a boolean): it is what
+                # was in the cell when Excel computed that input set's results.
+                stored_input = graph.stored(src)
+                if stored_input is not None:
+                    s.engine.set_value(cell, stored_input)
+        try:
+            reading = s.recalc()
+        except CalcError as exc:
+            raise CalcError(f"input set {pid!r}: {exc}") from exc
         matched = True
         for cell, col in outputs.items():
             stored = graph.stored(CellRef(results_sheet, row, col))
@@ -712,7 +945,10 @@ def _policy_loop(
             except CalcInputError:
                 # Refused anyway; the cell keeps its stored value for this policy.
                 continue
-        readings = s.recalc()
+        try:
+            readings = s.recalc()
+        except CalcError as exc:
+            raise CalcError(f"policy {policy.id!r}: {exc}") from exc
         roots = policy_roots(s.plan, readings, exercised, include_unplaced=False)
         _mismatch_roots(roots, readings, mismatches)
         values = {cell: s.engine.value(cell) for cell in outputs}
@@ -807,6 +1043,11 @@ def calc(req: CalcRequest) -> CalcResult:
         raise CalcInputError(f"tolerance must be a finite number >= 0, got {req.tolerance}")
     if req.probe_cap < 0:
         raise CalcInputError(f"probe_cap must be >= 0, got {req.probe_cap}")
+    guard_out_dir(
+        req.out_dir,
+        CALC_OUTPUTS,
+        [req.workbook, req.policies, req.input_map, req.variables, req.check_against, req.ir],
+    )
     clear_outputs(req.out_dir, CALC_OUTPUTS)
     sha = _sha256(req.workbook)
     settings = read_settings(req.workbook)
@@ -828,6 +1069,8 @@ def calc(req: CalcRequest) -> CalcResult:
         prepared = prepare_engine_copy(req.workbook, work / "engine.xlsx", as_of=req.as_of)
         graph.add_arrays(prepared.arrays)
         variables, outputs, inputs = _resolve_targets(graph, specs, targets, input_map.fields)
+        static_up = frozenset(graph.upstream(outputs))
+        input_use = _input_use(graph, inputs, static_up, input_map.id_field or "id")
         patterns = _merge_patterns(
             _with_unheld_externals(
                 graph,
@@ -838,10 +1081,9 @@ def calc(req: CalcRequest) -> CalcResult:
             _relative_lists(graph, inputs),
         )
         with quiet_native_output():
-            engine = Engine.load(prepared.path)
+            engine = Engine.load(prepared.path, req.workbook)
         # Refused cells refuse their dependants anyway: probing them would only use up
         # the cap (and their readings vouch for nothing).
-        static_up = frozenset(graph.upstream(outputs))
         upstream = [c for c in static_up if graph.formula(c) is not None and c not in patterns]
         moving = set(inputs.values())
         if check is not None and check.selector is not None:
@@ -914,6 +1156,7 @@ def calc(req: CalcRequest) -> CalcResult:
             ironcalc=engine.version,
             plan=plan,
             variables=variables_record(specs, variables),
+            inputs=input_use,
         ),
     )
     return CalcResult(

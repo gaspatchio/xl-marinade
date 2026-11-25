@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
@@ -15,6 +16,7 @@ from xl_marinade.calc.engine import EngineValue
 from xl_marinade.calc.graph import StoredValue
 from xl_marinade.calc.models import CellRef, Reason, Status
 from xl_marinade.calc.rows import Row
+from xl_marinade.errors import CalcInputError
 
 HEADER = ["policy", "variable", "period", "value", "status", "reasons"]
 RESULTS_HEADER = ["policy_id", "output", "value", "status", "reasons"]
@@ -106,6 +108,45 @@ def _path_fields(r: PathRecord) -> list[object]:
 def write_rows(path: Path, rows: list[Row]) -> None:
     """Write ``rows.csv`` (UTF-8, ``\\n`` line endings)."""
     _csv(path, HEADER, [_row_fields(r) for r in rows])
+
+
+def _entry(path: Path) -> Path:
+    """The directory entry ``path`` names: its parent resolved, its own name kept, so a
+    symlink is the link and not its target."""
+    return path.absolute().parent.resolve() / path.name
+
+
+def guard_out_dir(out_dir: Path, names: tuple[str, ...], inputs: list[Path | None]) -> None:
+    """Refuse, before anything is cleared or written, an ``out_dir`` that is not a
+    directory and an input the run would clear from it.
+
+    An input is cleared when it is one of ``names`` in ``out_dir``: the same directory
+    entry, or the same file through another path (a hard link, a symlink to it, another
+    spelling on a case-insensitive file system).
+
+    Raises:
+        CalcInputError: naming ``out_dir``, or the input and the output file.
+    """
+    for parent in (out_dir, *out_dir.parents):
+        if parent.exists():
+            if not parent.is_dir():
+                raise CalcInputError(
+                    f"-o {out_dir}: {parent} is not a directory; give a directory for the outputs"
+                )
+            break
+    given = [path for path in inputs if path is not None]
+    for name in names:
+        output = out_dir / name
+        if not (output.exists() or output.is_symlink()):
+            continue
+        for path in given:
+            same_entry = _entry(path) == _entry(output)
+            same_file = not output.is_symlink() and path.exists() and os.path.samefile(path, output)
+            if same_entry or same_file:
+                raise CalcInputError(
+                    f"input {path} is the output file {output}, which the run clears from "
+                    f"-o {out_dir} before writing; move the input or give another -o"
+                )
 
 
 def clear_outputs(out_dir: Path, names: tuple[str, ...]) -> None:

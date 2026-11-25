@@ -10,8 +10,9 @@ from pathlib import Path
 from xl_marinade.calc.config import load_input_map, load_variables
 from xl_marinade.calc.graph import StoredValue, WorkbookGraph, open_graph
 from xl_marinade.calc.models import CellRef, Reason, Status
-from xl_marinade.calc.output import VALUES_OUTPUTS, clear_outputs, write_rows
+from xl_marinade.calc.output import VALUES_OUTPUTS, clear_outputs, guard_out_dir, write_rows
 from xl_marinade.calc.rows import expand_variables, rows_for, variables_record
+from xl_marinade.calc.run import _as_text
 from xl_marinade.errors import CalcInputError
 
 
@@ -30,16 +31,17 @@ def _stored_policy_id(graph: WorkbookGraph, input_map: Path | None) -> str:
     if input_map is None:
         return "stored"
     imap = load_input_map(input_map)
-    target = imap.fields.get(imap.id_field) if imap.id_field else None
+    id_field = imap.id_field or "id"  # the default calc uses too
+    target = imap.fields.get(id_field)
     if target is None:
         return "stored"
     cells = graph.resolve_target(target)
     if len(cells) != 1:
-        raise CalcInputError(f"id field {imap.id_field!r} must map to a single cell")
+        raise CalcInputError(f"id field {id_field!r} must map to a single cell")
     value = graph.stored(cells[0])
     if value is None:
         return "stored"
-    return str(int(value)) if isinstance(value, float) and value.is_integer() else str(value)
+    return _as_text(value)
 
 
 def values(req: ValuesRequest) -> Path:
@@ -48,6 +50,7 @@ def values(req: ValuesRequest) -> Path:
     Raises:
         CalcInputError: on bad input files, a 2-D range, or an IR from another workbook.
     """
+    guard_out_dir(req.out_dir, VALUES_OUTPUTS, [req.workbook, req.variables, req.input_map, req.ir])
     clear_outputs(req.out_dir, VALUES_OUTPUTS)
     specs = load_variables(req.variables)
     with tempfile.TemporaryDirectory(prefix="marinade-values-") as tmp:
