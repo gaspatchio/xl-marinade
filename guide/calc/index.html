@@ -1,0 +1,2312 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Deterministic Excel formula-graph extraction to SQLite.">
+      
+      
+      
+        <link rel="canonical" href="https://marinade.gaspatchio.dev/guide/calc/">
+      
+      
+        <link rel="prev" href="../vba/">
+      
+      
+        <link rel="next" href="../../reference/cli/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../images/favicon.svg">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Recalculating (experimental) - XL Marinade</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+    
+      <link rel="stylesheet" href="../../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#recalculating-with-marinade-calc-experimental" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="XL Marinade" class="md-header__button md-logo" aria-label="XL Marinade" data-md-component="logo">
+      
+  <img src="../../images/logo.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            XL Marinade
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Recalculating (experimental)
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+    
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/gaspatchio/xl-marinade" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    gaspatchio/xl-marinade
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../.." class="md-tabs__link">
+          
+  
+  
+  Get started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../ai/setup/" class="md-tabs__link">
+          
+  
+  
+  AI agents
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../how-extraction-works/" class="md-tabs__link">
+          
+  
+  
+  Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../reference/cli/" class="md-tabs__link">
+          
+  
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../llm/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  LLM add-on
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../examples/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Examples
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="XL Marinade" class="md-nav__button md-logo" aria-label="XL Marinade" data-md-component="logo">
+      
+  <img src="../../images/logo.svg" alt="logo">
+
+    </a>
+    XL Marinade
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/gaspatchio/xl-marinade" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    gaspatchio/xl-marinade
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_1" >
+        
+          
+          <label class="md-nav__link" for="__nav_1" id="__nav_1_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Get started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_1">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Get started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../install/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AI agents
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    AI agents
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ai/setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Plugins
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ai/skills/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Skills
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../how-extraction-works/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    How extraction works
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../bindings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Bindings & the graph
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../diffing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Diffing workbooks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../vba/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    VBA extraction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Recalculating (experimental)
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Recalculating (experimental)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#install" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Install
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-files-in" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The files in
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The files in">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#targets" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Targets
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#mapjson" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        map.json
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#varsjson" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        vars.json
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#checkjson" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        check.json
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="check.json">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#when-you-need-check-against" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        When you need --check-against
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-a-run-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How a run works
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-files-out" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The files out
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#statuses" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Statuses
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Statuses">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#reason-kinds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reason kinds
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-ok-means-and-what-it-does-not" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What ok means, and what it does not
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#memory-and-output-size" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Memory and output size
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Memory and output size">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#-probe-cap" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        --probe-cap
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#refused-patterns" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Refused patterns
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#fixed-points" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed points
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#exit-codes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Exit codes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#example" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/schema/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SQLite schema
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../llm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    LLM add-on
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../examples/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Examples
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#install" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Install
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-files-in" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The files in
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The files in">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#targets" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Targets
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#mapjson" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        map.json
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#varsjson" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        vars.json
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#checkjson" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        check.json
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="check.json">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#when-you-need-check-against" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        When you need --check-against
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-a-run-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How a run works
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-files-out" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The files out
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#statuses" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Statuses
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Statuses">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#reason-kinds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reason kinds
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-ok-means-and-what-it-does-not" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What ok means, and what it does not
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#memory-and-output-size" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Memory and output size
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Memory and output size">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#-probe-cap" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        --probe-cap
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#refused-patterns" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Refused patterns
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#fixed-points" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed points
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#exit-codes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Exit codes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#example" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="recalculating-with-marinade-calc-experimental">Recalculating with <code>marinade calc</code> (experimental)<a class="headerlink" href="#recalculating-with-marinade-calc-experimental" title="Permanent link">&para;</a></h1>
+<div class="admonition warning">
+<p class="admonition-title">Experimental</p>
+<p><code>marinade calc</code> and <code>marinade values</code> are experimental. They sit outside the SemVer
+contract that covers the SQLite output: file formats, status names and refusal rules can
+change in any release. Do not build a pipeline that cannot absorb that.</p>
+</div>
+<p>An extracted workbook stores results only for the inputs sitting in it, often a single
+policy. <code>marinade calc</code> answers a different question: given other input values, what do
+the output cells become? It recalculates the workbook with <a href="https://github.com/ironcalc/ironcalc">IronCalc</a>,
+proves itself against the workbook's own stored values first, and puts a <strong>status</strong> on
+every value it returns. <code>marinade values</code> returns the stored values in the same row shape,
+without recalculating.</p>
+<p>The rule behind the design: a missing value costs a missing comparison, a wrong value with
+an "ok" label costs a wrong conclusion. When the calculator cannot vouch for a value, it
+refuses it and says why.</p>
+<h2 id="install">Install<a class="headerlink" href="#install" title="Permanent link">&para;</a></h2>
+<div class="language-bash highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s1">&#39;xl-marinade[calc]&#39;</span>
+</code></pre></div>
+<p><code>marinade values</code> works on the base install. <code>marinade calc</code> needs the extra (it pins
+<code>ironcalc==0.9.1</code>); without it the command exits with code 5.</p>
+<h2 id="the-files-in">The files in<a class="headerlink" href="#the-files-in" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>File</th>
+<th>What it holds</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>WORKBOOK</code></td>
+<td><code>.xlsx</code> / <code>.xlsm</code></td>
+<td>The model, saved by Excel so it carries stored values.</td>
+</tr>
+<tr>
+<td><code>--policies</code></td>
+<td><code>policies.csv</code></td>
+<td>One row per input set. An id column plus one column per mapped field. UTF-8 (save from Excel as "CSV UTF-8"). Values are read exactly as written, spaces included; ids stay text and lose surrounding spaces, also where the id is mapped to a cell. A blank value (empty or only spaces), a duplicate id, a duplicate column name or a row with more values than the header has names (an unquoted <code>250,000</code>) is an error, and so is a value under a column with no name. Columns with no name (the empty trailing columns some exports add) are ignored while they are empty, and so are empty values past the last column.</td>
+</tr>
+<tr>
+<td><code>--map</code></td>
+<td><code>map.json</code></td>
+<td>Which cell or defined name each field sets.</td>
+</tr>
+<tr>
+<td><code>--outputs</code></td>
+<td>repeatable</td>
+<td>Output cells, ranges or defined names (<code>'Results!B5:B64'</code>). Ranges expand to cells.</td>
+</tr>
+<tr>
+<td><code>--variables</code></td>
+<td><code>vars.json</code></td>
+<td>Optional. Named output variables for <code>rows.csv</code>.</td>
+</tr>
+<tr>
+<td><code>--check-against</code></td>
+<td><code>check.json</code></td>
+<td>Optional. Stored results for other input sets, to widen the trust run.</td>
+</tr>
+</tbody>
+</table>
+<p>You must give at least one of <code>--outputs</code> and <code>--variables</code>. A key repeated in the same
+object of <code>map.json</code>, <code>vars.json</code> or <code>check.json</code> is an error: JSON would keep only the
+last one.</p>
+<h3 id="targets">Targets<a class="headerlink" href="#targets" title="Permanent link">&para;</a></h3>
+<p>Every cell entry (<code>map.json</code> fields, <code>--outputs</code>, <code>vars.json</code>, and the output and
+selector entries of <code>check.json</code>) takes a cell (<code>Inputs!C3</code>), a range
+(<code>Proj!C11:C130</code>) or a defined name. The <code>sheet</code> entries of <code>check.json</code> take a sheet
+name, in any case. Sheet names and defined names ignore case letter by
+letter, as in Excel (<code>Straße</code> and <code>Strasse</code> stay two names), and names may use letters
+of any script (<code>Ärger</code>, <code>税率</code>). A file that defines two names differing only in case,
+which Excel itself does not allow, has a target naming them refused as ambiguous.</p>
+<p>A name can be defined for the whole workbook or for one sheet only (a sheet copied in
+from another workbook often brings its own). Write a sheet's own name as
+<code>'Sheet'!Name</code>. A bare name means the workbook's definition; when a sheet defines the
+same name too, a bare name is refused as ambiguous, and the error says how to write each.</p>
+<p>A whole column or row (<code>Calc!B:B</code>, <code>Calc!3:3</code>, or a name over one) covers the part of it
+the sheet uses: up to the last row (or column) that holds a cell. A target that covers
+no cells is an error that names it: a name that holds a formula (<code>OFFSET(...)</code> dynamic
+ranges included), a constant, a broken reference (<code>#REF!</code>) or cells in another workbook,
+and a whole column or row outside the range the sheet uses. Give such a target as a
+plain range instead. When several targets are wrong, the error names each of them.</p>
+<p>A name whose reference is relative (written without <code>$</code> on its row or column, such as
+<code>Calc!B5</code> or <code>Calc!$B5</code>) names different cells from each cell that uses it, so it is
+refused as a target too.</p>
+<p>Inside formulas, names are read the way Excel reads them: a formula reads its own
+sheet's definition of a name first, and the workbook's only when the sheet has none.</p>
+<h3 id="mapjson"><code>map.json</code><a class="headerlink" href="#mapjson" title="Permanent link">&para;</a></h3>
+<div class="language-json highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;id_field&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;policy&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;fields&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;age&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Inputs!C3&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;term&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Inputs!C4&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;rate&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Rate&quot;</span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+<p><code>id_field</code> names the policies column that holds the id (default <code>id</code>). It may also appear
+in <code>fields</code>, so the id is written into a workbook cell as well. Each target must be a cell
+or defined name that holds a constant; mapping onto a formula is an error, and so is
+mapping onto any cell of an array formula's range (Excel cannot hold a constant there).
+The same holds for a <code>check.json</code> selector. Mapping two fields onto one cell (by
+address, by name, or one of each), the id field included, is an error too, since the
+cell can hold only one of their values.</p>
+<p>A field that no formula can read is an error too: its value would change nothing, and
+every policy would get the stored inputs' answer as <code>ok</code> (a map one cell off, on the
+label beside the input, is the usual cause). A field counts as read when any formula's
+cell or range reference covers its cell, an empty one included, or when a formula reads
+it through a defined name in any form Excel resolves (<code>Name</code>, a sheet's own name,
+<code>'Sheet'!Name</code>), through a name holding a formula, or inside <code>CELL</code>, <code>INFO</code> or
+<code>GETPIVOTDATA</code>. A field is refused only when no read can reach it: where a read cannot be
+placed (an <code>OFFSET</code> or <code>INDIRECT</code> landing beyond the cell it lands on with the stored
+inputs, a name holding <code>OFFSET</code> or <code>INDIRECT</code>, a name with a relative reference, a 3-D
+reference such as <code>S1:S3!B1</code>), every cell it may reach is accepted. A <code>Sheet!Name</code> that
+no definition answers is <code>#NAME?</code> in Excel, so it reads nothing. The id field is never
+refused, since it may be written into a display cell. A field read only by outputs you
+did not request is accepted. <code>run.json</code> records, under
+<code>inputs</code>, the cell each field sets and whether a requested output reads it.</p>
+<p>Before each input set, every mapped input is reset to its stored value. A value outside
+the cell's data-validation list refuses that input set's outputs.</p>
+<p>Values are converted the way Excel converts what is typed into the cell, by the type of
+the value the cell holds:</p>
+<ul>
+<li>A number cell takes a plain decimal (<code>40</code>, <code>-1.5</code>, <code>.5</code>, <code>4e1</code>, <code>0042</code>) or an ISO date
+  (<code>2024-06-30</code>), which becomes its Excel serial (45473). Spaces around it are ignored,
+  as Excel ignores them when it enters a number; other white space, such as the
+  non-breaking space pasted text often carries, is refused by name.</li>
+<li>A boolean cell takes <code>TRUE</code> or <code>FALSE</code>, in any case.</li>
+<li>A text cell takes the text as written, spaces included (<code>"  A "</code> is four characters),
+  even when it looks like a number, less one leading apostrophe: Excel's entry prefix, so
+  <code>'123</code> sets the text <code>123</code>.</li>
+<li>A cell the workbook saved empty takes an ISO date as its serial, <code>TRUE</code>/<code>FALSE</code> (any
+  case) as a boolean and a plain decimal as a number; any other text stays text.</li>
+</ul>
+<p>On a number cell or an empty one, these are errors that name the policy, the field and
+what is wrong, rather than a guess:</p>
+<ul>
+<li>spellings Excel reads by the locale's rules: <code>5%</code>, <code>1,000</code>, <code>1,5</code>, <code>1.234.567</code>,
+  <code>$100</code>, <code>(100)</code>, <code>4 000</code>, digits other than 0-9 (<code>٤٠</code>, <code>１２３</code>), fractions (<code>1 1/2</code>),
+  times and date-times (<code>12:30</code>, <code>3:2</code>, <code>2024-06-30T12:00</code>), and dates not written
+  <code>YYYY-MM-DD</code>. Give a plain decimal or an ISO date instead;</li>
+<li>a leading apostrophe (<code>'123</code>): Excel makes the rest text, which a number or empty
+  cell would not hold as calc reads it, so give the value without it;</li>
+<li>error values such as <code>#N/A</code>;</li>
+<li>numbers outside the range Excel accepts (<code>1e-400</code>, <code>1e400</code>);</li>
+<li>ISO dates before 1900-03-01. Excel's 1900 date system counts a 29 February 1900 that
+  never was, so its serials before March 1900 are a day off the calendar, and it has no
+  dates before 1900. Give the serial number instead.</li>
+</ul>
+<p>A date not written <code>YYYY-MM-DD</code> is text some locale reads as a date: digits joined by
+<code>/</code>, <code>-</code> or <code>.</code> whose parts can be a day (1-31), a month (1-12) and a year (one or two
+digits, or four from 1900), in day-month-year, month-day-year or year-month-day order
+(<code>30/06/2024</code>, <code>6/30/2024</code>, <code>30.06.2024</code>, <code>2024/06/30</code>), or two of them (<code>10-20</code>,
+<code>6/2024</code>, <code>2024-06</code>); or an English month name, in any case, with a day or year
+(<code>30-Jun-2024</code>, <code>June 30, 2024</code>, <code>Jun 2024</code>). Other text stays text on an empty cell,
+so ids and codes such as <code>123-45-6789</code>, <code>1234-5678</code> or <code>100-200</code> written into a blank
+display cell are kept as written.</p>
+<p>A number cell also refuses any other text (<code>1_000</code>, <code>abc</code>, <code>inf</code>, <code>nan</code>); on an empty
+cell those stay text, as in Excel. <code>--check-against</code> table values are set with the type
+they are stored with: a table cell holding <code>TRUE</code> sets a boolean.</p>
+<p>A number keeps every digit it is written with. Excel keeps 15 significant digits of a
+number typed into a cell and turns the rest to zeros (<code>1234567890123456789</code> becomes
+<code>1234567890123450000</code>), so a policy value with more than 15 significant digits (a long
+policy number used as a lookup key, or a value written by a script with 17 digits) can
+compute differently from Excel typing it. Values set by a macro or a query keep full
+precision in Excel too.</p>
+<p>The list is the validation's literal items, or the stored values of its source: a range,
+a whole column (the cells it holds) or a defined name over cells (the validation sheet's
+own name first, as in a formula). As in Excel, the check compares the value as it is
+entered in its cell. Items typed into the validation itself (<code>"01,02"</code>) are text as
+written: they match ignoring case, or by value when the entry is a number. Items read
+from cells keep the cells' types: text ignores case, and a number matches number items
+only, so <code>2025-01-01</code> typed into a date cell matches a list of cells holding that date,
+while <code>1</code> typed into a number cell does not match a cell holding the text <code>001</code>. What is
+not checked:</p>
+<ul>
+<li>A list fed by a formula (<code>INDIRECT</code>, <code>OFFSET</code>, a name holding one, as in cascading
+  dropdowns) or by a table column (<code>Table1[Code]</code>, or a name over one) is not checked
+  in this version: any value is accepted there.</li>
+<li>A list held in formula cells is read from the values the workbook stored, not
+  recomputed for the input set.</li>
+<li>Only list validations are checked. Whole-number, decimal, date, length and custom
+  validations are not.</li>
+</ul>
+<h3 id="varsjson"><code>vars.json</code><a class="headerlink" href="#varsjson" title="Permanent link">&para;</a></h3>
+<div class="language-json highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;premium&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;range&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Proj!C11:C130&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;period_start&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">},</span>
+<span class="w">  </span><span class="nt">&quot;reserve&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;range&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Proj!H11:H130&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;period_start&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">},</span>
+<span class="w">  </span><span class="nt">&quot;npv&quot;</span><span class="p">:</span><span class="w">     </span><span class="p">{</span><span class="nt">&quot;cell&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Summary!B4&quot;</span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>A range runs down one column or across one row of one sheet; a 2-D range, or a name
+whose areas lie on more than one sheet, is an error. A name with several areas on one
+sheet runs in row order, whatever order its areas were written in.
+<strong><code>period_start</code> is required on every range and has no default</strong>, because workbooks differ
+on whether periods count from 0 or 1. Periods count from it: the first cell of the range is
+period <code>period_start</code>, the next one <code>period_start + 1</code>. A single <code>cell</code> has no period (the
+column is empty) and must not carry <code>period_start</code>.</p>
+<h3 id="checkjson"><code>check.json</code><a class="headerlink" href="#checkjson" title="Permanent link">&para;</a></h3>
+<p>Optional. It names results the workbook already holds for other input sets, such as a
+batch-results sheet, so the trust run can recalculate those input sets too and compare.</p>
+<div class="language-json highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;results&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;sheet&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Results&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;id_column&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;A&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;first_row&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span>
+<span class="w">              </span><span class="nt">&quot;outputs&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;Summary!B13&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;C&quot;</span><span class="p">}},</span>
+<span class="w">  </span><span class="nt">&quot;inputs&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;table&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;sheet&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Inputs&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;id_column&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;A&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;first_row&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span>
+<span class="w">                       </span><span class="nt">&quot;fields&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;age&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;B&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;term&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;C&quot;</span><span class="p">}}}</span>
+<span class="p">}</span>
+</code></pre></div>
+<p><code>results.outputs</code> maps an output cell to the results-sheet column holding its stored value
+per input set; two outputs that resolve to one cell are an error. <code>inputs</code> has exactly one
+of <code>table</code> (a column per <code>map.json</code> field) or <code>selector</code> (a single cell, e.g.
+<code>"Control!C4"</code>, that picks the input set by id; it may be a mapped field's cell too). Only
+input sets the engine reproduced count towards the exercised paths.</p>
+<p>A <strong>mismatch</strong> (an input set whose recalculated output differs from the stored one by more
+than <code>--tolerance</code>) refuses that output only for policies that took the same path to it:</p>
+<ul>
+<li>For the mismatching set, the run records its path to the output: the outcome of every
+  branch and lookup-edge probe upstream of the output.</li>
+<li>A policy whose own outcomes for those probes are all the same gets
+  <code>check_against_mismatch</code> on that output, and the output is <code>refused</code>.</li>
+<li>If any of those probes is unplaced, or its reading is unsure (for the set or for the
+  policy), the paths count as the same and the output is refused. The rule errs toward
+  refusing.</li>
+<li>An output with no branch or lookup probes upstream has only one path, so a mismatch on it
+  refuses it for every policy.</li>
+<li>A policy on a different path is judged by the usual rules: <code>ok</code> if a matching input set
+  (or the stored inputs) checked its path, <code>unverified_path</code> if nothing did.</li>
+</ul>
+<p><code>trust_report.json</code> lists every mismatch under <code>check_against.mismatches</code>: the input set
+id (<code>input_set</code>), the output (<code>cell</code>), <code>stored</code>, <code>computed</code>, and <code>relative_difference</code>
+(measured the way the tolerance is: relative, or absolute below 1).</p>
+<h4 id="when-you-need-check-against">When you need <code>--check-against</code><a class="headerlink" href="#when-you-need-check-against" title="Permanent link">&para;</a></h4>
+<p>When a workbook stores results for only one input set, give <code>--check-against</code> whenever it
+holds results for others (a batch-results sheet, a scenario table). Without it, the trust
+run sees only the paths the stored inputs take. A lookup that lands in the middle of a
+table for a new policy (a different age row, a different year) and a branch the stored
+inputs do not take stay unverified, so most new values come back <code>unverified_path</code>.
+Measured on lifelib BasicTerm (10,000 model points stored in <code>Batch_Results</code>, selector
+<code>Control!C4</code>): with no check set, 100% of new values came back <code>unverified_path</code>; with 200
+checked points, 100% came back <code>ok</code>, and all of them were correct.</p>
+<h2 id="how-a-run-works">How a run works<a class="headerlink" href="#how-a-run-works" title="Permanent link">&para;</a></h2>
+<ol>
+<li>Read the workbook's calculation settings. 1904 dates, precision as displayed or a
+   Strict Open XML file refuse the whole workbook (exit code 6).</li>
+<li>Extract the formula graph into a temporary database, or reuse <code>--ir</code> if it matches the
+   workbook. Give <code>--ir</code> a database extracted with 0.8.1 or later: earlier ones trimmed
+   formulas' text results and dropped <code>""</code> results, which the trust run then fails. An
+   older one is refused (exit code 1) with "re-extract with marinade extract". The
+   version checked is the one the extracting install stamped into the database.</li>
+<li>Scan the formulas for <a href="#refused-patterns">refused patterns</a>.</li>
+<li>Load a copy with every formula's stored value deleted, so the engine has to compute.
+   The <strong>trust run</strong> compares each formula cell with what Excel stored, within
+   <code>--tolerance</code> (default <code>1e-9</code>, relative or absolute), on the stored inputs and on every
+   <code>--check-against</code> input set.</li>
+<li>Add probe cells on a hidden sheet that report which branch, lookup row, rounding
+   input and dynamic reference each input set reaches. Probes go only into cells upstream
+   of the requested outputs and into the cells a dynamic reference among them can land
+   on (see <a href="#statuses">Statuses</a>), and never into a cell that is already refused. A probe is
+   the part of the cell's formula it reports on, lifted onto that sheet so it computes
+   what the cell computes: references keep their sheet (quoted where Excel needs it,
+   as for <code>'2024'</code>), operators keep Excel's precedence (<code>A&amp;B="x"</code> is <code>(A&amp;B)="x"</code>), and
+   under <code>--as-of</code> <code>TODAY()</code> and <code>NOW()</code> read the as-of date, as the cells do.</li>
+<li>For each policy: reset, set the inputs, recalculate, read outputs and probes.</li>
+<li>Walk the graph from each output back to its roots and assign a status.</li>
+</ol>
+<p>The extraction database is never written by <code>calc</code>. The run clears its own known output
+files from <code>-o</code> at the start (<code>results.csv</code>, <code>rows.csv</code>, <code>paths.csv</code>, <code>trust_report.json</code>,
+<code>run.json</code>), so a failed run cannot leave stale ones behind. Nothing else in the directory
+is touched. Before clearing anything, the run refuses (exit code 1) an <code>-o</code> that is a file
+rather than a directory, and an input file that is one of those output files (the same
+name in <code>-o</code>, or the same file through a link): clearing it would delete your input.</p>
+<p>The probe cells go on a hidden sheet named <code>_marinade_probes</code>. A workbook that already
+has a sheet of that name (in any case) is refused when the run needs probes; rename the
+sheet in a copy of the workbook.</p>
+<h2 id="the-files-out">The files out<a class="headerlink" href="#the-files-out" title="Permanent link">&para;</a></h2>
+<p>All in the <code>-o</code> directory, UTF-8, <code>\n</code> line endings, no timestamps.</p>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Contents</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>results.csv</code></td>
+<td><code>policy_id</code>, <code>output</code> (<code>Sheet!A1</code>), <code>value</code>, <code>status</code>, <code>reasons</code>. One row per policy and output cell.</td>
+</tr>
+<tr>
+<td><code>rows.csv</code></td>
+<td>With <code>--variables</code>: <code>policy</code>, <code>variable</code>, <code>period</code>, <code>value</code>, <code>status</code>, <code>reasons</code>.</td>
+</tr>
+<tr>
+<td><code>paths.csv</code></td>
+<td><code>policy_id</code>, <code>cell</code>, <code>family</code>, <code>kind</code>, <code>ordinal</code>, <code>outcome</code>, <code>exercised</code>. The branch or lookup edge each policy took, in the cells that fed its outputs: through the cells its dynamic references landed on for that policy, not the cell an <code>OFFSET</code> starts from or where it landed with the stored inputs; <code>ordinal</code> tells apart several probes of one kind in one cell; <code>exercised</code> is <code>true</code> when the trust run took it too.</td>
+</tr>
+<tr>
+<td><code>trust_report.json</code></td>
+<td><code>formula_cells</code>, <code>checked</code>, <code>reproduced</code>, <code>share</code>, <code>failures</code>, <code>refused_patterns</code>, <code>settings</code> (with <code>settings.refused</code>), <code>held_external_links</code>, <code>check_against</code> (<code>input_sets</code>, and <code>mismatches</code> with <code>input_set</code>, <code>cell</code>, <code>detail</code>, <code>stored</code>, <code>computed</code>, <code>relative_difference</code>), <code>probes_unplaced</code> (probes that could not be placed, for any reason) and <code>probes_over_cap</code> (those left out only because <code>--probe-cap</code> was reached).</td>
+</tr>
+<tr>
+<td><code>run.json</code></td>
+<td><code>ironcalc_version</code>, <code>marinade_version</code>, <code>workbook_sha256</code>, <code>tolerance</code>, <code>as_of</code>, <code>probe_cap</code>, <code>probes_unplaced</code>, per variable its range, <code>period_start</code> and the cell period 0 falls on, and per map field (<code>inputs</code>) the cell it sets (<code>target</code>) and whether a requested output reads it (<code>read_by_requested_outputs</code>: <code>true</code>, <code>false</code>, or <code>"unknown"</code> when only a read that cannot be placed, as above, may reach it).</td>
+</tr>
+</tbody>
+</table>
+<p><code>marinade values</code> writes <code>rows.csv</code> and <code>run.json</code> (variables only). Its rows carry status
+<code>stored</code>, and the policy is <code>stored</code>, or the stored value of the id field (<code>id_field</code>,
+default <code>id</code>) when <code>--map</code> maps it, written as <code>policies.csv</code> would hold it (<code>555</code>,
+<code>TRUE</code>), so its rows join <code>calc</code>'s rows for the same input set.</p>
+<p>In <code>reasons</code>, each entry reads <code>kind@root:detail</code>, joined by <code>;</code>, in a stable order. The
+root is the cell the problem starts at; it can be upstream of the output.</p>
+<h2 id="statuses">Statuses<a class="headerlink" href="#statuses" title="Permanent link">&para;</a></h2>
+<p>Every output gets a value. A value can carry several reasons; its status is the most
+serious.</p>
+<table>
+<thead>
+<tr>
+<th>Status</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>refused</code></td>
+<td>The output depends, through the graph, on a cell that failed the trust run or matches a refused pattern, or a <code>--check-against</code> input set on the same path did not reproduce it. The value is returned for inspection but must not be used. The reason names the root cell.</td>
+</tr>
+<tr>
+<td><code>uncertain</code></td>
+<td>The value rests on something implementation-dependent: a rounding function whose input sits within about 1e-12 relative of the point where the result flips, or a comparison or sorted lookup whose two sides are that close (but not equal). A rounding or comparison probe that could not be placed also lands here (<code>not_checked_value</code>).</td>
+</tr>
+<tr>
+<td><code>unverified_path</code></td>
+<td>The policy took a branch or lookup position the trust run never exercised, so those formulas were never checked against Excel. A branch or lookup probe that could not be placed also lands here (<code>not_checked_path</code>).</td>
+</tr>
+<tr>
+<td><code>ok</code></td>
+<td>None of the above.</td>
+</tr>
+<tr>
+<td><code>stored</code></td>
+<td><code>marinade values</code> only: the workbook's own stored value.</td>
+</tr>
+</tbody>
+</table>
+<p>Details worth knowing:</p>
+<ul>
+<li>Exact whole-number inputs to <code>INT</code>, <code>TRUNC</code>, <code>ROUNDUP</code>, <code>ROUNDDOWN</code>, <code>CEILING</code> and
+  <code>FLOOR</code> are not uncertain (nothing can flip). Exact halves into <code>ROUND</code> and <code>MROUND</code>
+  are.</li>
+<li>A comparison whose two sides are exactly equal is decided, not near: <code>IF(t=0, ...)</code>
+  with <code>t</code> exactly <code>0</code> stays <code>ok</code>. Only sides that differ by more than nothing and at
+  most about 1e-12 relative are <code>near_comparison</code>. The same holds for an approximate
+  lookup whose value equals its matched key.</li>
+<li>Branches are <code>IF</code>, <code>IFS</code>, <code>SWITCH</code>, <code>CHOOSE</code>, <code>IFERROR</code> and <code>IFNA</code>, and an <code>XLOOKUP</code>
+  with an <code>if_not_found</code> argument (outcomes <code>found</code> and <code>not_found</code>; the argument counts
+  only when nothing was found). A branch counts as exercised if any cell in the same
+  canonical formula family took it in the trust run. Lookups (<code>VLOOKUP</code>, <code>HLOOKUP</code>,
+  <code>MATCH</code>, <code>LOOKUP</code>, <code>XLOOKUP</code> and <code>XMATCH</code>, in every match and search mode calc accepts)
+  count per family too, but the table's first row, last row and "beyond the end" must
+  each have been hit. For <code>XLOOKUP</code> and <code>XMATCH</code> first and last are positions in the
+  lookup array, whichever way the search runs.</li>
+<li>Only evidence that was checked counts. A cell that failed the trust run, or is a
+  refused pattern, exercises nothing for its family. A branch or lookup inside an arm
+  the formula did not evaluate (the <code>FALSE</code> arm of an <code>IF</code> that went <code>TRUE</code>) is not
+  exercised by the trust run and is not a path a policy took. A <code>--check-against</code> input
+  set exercises only the branches and lookups upstream of the outputs it was compared on,
+  following its own dynamic references: the cells an <code>OFFSET</code> or <code>INDIRECT</code> landed on
+  for that set count, the cell an <code>OFFSET</code> starts from and the cell it lands on with the
+  stored inputs do not (unless the set landed there).</li>
+<li>Because probes are placed only upstream of the requested outputs, asking for fewer
+  outputs can make a status more conservative: a family member that is not upstream of
+  any requested output is not probed, so it cannot vouch for the branches it took. This
+  holds while every probe fits under <code>--probe-cap</code>; past it, more outputs means more
+  probes competing for the cap, and a status can become more conservative with more
+  outputs too.</li>
+<li>A probe that cannot be placed (cap hit, or inside <code>LET</code>/<code>LAMBDA</code>/an array context)
+  never yields <code>ok</code>: a branch or lookup probe gives <code>unverified_path</code>, a rounding or
+  comparison probe <code>uncertain</code>, and a dynamic-reference or number-to-text probe
+  <code>refused</code>.</li>
+<li><code>OFFSET</code> and <code>INDIRECT</code> are followed to where they point for each input set; if that
+  cannot be read, the outputs behind it are refused (<code>dynamic reference not checked</code>).
+  So is a range whose end is a call, such as <code>SUM(C5:OFFSET(C5,Term-1,0))</code> or
+  <code>B1:INDIRECT(...)</code>: it covers the smallest rectangle holding both ends, read per input
+  set; one whose ends lie on two sheets is refused (Excel gives <code>#VALUE!</code> there).
+  IronCalc 0.9.1 answers <code>#VALUE!</code> for a range ending in <code>INDEX</code> (<code>A1:INDEX(...)</code>) and
+  <code>#ERROR!</code> for one whose start names its sheet (<code>Proj!C5:OFFSET(...)</code>), so the trust
+  run refuses those. The cells that decide where a reference points (<code>OFFSET</code>'s
+  rows, columns, height and width, the cells <code>INDIRECT</code>'s text is built from) are
+  precedents of the cell, so a failure or an untried branch there reaches it.
+  An <code>OFFSET</code> whose base is a sheet's own (sheet-scoped) name is always refused this
+  way, and a branch, lookup, rounding or comparison on such a name is never <code>ok</code>: the
+  probe sheet cannot read the name as the formula's sheet does. Such an <code>OFFSET</code> brings
+  no sheet into the landing region below, and a name with a relative reference counts
+  as no fixed cells among the cells that decide where a reference points.</li>
+<li>The cells a dynamic reference lands on are checked like cells upstream of an output.
+  Every formula cell on the sheet an <code>OFFSET</code> starts from (or a built range lies on),
+  or that an <code>INDIRECT</code> text names literally (<code>"Rates!B"&amp;row</code>), is probed, with
+  everything upstream of it, so the trust run and <code>--check-against</code> input sets exercise
+  their branches and lookups and a policy landing on an untried arm is
+  <code>unverified_path</code>. These probes count toward <code>--probe-cap</code> after those of the
+  requested outputs. An <code>INDIRECT</code> whose text names no sheet (<code>"A"&amp;row</code>, or a sheet
+  name read from a cell) can land anywhere, so its landing cells are not probed: each
+  formula cell it lands on that no probe covers, and each such cell upstream of it,
+  gives <code>not_checked_path</code> (<code>reached through a dynamic reference, not probed</code>), plus
+  what its own probes give when they cannot be placed (<code>not_checked_value</code> for a
+  rounding or comparison, <code>refused</code> for a dynamic reference or number-to-text). A
+  landing on a constant needs no check.
+  An <code>INDIRECT</code> text that addresses a cell off the grid (row 0, below row 1,048,576 or
+  right of column <code>XFD</code>) counts as unread: Excel gives <code>#REF!</code> there, while IronCalc
+  0.9.1 reads <code>Rates!B0</code> as 0.</li>
+<li>An error code Excel does not have (IronCalc's <code>#N/IMPL!</code>, <code>#ERROR!</code>, <code>#CIRC!</code> and the
+  like) in an output or in a probe is an <code>engine_error</code> for that policy, so the output is
+  <code>refused</code>, even when an <code>IFERROR</code> around it would have turned it into a plausible
+  value. Excel's own error codes (<code>#N/A</code>, <code>#DIV/0!</code>, <code>#VALUE!</code> and the rest) are values
+  like any other, with one exception: a <code>#NAME?</code> in an output for a policy, where the
+  trust run had none in that cell, is an <code>engine_error</code>. Excel's <code>#NAME?</code> comes from
+  the formula's text, not its inputs, so one only a new policy reaches is a function
+  the engine lacks on an arm the trust run never took.</li>
+<li>Every cell of an array formula's range is a formula cell, whether a legacy
+  (Ctrl+Shift+Enter) array or a dynamic array that spills. Excel stores the formula on
+  the range's top-left cell only; calc reads the other cells as computed by it. Each is
+  compared in the trust run (and counted in <code>formula_cells</code>), and each carries the
+  formula's status: a refusal, failure or probe that could not be placed (every probe
+  inside an array formula) reaches it and every cell reading it. When a policy makes a
+  dynamic array spill past the range the workbook stored (<code>SEQUENCE(n)</code> with a larger
+  <code>n</code>), the cells it spills into carry the formula's status too.</li>
+<li>A passing trust run proves only the paths the stored inputs take. That is what
+  <code>unverified_path</code> and <code>--check-against</code> are for.</li>
+</ul>
+<h3 id="reason-kinds">Reason kinds<a class="headerlink" href="#reason-kinds" title="Permanent link">&para;</a></h3>
+<p><code>silently_wrong</code> (engine value differs from Excel's, no error), <code>engine_error</code>,
+<code>macro_function</code>, <code>unsupported_function</code>, <code>no_stored_value</code>, <code>refused_pattern</code>,
+<code>check_against_mismatch</code> and <code>input_outside_allowed_values</code> give <code>refused</code>.
+<code>near_rounding_flip</code>, <code>near_comparison</code> and <code>not_checked_value</code> give <code>uncertain</code>.
+<code>unexercised_branch</code>, <code>unexercised_lookup_edge</code> and <code>not_checked_path</code> give
+<code>unverified_path</code>. <code>external_link_held</code> is informational and leaves the status <code>ok</code>.</p>
+<p>A <code>#NAME?</code> from the engine is <code>macro_function</code> when the cell, or any cell upstream of it,
+calls a VBA function (the engine cannot run VBA); the root is that UDF cell, the smallest
+one if several feed it. It is <code>unsupported_function</code> only when no UDF is involved: the
+engine does not know a function the cell uses.</p>
+<h2 id="what-ok-means-and-what-it-does-not">What <code>ok</code> means, and what it does not<a class="headerlink" href="#what-ok-means-and-what-it-does-not" title="Permanent link">&para;</a></h2>
+<p><code>ok</code> means every formula and every path behind the value was checked against values Excel
+stored: on the stored inputs, or on a <code>--check-against</code> input set that took the same
+branches and lookup edges. It does not guarantee that a new input set's value is within
+<code>--tolerance</code> of what Excel would compute for it. Floating-point differences between the
+engine and Excel are tiny, but cancellation can amplify them: a net figure that is a small
+difference of large present values can move by more than 1e-9 relative even when every
+formula reproduced. On lifelib BasicTerm_SE one model point's net cash-flow present value
+came out at 1.003e-9 relative to Excel's, against the default tolerance of 1e-9. Choose
+<code>--tolerance</code> for the outputs you compare, and treat agreement with Excel beyond it as
+likely, not proven.</p>
+<h2 id="memory-and-output-size">Memory and output size<a class="headerlink" href="#memory-and-output-size" title="Permanent link">&para;</a></h2>
+<p><code>results.csv</code>, <code>paths.csv</code> and <code>rows.csv</code> are written one policy at a time, flushed as each
+policy finishes, so memory does not grow with the number of policies. Nor does it grow
+with the number of <code>--check-against</code> input sets: each matching set's branch and lookup
+outcomes are folded into the exercised set as it finishes and its readings dropped; a
+mismatching set keeps only its path to the output it missed. Peak memory is set by the
+workbook (the formula graph, the engine's copy of the workbook and the probe plan) and by
+the output cells you request: a range is expanded cell by cell, so <code>Calc!B1:B1048576</code>
+costs memory for a million cells. A whole column (<code>Calc!B:B</code>) expands only over the rows
+the sheet uses.</p>
+<p>The files on disk do grow with the policies. <code>paths.csv</code> has one row per policy per
+branch or lookup probe it reached, which for an actuarial projection can be over a
+thousand rows per policy: about 1.2 million rows and 126 MB for 1,000 lifelib
+BasicTerm_S policies. An <code>OFFSET</code> that sums over a projection adds more, since every row
+it covers fed the output. Leave room in <code>-o</code> for it.</p>
+<h3 id="-probe-cap"><code>--probe-cap</code><a class="headerlink" href="#-probe-cap" title="Permanent link">&para;</a></h3>
+<p><code>--probe-cap</code> (default 50,000) bounds the probe cells a run places. A probe left out
+because the cap was reached never yields <code>ok</code> (see <a href="#statuses">Statuses</a>), so a run
+that hits the cap is more conservative, not wrong. When it happens, <code>probes_over_cap</code>
+in <code>trust_report.json</code> counts the probes left out, and <code>marinade calc</code> prints one line
+on stderr with the cap that would place them all:</p>
+<div class="language-text highlight"><pre><span></span><code>warning: 73006 probes did not fit under --probe-cap 50000, so the values behind them
+are not ok; rerun with --probe-cap 123006 to place them all
+</code></pre></div>
+<p><code>OFFSET</code> projections use the cap fastest. Every formula cell on the sheet an <code>OFFSET</code>
+starts from is probed, with everything upstream of it, so a projection of 3,000 rows by
+40 columns needs well over 50,000 probes. Those landing-region probes are planned after
+the probes of the requested outputs' own cells, in sheet, row and column order, so the
+end of the projection is the first to go past the cap: policies landing late in the
+term come back <code>uncertain</code> or <code>unverified_path</code> with <code>not checked</code> reasons. Raise the
+cap to the number the warning gives; a larger cap costs memory and run time roughly in
+proportion, and <code>paths.csv</code> grows with the probes each policy reaches.</p>
+<p>A run that stops part-way (a bad value in <code>policies.csv</code>, for instance) deletes
+<code>results.csv</code>, <code>paths.csv</code> and <code>rows.csv</code>, so partial results never look complete.</p>
+<h2 id="refused-patterns">Refused patterns<a class="headerlink" href="#refused-patterns" title="Permanent link">&para;</a></h2>
+<p>Some formulas reproduce Excel on the stored inputs only by luck and silently disagree on
+the next. They are refused even when the trust run reproduces them. The <code>detail</code> is:</p>
+<table>
+<thead>
+<tr>
+<th>Detail</th>
+<th>What triggers it</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>approximate lookup on unsorted column</code></td>
+<td><code>VLOOKUP</code>/<code>HLOOKUP</code>/<code>MATCH</code>/<code>LOOKUP</code> in approximate mode over keys that are not sorted, or that are text outside plain a-z, 0-9 and space (Excel's collation differs from a plain sort). Also <code>XLOOKUP</code>/<code>XMATCH</code> with a binary-search mode, or a search mode the scan cannot read.</td>
+</tr>
+<tr>
+<td><code>approximate lookup on mixed text and numbers</code></td>
+<td>The key column mixes types.</td>
+</tr>
+<tr>
+<td><code>approximate lookup on a non-range table</code></td>
+<td>The table is not a plain reference.</td>
+</tr>
+<tr>
+<td><code>approximate lookup on whole column</code></td>
+<td>The table is a whole column or row, or a name over one. IronCalc counts empty cells; Excel skips them.</td>
+</tr>
+<tr>
+<td><code>implicit intersection on multi-cell name</code></td>
+<td>A single-cell use of a defined name that covers several cells (a name over a whole column or row always does).</td>
+</tr>
+<tr>
+<td><code>implicit intersection on multi-cell range</code></td>
+<td>A multi-cell range used outside a function argument. Ranges inside <code>SUMPRODUCT</code>, <code>MMULT</code> and similar are fine.</td>
+</tr>
+<tr>
+<td><code>name holds a formula</code></td>
+<td>A formula reads a defined name whose definition is a formula or a constant rather than cells (the detail text says "formula" for both). IronCalc 0.9.1 rejects such names.</td>
+</tr>
+<tr>
+<td><code>name with a relative reference: &lt;Name&gt;</code></td>
+<td>A formula reads a defined name whose reference is relative (no <code>$</code> on its row or column). Excel reads it relative to the cell using it; IronCalc 0.9.1 reads the stored reference as it is. Also put on a mapped input whose dropdown list is such a name, which refuses everything that input feeds.</td>
+</tr>
+<tr>
+<td><code>RAND</code>, <code>RANDBETWEEN</code>, <code>RANDARRAY</code></td>
+<td>Always.</td>
+</tr>
+<tr>
+<td><code>TODAY</code>, <code>NOW</code></td>
+<td>Unless <code>--as-of YYYY-MM-DD</code> is given; then they are replaced by that date.</td>
+</tr>
+<tr>
+<td><code>circular reference</code></td>
+<td>Always (iterative calculation is noted in the report, not honoured).</td>
+</tr>
+<tr>
+<td><code>data table</code></td>
+<td>What-If data tables are removed before loading and their cells refused.</td>
+</tr>
+<tr>
+<td><code>unparseable formula</code></td>
+<td>The formula could not be parsed. Error literals typed into a formula, such as <code>#N/A</code>, are a known source of these.</td>
+</tr>
+<tr>
+<td><code>external reference not held</code></td>
+<td>The formula reads an external reference the engine copy cannot hold: a range, one with no cached value (IronCalc returns <code>#ERROR!</code> or <code>#REF!</code> for those), or a defined name that points into another workbook.</td>
+</tr>
+<tr>
+<td><code>approximate lookup on input-dependent keys</code></td>
+<td>An approximate lookup whose key cells change with a mapped input (an input cell, or a formula that depends on one). The keys may be sorted for the stored inputs and not for the next policy.</td>
+</tr>
+<tr>
+<td><code>function IronCalc does not implement: NAME</code></td>
+<td>The formula calls a function the installed IronCalc cannot compute. calc asks the engine about every function the workbook calls, so this covers Excel functions IronCalc 0.9.1 does not have (<code>AGGREGATE</code>, <code>BAHTTEXT</code>, <code>CALL</code>, the <code>CUBE…</code> functions, <code>DBCS</code>, <code>DETECTLANGUAGE</code>, <code>EUROCONVERT</code>, <code>FIELDVALUE</code>, <code>FILTERXML</code>, <code>GETPIVOTDATA</code>, <code>GROUPBY</code>, <code>IMAGE</code>, <code>JIS</code>, <code>PHONETIC</code>, <code>PIVOTBY</code>, <code>REGISTER.ID</code>, <code>RTD</code>, <code>SQL.REQUEST</code>, <code>STOCKHISTORY</code>, <code>TRANSLATE</code>, <code>WEBSERVICE</code>), ones it knows but has not implemented (the <code>FORECAST.ETS</code> family), functions newer than the engine, and VBA and add-in functions (also when Excel lacks them too). The engine answers <code>#NAME?</code> or <code>#N/IMPL!</code>, error values an <code>IFERROR</code>, <code>ISERROR</code> or <code>ISNUMBER</code> around the call would turn into a plausible value. LET and LAMBDA parameters called like functions are not affected; a LAMBDA held in a defined name gets every check in this table through its body, for every cell that calls it. Calls the engine computes only for some arguments are refused by shape: <code>SHEETS with a reference</code> for <code>SHEETS(ref)</code>; <code>RANK over a single cell</code> or <code>RANK over a computed reference</code> (also <code>RANK.EQ</code>, <code>RANK.AVG</code>) unless the list is written as a range; <code>NAME over a range</code> for <code>DATEDIF</code>, <code>DATEVALUE</code>, <code>FORMULATEXT</code>, <code>N</code> and <code>UNICODE</code> given a range, a LET or LAMBDA parameter, or an expression over one (a range inside a function that returns one value does not count: <code>SUM</code>, <code>COUNT</code> and the like, <code>INDEX</code> with literal non-zero row and column, or a lookup of one value). Excel computes these cell by cell in an array formula or <code>SUMPRODUCT</code>; the engine answers one <code>#N/IMPL!</code>.</td>
+</tr>
+</tbody>
+</table>
+<p>Some refusals are per policy, read from the probes:</p>
+<table>
+<thead>
+<tr>
+<th>Detail</th>
+<th>What triggers it</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>lookup value type differs from keys</code></td>
+<td>An approximate lookup matches a key of a different type than its lookup value (text against numbers). Excel finds nothing there (<code>#N/A</code>); IronCalc 0.9.1 returns a row.</td>
+</tr>
+<tr>
+<td><code>number-to-text at a decimal tie</code></td>
+<td><code>TEXT</code>, <code>FIXED</code> or <code>DOLLAR</code> rounds a number that sits within about 1e-12 of a tie at the format's decimals: <code>TEXT(1234.5,"#,##0")</code>, <code>TEXT(0.0125,"0.0%")</code>, <code>FIXED(1.005,2)</code>. Excel rounds the tie away from zero on the 15-digit value (<code>1,235</code>); IronCalc 0.9.1 rounds the binary value and can land on the other side (<code>1,234</code>). At an exact binary tie <code>FIXED</code> and <code>DOLLAR</code> happen to agree with Excel; they are refused all the same.</td>
+</tr>
+<tr>
+<td><code>number-to-text of a negative value that rounds to zero or one unit</code></td>
+<td><code>TEXT</code> with a one-section format shows a negative number that rounds to zero or to one unit of its last place: <code>TEXT(-0.01,"0%")</code>, <code>TEXT(-1,"0")</code>, <code>TEXT(-0.4,"0")</code>. Excel keeps the minus sign (<code>-1%</code>, <code>-1</code>, <code>-0</code>); IronCalc 0.9.1 drops it. A format with a negative section (<code>0;(0)</code>), <code>FIXED</code> and <code>DOLLAR</code> are not affected.</td>
+</tr>
+<tr>
+<td><code>number-to-text where Excel's 15-digit text differs</code></td>
+<td>A number becomes text through <code>&amp;</code>, <code>CONCAT</code>, <code>CONCATENATE</code>, <code>TEXTJOIN</code> or a text function (<code>LEN</code>, <code>LEFT</code>, <code>MID</code>, <code>SUBSTITUTE</code>, <code>EXACT</code>, <code>FIND</code>, <code>VALUETOTEXT</code>, the <code>REGEX</code> functions, <code>TEXTSPLIT</code> and the like), and its text needs more than 15 significant digits (<code>7/12</code>, <code>0.1+0.2</code>) or the number lies outside 0.0001 to 1e15, where Excel may write scientific notation. Excel writes at most 15 significant digits; IronCalc up to 17. Also <code>TEXT</code>, <code>FIXED</code> or <code>DOLLAR</code> showing more than 15 digits.</td>
+</tr>
+<tr>
+<td><code>criterion built with &amp; from a non-integer number</code></td>
+<td>A <code>SUMIF</code>, <code>SUMIFS</code>, <code>COUNTIF</code>, <code>COUNTIFS</code>, <code>AVERAGEIF</code>, <code>AVERAGEIFS</code>, <code>MAXIFS</code> or <code>MINIFS</code> criterion such as <code>"&lt;="&amp;x</code> where <code>x</code> is not a whole number. Excel compares against the 15-digit text it wrote.</td>
+</tr>
+</tbody>
+</table>
+<p>Integers, and decimals with up to 15 significant digits that sit on no tie, stay <code>ok</code>.
+<code>TEXT</code> with a date or time format needs no check, and a format's third section (shown
+only for an exact zero) does not decide the rounding. A range joined by <code>TEXTJOIN</code>,
+<code>CONCAT</code> or <code>CONCATENATE</code> is read cell by cell: constants that are text, booleans,
+blanks or numbers Excel writes as the engine does need nothing; formula cells (every
+cell of an array formula's range among them, and the empty cells below or right of a
+dynamic array that its spill can grow into), mapped inputs and other numbers are read
+per policy. Each such cell is probed once, however
+many joins read it, and these probes are planned after every other probe, so they
+never take <code>--probe-cap</code> room from a branch or lookup check; a join whose cells did not
+fit under the cap is refused as <code>number-to-text not checked</code> for its own cell and what
+depends on it, nothing else. A function result joined as text (<code>XLOOKUP</code>, <code>INDEX</code>,
+<code>IF</code>) is read like a number when it is one value; when it is an array, or the join
+names a range with more than 1,000 cells to read, or a sheet's own name or a name with
+a relative reference, the join is refused as
+<code>number-to-text not checked</code> for the policies that evaluate it, not for those whose
+branch skips it.</p>
+<p>A conversion calc cannot check at all is refused for every policy as <code>number-to-text
+not checked</code>, whatever the policy: a <code>TEXT</code> format that is not literal text, or that
+calc cannot read (<code>General</code>, <code>@</code>, scientific, fractions, conditions, first two sections
+that round differently); a range given to a text function such as <code>LEN</code>; or a
+conversion inside an array formula, <code>LET</code>/<code>LAMBDA</code>, or beyond <code>--probe-cap</code>.</p>
+<h2 id="fixed-points">Fixed points<a class="headerlink" href="#fixed-points" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Case</th>
+<th>Behaviour</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>External link with a cached single value</td>
+<td>Replaced by the cached value. Outputs stay <code>ok</code>, with the reason <code>external_link_held</code>.</td>
+</tr>
+<tr>
+<td>External link that cannot be held</td>
+<td>Refused, see above.</td>
+</tr>
+<tr>
+<td>1904 date system</td>
+<td>Whole workbook refused.</td>
+</tr>
+<tr>
+<td>Precision as displayed</td>
+<td>Whole workbook refused.</td>
+</tr>
+<tr>
+<td>Strict Open XML (<code>.xlsx</code> saved as "Strict Open XML Spreadsheet")</td>
+<td>Whole workbook refused (<code>strict OOXML</code>).</td>
+</tr>
+<tr>
+<td>Iterative calculation</td>
+<td>Circular cells refused as usual; the report records the setting.</td>
+</tr>
+<tr>
+<td>Manual calculation mode</td>
+<td>Recorded, not refused; stale stored values show as mismatches.</td>
+</tr>
+<tr>
+<td><code>TODAY</code>, <code>NOW</code></td>
+<td>Refused unless <code>--as-of</code>.</td>
+</tr>
+</tbody>
+</table>
+<p>Known IronCalc 0.9.1 gaps, each with a synthetic reproduction and the way <code>calc</code> handles
+it, are listed in <code>ref/calc/upstream/</code> in the repository.</p>
+<h2 id="exit-codes">Exit codes<a class="headerlink" href="#exit-codes" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>Success.</td>
+</tr>
+<tr>
+<td>1</td>
+<td>Error: bad input file, unknown sheet or name, a target that covers no cells, mapping onto a formula, IR from another workbook or from an extractor older than 0.8.1, an input that is one of the output files, an <code>-o</code> that is a file, a sheet named <code>_marinade_probes</code>, or the engine crashing on a formula (an IronCalc panic, such as on <code>XNPV(1,1)</code>; the error names the workbook and the policy or input set, not the cell).</td>
+</tr>
+<tr>
+<td>5</td>
+<td>The <code>[calc]</code> extra is not installed.</td>
+</tr>
+<tr>
+<td>6</td>
+<td>The workbook is refused outright (1904 dates, precision as displayed, Strict Open XML). <code>trust_report.json</code> and <code>run.json</code> are still written.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="example">Example<a class="headerlink" href="#example" title="Permanent link">&para;</a></h2>
+<div class="language-bash highlight"><pre><span></span><code>marinade<span class="w"> </span>calc<span class="w"> </span>model.xlsx<span class="w"> </span>--policies<span class="w"> </span>policies.csv<span class="w"> </span>--map<span class="w"> </span>map.json<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--outputs<span class="w"> </span><span class="s1">&#39;Summary!B4&#39;</span><span class="w"> </span>--variables<span class="w"> </span>vars.json<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--check-against<span class="w"> </span>check.json<span class="w"> </span>--as-of<span class="w"> </span><span class="m">2026</span>-01-01<span class="w"> </span>-o<span class="w"> </span>out/
+
+marinade<span class="w"> </span>values<span class="w"> </span>model.xlsx<span class="w"> </span>--variables<span class="w"> </span>vars.json<span class="w"> </span>--map<span class="w"> </span>map.json<span class="w"> </span>-o<span class="w"> </span>stored/
+</code></pre></div>
+<p>Read <code>trust_report.json</code> first (<code>share</code>, <code>failures</code>), then filter <code>results.csv</code> or
+<code>rows.csv</code> on <code>status</code>. Only <code>ok</code> rows can be used as they stand.</p>
+<p>See the <a href="../../reference/cli/">CLI reference</a> for every option.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["content.code.copy", "content.code.annotate", "content.tabs.link", "navigation.tabs", "navigation.sections", "navigation.top", "navigation.tracking", "search.suggest", "toc.follow"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>
