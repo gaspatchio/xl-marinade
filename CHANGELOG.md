@@ -234,6 +234,22 @@ schema is a versioned public contract.
   id field is exempt (it may be written into a display cell).
   `run.json` gains `inputs`: per field, the cell it sets and whether a requested output
   reads it (`true`, `false` or `"unknown"`).
+- **`marinade calc`: a function the engine cannot compute is refused by name, whatever
+  the function.** calc refused the Excel functions IronCalc 0.9.1 lacks from a fixed
+  list. A function outside it (a VBA or add-in function, one newer than the engine, or
+  one IronCalc knows but has not implemented, such as `FORECAST.ETS`) answers `#NAME?`
+  or `#N/IMPL!`, and an `IFERROR` or `IF(ISERROR(...))` around it turned that into the
+  fallback value, which could come back `ok` for input sets that take the handler's
+  arm. calc now asks the installed engine about every function the workbook calls and
+  refuses each call it cannot compute (`function IronCalc does not implement: NAME`),
+  on every input set. `SHEETS` with a reference, which IronCalc answers `#N/IMPL!`, is
+  refused the same way. LET and LAMBDA parameters called like functions are not.
+- **`marinade calc`: a policy value keeps its spaces.** Every value in `policies.csv`
+  was trimmed before it reached its cell, so `"  A "` set the text `A` in a text cell
+  and a formula reading it (`LEN`, a comparison, a lookup key) came back `ok` with the
+  value for `A`. Values are now set as written; a number or date cell still reads
+  through surrounding spaces, as Excel's entry does, and a value of only spaces is
+  still a blank value. Ids are still trimmed.
 
 ## [0.8.0] - 2026-11-24
 
